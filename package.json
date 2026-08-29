@@ -1,0 +1,24 @@
+{
+  "name": "mara-lounge-management-system",
+  "private": true,
+  "version": "1.0.0",
+  "description": "MARA Lounge Management System - central operating system for MARA Lounge",
+  "workspaces": [
+    "packages/shared",
+    "packages/server",
+    "packages/web",
+    "packages/buyer",
+    "packages/print-agent"
+  ],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build:shared": "npm run build -w @mara/shared",
+    "dev:server": "npm run dev -w @mara/server",
+    "dev:web": "npm run dev -w @mara/web",
+    "dev:buyer": "npm run dev -w @mara/buyer",
+    "migrate": "npm run migrate -w @mara/server",
+    "seed": "npm run seed -w @mara/server",
+    "test": "npm run test -w @mara/server",
+    "build": "npm run build -w @mara/shared && npm run build -w @mara/server && npm run build -w @mara/web && npm run build -w @mara/buyer"
+  }
+}

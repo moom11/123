@@ -1,0 +1,14 @@
+node_modules/
+dist/
+build/
+.env
+.env.local
+*.log
+coverage/
+.vite/
+.DS_Store
+packages/buyer/android/.gradle/
+packages/buyer/android/app/build/
+packages/buyer/android/build/
+packages/buyer/android/local.properties
+uploads/
