@@ -31,8 +31,17 @@ export function parse<S extends ZodTypeAny>(schema: S, data: unknown): ZodOutput
 
 function bearer(req: FastifyRequest): string | null {
   const header = req.headers.authorization;
-  if (!header?.startsWith('Bearer ')) return null;
-  return header.slice(7).trim() || null;
+  if (header?.startsWith('Bearer ')) return header.slice(7).trim() || null;
+
+  // A browser cannot set headers on a WebSocket handshake, so the token may
+  // arrive as a query parameter — accepted ONLY for the /ws upgrade, never for
+  // ordinary requests, where a token in the URL would leak into access logs,
+  // proxy logs and Referer headers.
+  if (req.url?.startsWith('/ws')) {
+    const token = (req.query as { access_token?: string } | undefined)?.access_token;
+    if (typeof token === 'string' && token.length > 0) return token;
+  }
+  return null;
 }
 
 /**
