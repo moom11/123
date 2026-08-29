@@ -3,7 +3,7 @@ import { many, one, withTransaction } from '../../core/db.js';
 import { AUDIT, audit } from '../../core/audit.js';
 import { badRequest, forbidden, notFound, unprocessable } from '../../core/errors.js';
 import { notify } from '../../core/notify.js';
-import type { Principal } from '../../core/principal.js';
+import { assertBranchAccess, type Principal } from '../../core/principal.js';
 import {
   activeLoyaltyRule, moveWallet, pointsToValue, resolveSpecialPrice,
 } from '../customers/customers.service.js';
@@ -40,6 +40,7 @@ export async function requestDiscountOtp(
     [input.orderId],
   );
   if (!order) throw notFound('الطلب غير موجود');
+  assertBranchAccess(principal, order.branch_id);
   if (['paid', 'cancelled'].includes(order.status)) {
     throw unprocessable('لا يمكن تعديل فاتورة مقفلة');
   }
@@ -153,6 +154,7 @@ export async function applyCustomerDiscount(
       [input.orderId], client,
     );
     if (!order) throw notFound('الطلب غير موجود');
+    assertBranchAccess(principal, order.branch_id);
     if (['paid', 'cancelled'].includes(order.status)) {
       throw unprocessable('لا يمكن تعديل فاتورة مقفلة');
     }
@@ -272,6 +274,7 @@ export async function requestPointsOtp(
     [input.orderId],
   );
   if (!order) throw notFound('الطلب غير موجود');
+  assertBranchAccess(principal, order.branch_id);
   if (['paid', 'cancelled'].includes(order.status)) {
     throw unprocessable('لا يمكن تعديل فاتورة مقفلة');
   }
@@ -337,6 +340,7 @@ export async function redeemPoints(
       'SELECT * FROM orders WHERE id = $1 FOR UPDATE', [input.orderId], client,
     );
     if (!order) throw notFound('الطلب غير موجود');
+    assertBranchAccess(principal, order.branch_id);
     if (['paid', 'cancelled'].includes(order.status)) {
       throw unprocessable('لا يمكن تعديل فاتورة مقفلة');
     }
@@ -433,6 +437,7 @@ export async function applyManualDiscount(
       [input.orderId], client,
     );
     if (!order) throw notFound('الطلب غير موجود');
+    assertBranchAccess(principal, order.branch_id);
     if (['paid', 'cancelled'].includes(order.status)) {
       throw unprocessable('لا يمكن تعديل فاتورة مقفلة');
     }

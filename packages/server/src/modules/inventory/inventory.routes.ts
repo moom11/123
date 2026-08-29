@@ -212,8 +212,9 @@ export async function inventoryRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/stock-counts/:id', { preHandler: requirePermission('stock_counts.read') },
     async (req) => {
+      const p = requirePrincipal(req);
       const { id } = parse(z.object({ id: z.string().uuid() }), req.params);
-      return { count: await getCount(id) };
+      return { count: await getCount(id, p) };
     });
 
   app.post('/stock-counts/:id/entries', { preHandler: requirePermission('stock_counts.create') },

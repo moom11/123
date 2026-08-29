@@ -5,7 +5,7 @@ import { AUDIT, audit } from '../../core/audit.js';
 import { badRequest, notFound, unprocessable } from '../../core/errors.js';
 import { notify } from '../../core/notify.js';
 import { config } from '../../core/config.js';
-import type { Principal } from '../../core/principal.js';
+import { assertBranchAccess, type Principal } from '../../core/principal.js';
 import { EVENTS, publish } from '../../core/realtime.js';
 
 export type TxnType =
@@ -406,6 +406,7 @@ export async function approveWaste(
       'SELECT * FROM waste_records WHERE id = $1 FOR UPDATE', [wasteId], client,
     );
     if (!w) throw notFound('سجل الهدر غير موجود');
+    assertBranchAccess(principal, w.branch_id);
     if (w.status !== 'pending_approval') throw unprocessable('هذا السجل لا ينتظر موافقة');
 
     if (approve) {

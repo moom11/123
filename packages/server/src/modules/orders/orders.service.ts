@@ -3,6 +3,7 @@ import { canTransitionOrder, type OrderStatus } from '@mara/shared';
 import { many, one, pool, withTransaction } from '../../core/db.js';
 import { AUDIT, audit } from '../../core/audit.js';
 import { badRequest, conflict, forbidden, notFound, unprocessable } from '../../core/errors.js';
+import { assertBranchAccess } from '../../core/principal.js';
 import { EVENTS, publish } from '../../core/realtime.js';
 import type { Principal } from '../../core/principal.js';
 import {
@@ -593,6 +594,7 @@ export async function reviewCustomerOrder(
       'SELECT * FROM orders WHERE id = $1 FOR UPDATE', [orderId], client,
     );
     if (!order) throw notFound('الطلب غير موجود');
+    assertBranchAccess(principal, order.branch_id);
     if (order.status !== 'pending_waiter_approval') {
       throw unprocessable('هذا الطلب لا ينتظر مراجعة');
     }
@@ -676,6 +678,7 @@ export async function addItems(
       'SELECT * FROM orders WHERE id = $1 FOR UPDATE', [orderId], client,
     );
     if (!order) throw notFound('الطلب غير موجود');
+    assertBranchAccess(principal, order.branch_id);
     if (['paid', 'cancelled'].includes(order.status)) {
       throw unprocessable('لا يمكن إضافة أصناف لطلب مقفل');
     }
@@ -737,6 +740,8 @@ export async function voidItem(
     const order = await one<{ branch_id: string; status: OrderStatus; table_id: string | null }>(
       'SELECT branch_id, status, table_id FROM orders WHERE id = $1', [orderId], client,
     );
+    if (!order) throw notFound('الطلب غير موجود');
+    assertBranchAccess(principal, order.branch_id);
     if (order!.status === 'paid') throw unprocessable('لا يمكن إلغاء صنف من فاتورة مدفوعة');
 
     await client.query(
@@ -822,6 +827,9 @@ export async function getOrder(orderId: string, principal: Principal | null) {
     [orderId],
   );
   if (!order) throw notFound('الطلب غير موجود');
+  // Branch containment: the list endpoints scope by branch, so the single-order
+  // endpoint must too — otherwise an id from another branch is readable.
+  if (principal) assertBranchAccess(principal, order.branch_id);
 
   const items = await many(
     `SELECT oi.*, ARRAY(

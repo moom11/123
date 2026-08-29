@@ -3,7 +3,7 @@ import { many, one, withTransaction } from '../../core/db.js';
 import { AUDIT, audit } from '../../core/audit.js';
 import { badRequest, conflict, notFound, unprocessable } from '../../core/errors.js';
 import { EVENTS, publish } from '../../core/realtime.js';
-import type { Principal } from '../../core/principal.js';
+import { assertBranchAccess, type Principal } from '../../core/principal.js';
 import { activeLoyaltyRule, moveWallet } from '../customers/customers.service.js';
 import { refreshTableStatus } from '../tables/tables.service.js';
 
@@ -57,6 +57,7 @@ export async function takePayment(
       'SELECT * FROM orders WHERE id = $1 FOR UPDATE', [input.orderId], client,
     );
     if (!order) throw notFound('الطلب غير موجود');
+    assertBranchAccess(principal, order.branch_id);
     if (order.status === 'cancelled') throw unprocessable('الطلب ملغي');
     if (order.status === 'paid') {
       // Already settled — return the existing state rather than double-charging.
@@ -292,6 +293,7 @@ export async function voidPayment(
       'SELECT * FROM payments WHERE id = $1 FOR UPDATE', [paymentId], client,
     );
     if (!payment) throw notFound('الدفعة غير موجودة');
+    assertBranchAccess(principal, payment.branch_id);
     if (payment.status !== 'captured') throw unprocessable('لا يمكن إلغاء هذه الدفعة');
 
     // Financial rows are never deleted — the payment is marked voided and the

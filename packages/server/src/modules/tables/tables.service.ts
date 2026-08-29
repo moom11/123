@@ -7,7 +7,7 @@ import { AUDIT, audit } from '../../core/audit.js';
 import { badRequest, forbidden, notFound, tooManyRequests, unprocessable } from '../../core/errors.js';
 import { notify } from '../../core/notify.js';
 import { EVENTS, publish } from '../../core/realtime.js';
-import type { Principal } from '../../core/principal.js';
+import { assertBranchAccess, type Principal } from '../../core/principal.js';
 import { queueJob, resolvePrinter } from '../printing/printing.service.js';
 
 /**
@@ -447,6 +447,7 @@ export async function resolveServiceRequest(
       [requestId], client,
     );
     if (!req) throw notFound('الطلب غير موجود');
+    assertBranchAccess(principal, req.branch_id);
     if (req.status !== 'open') throw unprocessable('تمت معالجة هذا الطلب مسبقاً');
 
     await client.query(

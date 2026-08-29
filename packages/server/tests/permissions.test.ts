@@ -170,6 +170,63 @@ describe('role based access control', () => {
     );
   });
 
+  /**
+   * List endpoints scope by branch, but an id-addressed endpoint must scope too
+   * — otherwise knowing (or guessing) an id from another branch is enough to
+   * read it. This was a real gap before the containment checks were added.
+   */
+  it('refuses to read another branch\'s order by id', async () => {
+    const app = await getApp();
+    const waiter = await loginEmployee('1042', '2580');
+
+    const other = await one<{ id: string }>(
+      `INSERT INTO branches (code, name, name_ar) VALUES ('XBR','Other','فرع آخر')
+       ON CONFLICT (code) DO UPDATE SET name_ar = EXCLUDED.name_ar RETURNING id`,
+    );
+    const foreignOrder = await one<{ id: string }>(
+      `INSERT INTO orders (order_number, branch_id, status, grand_total)
+       VALUES ('ORD-8888-000001', $1, 'paid', 50000) RETURNING id`,
+      [other!.id],
+    );
+
+    const read = await app.inject({
+      method: 'GET', url: `/api/orders/${foreignOrder!.id}`, headers: auth(waiter),
+    });
+    expect(read.statusCode).toBe(403);
+
+    // Writes are refused too, not merely reads.
+    const pay = await app.inject({
+      method: 'POST', url: `/api/orders/${foreignOrder!.id}/pay`,
+      headers: auth(waiter), payload: { parts: [{ method: 'cash', amount: 100 }] },
+    });
+    expect([403, 404]).toContain(pay.statusCode);
+  });
+
+  it('refuses to reach another branch\'s purchase request by id', async () => {
+    const app = await getApp();
+    const manager = await loginAdmin('manager@maralounge.sa', 'MaraManager#2026Xy');
+    const other = await one<{ id: string }>(
+      "SELECT id FROM branches WHERE code = 'XBR'",
+    );
+    const foreignRequest = await one<{ id: string }>(
+      `INSERT INTO purchase_requests (request_number, branch_id, department, status)
+       VALUES ('PR-8888-000001', $1, 'BAR', 'pending_branch_manager') RETURNING id`,
+      [other!.id],
+    );
+    const res = await app.inject({
+      method: 'GET', url: `/api/purchase-requests/${foreignRequest!.id}`,
+      headers: auth(manager),
+    });
+    expect(res.statusCode).toBe(403);
+
+    // And the manager cannot approve it either.
+    const decide = await app.inject({
+      method: 'POST', url: `/api/purchase-requests/${foreignRequest!.id}/decide`,
+      headers: auth(manager), payload: { decision: 'approve' },
+    });
+    expect(decide.statusCode).toBe(403);
+  });
+
   it('confines a principal to their own branch', async () => {
     const app = await getApp();
     const manager = await loginAdmin('manager@maralounge.sa', 'MaraManager#2026Xy');

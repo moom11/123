@@ -3,7 +3,7 @@ import { AUDIT, audit } from '../../core/audit.js';
 import { badRequest, notFound, unprocessable } from '../../core/errors.js';
 import { notify } from '../../core/notify.js';
 import { config } from '../../core/config.js';
-import type { Principal } from '../../core/principal.js';
+import { assertBranchAccess, type Principal } from '../../core/principal.js';
 import { postMovement, toBaseForItem } from './inventory.service.js';
 
 /**
@@ -161,6 +161,7 @@ export async function enterCounts(
       'SELECT status, branch_id FROM stock_counts WHERE id = $1', [countId], client,
     );
     if (!count) throw notFound('الجرد غير موجود');
+    assertBranchAccess(principal, count.branch_id);
     if (count.status !== 'open') throw unprocessable('لا يمكن التعديل بعد إقفال الجرد');
 
     for (const entry of entries) {
@@ -193,6 +194,7 @@ export async function submitCount(
       'SELECT * FROM stock_counts WHERE id = $1 FOR UPDATE', [countId], client,
     );
     if (!count) throw notFound('الجرد غير موجود');
+    assertBranchAccess(principal, count.branch_id);
     if (count.status !== 'open') throw unprocessable('تم إرسال هذا الجرد مسبقاً');
 
     const uncounted = await one<{ n: number }>(
@@ -280,6 +282,7 @@ export async function approveCount(
       'SELECT * FROM stock_counts WHERE id = $1 FOR UPDATE', [countId], client,
     );
     if (!count) throw notFound('الجرد غير موجود');
+    assertBranchAccess(principal, count.branch_id);
     if (count.status !== 'submitted') throw unprocessable('الجرد ليس بانتظار الاعتماد');
 
     if (!approve) {
@@ -325,7 +328,7 @@ export async function approveCount(
   });
 }
 
-export async function getCount(countId: string) {
+export async function getCount(countId: string, principal?: Principal) {
   const count = await one<any>(
     `SELECT sc.*, l.name_ar AS location_name, b.name_ar AS branch_name
        FROM stock_counts sc
@@ -335,6 +338,7 @@ export async function getCount(countId: string) {
     [countId],
   );
   if (!count) throw notFound('الجرد غير موجود');
+  if (principal) assertBranchAccess(principal, count.branch_id);
 
   const items = await many(
     `SELECT sci.*, ii.name_ar, ii.sku, ii.base_unit, ii.stock_unit

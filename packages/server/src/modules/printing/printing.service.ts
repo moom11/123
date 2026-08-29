@@ -5,7 +5,7 @@ import { badRequest, notFound, unprocessable } from '../../core/errors.js';
 import { notify } from '../../core/notify.js';
 import { config } from '../../core/config.js';
 import { EVENTS, publish } from '../../core/realtime.js';
-import type { Principal } from '../../core/principal.js';
+import { assertBranchAccess, type Principal } from '../../core/principal.js';
 
 /**
  * Printing.
@@ -299,6 +299,7 @@ export async function reprintJob(
       'SELECT * FROM print_jobs WHERE id = $1', [jobId], client,
     );
     if (!original) throw notFound('أمر الطباعة غير موجود');
+    assertBranchAccess(principal, original.branch_id);
 
     const payload: TicketPayload = {
       ...(original.payload as TicketPayload),
@@ -479,6 +480,12 @@ export async function reportJobResult(
 }
 
 export async function retryJob(principal: Principal, jobId: string): Promise<void> {
+  const job = await one<{ branch_id: string }>(
+    'SELECT branch_id FROM print_jobs WHERE id = $1', [jobId],
+  );
+  if (!job) throw notFound('أمر الطباعة غير موجود');
+  assertBranchAccess(principal, job.branch_id);
+
   const res = await pool.query(
     `UPDATE print_jobs
         SET status = 'queued', attempt_count = 0, next_attempt_at = now(), last_error = NULL

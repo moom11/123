@@ -4,7 +4,7 @@ import { AUDIT, audit } from '../../core/audit.js';
 import { badRequest, forbidden, notFound, unprocessable } from '../../core/errors.js';
 import { notify } from '../../core/notify.js';
 import { EVENTS, publish } from '../../core/realtime.js';
-import type { Principal } from '../../core/principal.js';
+import { assertBranchAccess, type Principal } from '../../core/principal.js';
 import { toBaseForItem } from '../inventory/inventory.service.js';
 
 /**
@@ -140,6 +140,7 @@ export async function submitPurchaseRequest(
       'SELECT * FROM purchase_requests WHERE id = $1 FOR UPDATE', [requestId], client,
     );
     if (!pr) throw notFound('طلب الشراء غير موجود');
+    assertBranchAccess(principal, pr.branch_id);
     if (pr.status !== 'draft' && pr.status !== 'submitted') {
       throw unprocessable('لا يمكن إرسال هذا الطلب في حالته الحالية');
     }
@@ -183,6 +184,7 @@ export async function decidePurchaseRequest(
       'SELECT * FROM purchase_requests WHERE id = $1 FOR UPDATE', [requestId], client,
     );
     if (!pr) throw notFound('طلب الشراء غير موجود');
+    assertBranchAccess(principal, pr.branch_id);
 
     const approvable = ['pending_branch_manager', 'submitted'];
     const isChangeReview = ['purchasing', 'approved', 'sent_to_buyer', 'purchased']
@@ -487,6 +489,7 @@ export async function requestQuantityChange(
     if (!pr || !(BUYER_VISIBLE_PR_STATUSES as readonly string[]).includes(pr.status)) {
       throw notFound('طلب الشراء غير موجود');
     }
+    assertBranchAccess(principal, pr.branch_id);
 
     for (const change of changes) {
       if (!change.reason?.trim()) throw badRequest('سبب التعديل مطلوب');
@@ -591,6 +594,7 @@ export async function recordPurchase(
     if (!pr || !(BUYER_VISIBLE_PR_STATUSES as readonly string[]).includes(pr.status)) {
       throw notFound('طلب الشراء غير موجود');
     }
+    assertBranchAccess(principal, pr.branch_id);
 
     const numRow = await one<{ n: string }>(
       `SELECT next_document_number($1,'PO', EXTRACT(YEAR FROM now())::int) AS n`,
@@ -740,6 +744,7 @@ export async function receiveDelivery(
       'SELECT * FROM purchase_requests WHERE id = $1 FOR UPDATE', [input.requestId], client,
     );
     if (!pr) throw notFound('طلب الشراء غير موجود');
+    assertBranchAccess(principal, pr.branch_id);
     if (!['delivered', 'purchased', 'in_transit', 'received'].includes(pr.status)) {
       throw unprocessable('لا يمكن الاستلام قبل تسليم البضاعة');
     }
@@ -861,6 +866,7 @@ export async function getPurchaseRequest(principal: Principal, requestId: string
     [requestId],
   );
   if (!pr) throw notFound('طلب الشراء غير موجود');
+  assertBranchAccess(principal, pr.branch_id);
 
   pr.items = await many(
     isBuyer

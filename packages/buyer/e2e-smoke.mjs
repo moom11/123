@@ -12,6 +12,16 @@ const check = (name, ok, extra = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? ' — ' + extra : ''}`);
 };
 
+// Reset the fixture so the suite is repeatable: an earlier run leaves the
+// request advanced past the stage this test exercises.
+psql(`
+  DELETE FROM purchase_items WHERE purchase_id IN (SELECT id FROM purchases WHERE request_id IN (SELECT id FROM purchase_requests WHERE department='BAR'));
+  DELETE FROM supplier_prices WHERE purchase_id IN (SELECT id FROM purchases WHERE request_id IN (SELECT id FROM purchase_requests WHERE department='BAR'));
+  DELETE FROM purchases WHERE request_id IN (SELECT id FROM purchase_requests WHERE department='BAR');
+  UPDATE purchase_request_items SET purchased_quantity=NULL, actual_unit_cost=NULL;
+  UPDATE purchase_requests SET status='approved', actual_total=0 WHERE status IN ('purchasing','purchased','in_transit','delivered');
+`.replace(/\s+/g, ' '));
+
 const browser = await chromium.launch({
   executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
   args: ['--no-sandbox'],
