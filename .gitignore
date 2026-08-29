@@ -12,3 +12,4 @@ packages/buyer/android/app/build/
 packages/buyer/android/build/
 packages/buyer/android/local.properties
 uploads/
+tsconfig.tsbuildinfo
