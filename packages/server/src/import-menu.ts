@@ -7,8 +7,10 @@
  * name within its category, so a second run updates prices rather than
  * creating duplicates.
  *
- *   npm --workspace @mara/server run import-menu -- menu.json
- *   npm --workspace @mara/server run import-menu -- menu.json --dry-run
+ *   npm --workspace @mara/server run import-menu -- packages/server/data/mara-menu.json
+ *   npm --workspace @mara/server run import-menu -- <file> --dry-run
+ *
+ * data/mara-menu.json is MARA's own menu, transcribed from the FineDine PDF.
  *
  * File shape (prices in riyals, as they appear on the printed menu):
  *
@@ -31,6 +33,7 @@
  * importer refuses to guess when it is not.
  */
 import { readFile } from 'node:fs/promises';
+import { isAbsolute, resolve } from 'node:path';
 import { closePool, many, one, pool, withTransaction } from './core/db.js';
 
 type Department = 'BAR' | 'KITCHEN' | 'SHISHA' | 'OTHER';
@@ -41,6 +44,12 @@ interface ImportItem {
   department?: Department;
   description?: string;
   showInMenu?: boolean;
+  /**
+   * Off sale on arrival. For an item whose price the source menu does not
+   * state: it belongs in the catalogue, but selling it at a guessed price is
+   * worse than not selling it until someone sets one.
+   */
+  available?: boolean;
 }
 interface ImportCategory {
   name: string;
@@ -86,7 +95,12 @@ async function main(): Promise<void> {
     return;
   }
 
-  const parsed = JSON.parse(await readFile(path, 'utf8')) as ImportFile;
+  // npm runs a workspace script from inside the package, so a path typed at
+  // the repo root would not resolve. INIT_CWD is where the user actually was.
+  const from = process.env.INIT_CWD ?? process.cwd();
+  const file = isAbsolute(path) ? path : resolve(from, path);
+
+  const parsed = JSON.parse(await readFile(file, 'utf8')) as ImportFile;
   if (!Array.isArray(parsed.categories) || parsed.categories.length === 0) {
     throw new Error('الملف لا يحتوي على تصنيفات');
   }
@@ -174,28 +188,42 @@ async function main(): Promise<void> {
           await pool.query(
             `UPDATE products SET price = $2, production_department = $3,
                     description_ar = $4, show_in_menu = $5, sort_order = $6,
-                    is_active = TRUE
+                    is_active = TRUE, is_available = $7
                WHERE id = $1`,
             [existing.id, price, department, item.description ?? null,
-             item.showInMenu ?? true, order],
+             item.showInMenu ?? true, order, item.available ?? true],
           );
         }
       } else {
         created += 1;
-        console.log(`  + ${item.name}  ${(price / 100).toFixed(2)} ر.س  [${department}]`);
+        const flag = item.available === false ? '  (موقوف — بلا سعر)' : '';
+        console.log(`  + ${item.name}  ${(price / 100).toFixed(2)} ر.س  [${department}]${flag}`);
         if (!dryRun) {
           await pool.query(
             `INSERT INTO products (branch_id, category_id, name_ar, description_ar,
                                    price, production_department, show_in_menu,
                                    sort_order, is_active, is_available)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE, TRUE)`,
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE, $9)`,
             [branch.id, categoryId, item.name, item.description ?? null, price,
-             department, item.showInMenu ?? true, order],
+             department, item.showInMenu ?? true, order, item.available ?? true],
           );
         }
       }
     }
   }
+
+  // A name that now exists in two categories is an operational hazard, not a
+  // tidiness problem: the POS would show the same item twice at two prices and
+  // a cashier would pick whichever came first.
+  const duplicates = await many<{ name_ar: string; where: string }>(
+    `SELECT p.name_ar,
+            string_agg(c.name_ar || ' (' || (p.price / 100.0)::numeric(10,2) || ')', ' + '
+                       ORDER BY c.name_ar) AS where
+       FROM products p JOIN categories c ON c.id = p.category_id
+      WHERE p.branch_id = $1 AND p.is_active AND p.deleted_at IS NULL
+      GROUP BY p.name_ar HAVING count(*) > 1`,
+    [branch.id],
+  );
 
   const total = await one<{ n: string }>(
     `SELECT count(*)::text AS n FROM products
@@ -209,6 +237,14 @@ async function main(): Promise<void> {
   console.log(`  أصناف جديدة  : ${created}`);
   console.log(`  أصناف محدَّثة : ${updated}`);
   if (!dryRun) console.log(`  إجمالي المنيو: ${total!.n} صنف`);
+  if (duplicates.length > 0) {
+    console.log(`\n⚠️  ${duplicates.length} اسم مكرر في أكثر من تصنيف:`);
+    for (const d of duplicates) console.log(`  • ${d.name_ar} — ${d.where}`);
+    console.log(
+      '  نقطة البيع ستعرض كلاً منها، فأخرج الزائد من شاشة المنيو قبل الافتتاح.',
+    );
+  }
+
   console.log(
     '\nملاحظة: هذا لا يحذف شيئاً. الصنف الذي لم يعد في الملف يبقى في المنيو —\n'
     + 'أخرجه من شاشة المنيو إن لم تعد تبيعه.',
