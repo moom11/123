@@ -12,15 +12,62 @@ const check = (name, ok, extra = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? ' — ' + extra : ''}`);
 };
 
-// Reset the fixture so the suite is repeatable: an earlier run leaves the
-// request advanced past the stage this test exercises.
+// Build the fixture through the real API so this runs from a fresh seed: the
+// bar raises a request for 60 litres of milk, the branch manager approves only
+// 40 of them. The gap between the two is the whole point of the checks below.
+const API = 'http://127.0.0.1:4000/api';
+const branchId = psql("select id from branches where code='MARA-01'");
+const milkId = psql("select id from inventory_items where name_ar='حليب' limit 1");
+
+const call = async (path, { token, body, method = 'POST' } = {}) => {
+  const res = await fetch(API + path, {
+    method,
+    headers: {
+      ...(body ? { 'content-type': 'application/json' } : {}),
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(`${method} ${path} -> ${res.status} ${JSON.stringify(json)}`);
+  return json;
+};
+
+// Clear anything a previous run left behind, so the queue holds exactly the
+// request this suite is about.
 psql(`
-  DELETE FROM purchase_items WHERE purchase_id IN (SELECT id FROM purchases WHERE request_id IN (SELECT id FROM purchase_requests WHERE department='BAR'));
-  DELETE FROM supplier_prices WHERE purchase_id IN (SELECT id FROM purchases WHERE request_id IN (SELECT id FROM purchase_requests WHERE department='BAR'));
-  DELETE FROM purchases WHERE request_id IN (SELECT id FROM purchase_requests WHERE department='BAR');
-  UPDATE purchase_request_items SET purchased_quantity=NULL, actual_unit_cost=NULL;
-  UPDATE purchase_requests SET status='approved', actual_total=0 WHERE status IN ('purchasing','purchased','in_transit','delivered');
+  DELETE FROM purchase_items WHERE purchase_id IN (SELECT id FROM purchases);
+  DELETE FROM supplier_prices WHERE purchase_id IN (SELECT id FROM purchases);
+  DELETE FROM purchases;
+  DELETE FROM purchase_request_items;
+  DELETE FROM purchase_requests;
 `.replace(/\s+/g, ' '));
+
+const bar = await call('/auth/employee/login',
+  { body: { branchId, employeeCode: '3001', pin: '7192' } });
+const created = await call('/purchase-requests', {
+  token: bar.tokens.accessToken,
+  body: {
+    branchId,
+    department: 'BAR',
+    priority: 'normal',
+    reason: 'نفاد الحليب في البار',
+    submit: true,
+    items: [{ itemId: milkId, quantity: 60, unit: 'l', reason: 'استهلاك الأسبوع' }],
+  },
+});
+const requestId = created.id ?? created.requestId ?? created.request?.id;
+
+const manager = await call('/auth/login',
+  { body: { email: 'manager@maralounge.sa', password: 'MaraManager#2026Xy' } });
+await call(`/purchase-requests/${requestId}/decide`, {
+  token: manager.tokens.accessToken,
+  body: {
+    decision: 'approve',
+    comment: 'أربعون لترًا تكفي هذا الأسبوع',
+    itemQuantities: [{ itemId: milkId, approvedQuantity: 40, unit: 'l' }],
+  },
+});
 
 const browser = await chromium.launch({
   executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
