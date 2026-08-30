@@ -124,6 +124,7 @@ purchase request really is absent from the buyer's queue.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — how the pieces fit together
 - [`docs/SECURITY.md`](docs/SECURITY.md) — the security model and what it assumes
 - [`docs/OPERATIONS.md`](docs/OPERATIONS.md) — deployment, backups, day-to-day running
+- [`docs/CLOUDFLARE.md`](docs/CLOUDFLARE.md) — running the whole system on Cloudflare Workers
 - [`packages/print-agent/README.md`](packages/print-agent/README.md) — branch printing
 - [`packages/buyer/README.md`](packages/buyer/README.md) — building the Android APK
 

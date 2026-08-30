@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { many, pool } from '../../core/db.js';
 import { parse, requirePermission } from '../../core/http.js';
+import { badRequest } from '../../core/errors.js';
+import type { UploadedFile } from '../../core/principal.js';
 import { requirePrincipal, resolveBranch } from '../../core/principal.js';
 import {
   buyerAdvanceStatus, buyerShoppingList, createPurchaseRequest, decidePurchaseRequest,
@@ -9,10 +11,8 @@ import {
   recordPurchase, requestQuantityChange, submitPurchaseRequest,
 } from './purchasing.service.js';
 import { itemPriceHistory, listSuppliers, upsertSupplier } from './suppliers.service.js';
-import { config } from '../../core/config.js';
 import { createHash } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { attachments } from '../../core/storage.js';
 
 const unitEnum = z.enum(['kg', 'g', 'l', 'ml', 'piece', 'box', 'carton', 'pack']);
 
@@ -211,15 +211,21 @@ export async function purchasingRoutes(app: FastifyInstance): Promise<void> {
   }, async (req) => {
     const p = requirePrincipal(req);
     const { id } = parse(z.object({ id: z.string().uuid() }), req.params);
-    const file = await req.file();
-    if (!file) return { error: 'no file' };
+    // Read through a local shape rather than a module augmentation: under Node
+    // this method comes from @fastify/multipart, under Workers from the router
+    // shim, and the two type declarations would collide if merged.
+    const multipart = req as unknown as {
+      file?: () => Promise<UploadedFile | null | undefined>;
+    };
+    const file = multipart.file ? await multipart.file() : null;
+    if (!file) throw badRequest('لم يتم إرفاق ملف');
 
     const buffer = await file.toBuffer();
     const checksum = createHash('sha256').update(buffer).digest('hex');
-    const dir = join(config.uploads.dir, 'invoices');
-    await mkdir(dir, { recursive: true });
+    // Content-addressed, so the same photograph uploaded twice does not occupy
+    // storage twice, while the timestamp keeps distinct uploads distinguishable.
     const storageKey = `invoices/${checksum}-${Date.now()}`;
-    await writeFile(join(config.uploads.dir, storageKey), buffer);
+    await attachments().put(storageKey, buffer, file.mimetype);
 
     const row = await pool.query(
       `INSERT INTO attachments (branch_id, entity_type, entity_id, file_name,

@@ -49,6 +49,23 @@ function secret(name: string): string {
   return randomBytes(48).toString('base64url');
 }
 
+/**
+ * The Workers runtime refuses to generate random values while a module is
+ * being evaluated, so the dev fallback above cannot run at import time. Read
+ * each secret on first use instead: production still fails fast (the first
+ * request throws with the name of the missing secret) and a dev box still gets
+ * a fresh random secret per process, which invalidates old tokens on restart.
+ */
+function lazySecret(name: string): () => string {
+  let cached: string | undefined;
+  return () => (cached ??= secret(name));
+}
+
+const accessSecret = lazySecret('JWT_ACCESS_SECRET');
+const refreshSecret = lazySecret('JWT_REFRESH_SECRET');
+const mfaSecretKey = lazySecret('MFA_SECRET_KEY');
+const cookieSecret = lazySecret('COOKIE_SECRET');
+
 export const config = {
   env: process.env.NODE_ENV ?? 'development',
   isProd,
@@ -56,14 +73,17 @@ export const config = {
   host: process.env.HOST ?? '0.0.0.0',
 
   database: {
-    url: required('DATABASE_URL', 'postgres://postgres@127.0.0.1:5432/mara'),
+    // On Workers the connection string comes from the Hyperdrive binding at
+    // request time, so this is only consulted by the Node server, the
+    // migration runner and the seed.
+    url: process.env.DATABASE_URL ?? 'postgres://postgres@127.0.0.1:5432/mara',
     poolMax: int('DB_POOL_MAX', 10),
     ssl: bool('DB_SSL', false),
   },
 
   auth: {
-    accessSecret: secret('JWT_ACCESS_SECRET'),
-    refreshSecret: secret('JWT_REFRESH_SECRET'),
+    get accessSecret(): string { return accessSecret(); },
+    get refreshSecret(): string { return refreshSecret(); },
     /** Admin access tokens are short; the refresh token carries the session. */
     accessTtlSeconds: int('ACCESS_TTL_SECONDS', 15 * 60),
     /** Staff on a shop-floor iPad get a longer refresh window than admins. */
@@ -80,7 +100,7 @@ export const config = {
     requireAdminMfa: bool('REQUIRE_ADMIN_MFA', isProd),
     mfaIssuer: process.env.MFA_ISSUER ?? 'MARA Lounge',
     /** Key used to encrypt TOTP secrets at rest (AES-256-GCM). */
-    mfaSecretKey: secret('MFA_SECRET_KEY'),
+    get mfaSecretKey(): string { return mfaSecretKey(); },
   },
 
   otp: {
@@ -123,7 +143,7 @@ export const config = {
     corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:5173,http://localhost:5174')
       .split(',').map((s) => s.trim()).filter(Boolean),
     trustProxy: bool('TRUST_PROXY', isProd),
-    cookieSecret: secret('COOKIE_SECRET'),
+    get cookieSecret(): string { return cookieSecret(); },
     /** Guests scanning a QR get a permissive but finite budget. */
     rateLimitMax: int('RATE_LIMIT_MAX', 300),
     rateLimitWindowMs: int('RATE_LIMIT_WINDOW_MS', 60_000),

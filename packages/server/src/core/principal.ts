@@ -32,6 +32,13 @@ export interface CustomerPrincipal {
   phone: string;
 }
 
+/** One uploaded part, as both @fastify/multipart and the router shim provide it. */
+export interface UploadedFile {
+  filename: string;
+  mimetype: string;
+  toBuffer: () => Promise<Uint8Array>;
+}
+
 declare module 'fastify' {
   interface FastifyRequest {
     principal?: Principal;

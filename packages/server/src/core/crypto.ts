@@ -1,4 +1,4 @@
-import { hash as argonHash, verify as argonVerify, Algorithm } from '@node-rs/argon2';
+import { ARGON2_DEFAULTS, hashArgon2id, verifyArgon2id } from './argon2.js';
 import {
   createHash, createHmac, randomBytes, randomInt, timingSafeEqual,
   createCipheriv, createDecipheriv, scryptSync,
@@ -6,29 +6,27 @@ import {
 import { config } from './config.js';
 
 /**
- * Argon2id parameters. Tuned for an interactive login on modest cloud hardware:
- * ~64 MiB and 3 passes puts a single verification in the tens of milliseconds
- * while making offline cracking of a leaked hash expensive.
+ * Hash a password or a PIN. Neither is ever stored in any other form.
+ *
+ * 64 MiB over 3 passes, which is OWASP's recommended Argon2id profile and the
+ * same cost the native implementation used, so nothing already stored has to be
+ * re-hashed. See core/argon2.ts for why the implementation is pure JavaScript.
  */
-const ARGON_OPTS = {
-  algorithm: Algorithm.Argon2id,
-  memoryCost: 65536,   // KiB
-  timeCost: 3,
-  parallelism: 1,
-} as const;
-
-/** Hash a password or a PIN. Neither is ever stored in any other form. */
 export async function hashSecret(plain: string): Promise<string> {
-  return argonHash(plain, ARGON_OPTS);
+  return hashArgon2id(plain, new Uint8Array(randomBytes(16)), ARGON2_DEFAULTS);
 }
 
 /**
  * Verify against an Argon2id hash. Returns false rather than throwing on a
  * malformed stored hash, so a corrupt row denies access instead of 500-ing.
+ *
+ * The cost parameters are read from the stored hash itself, which is what lets
+ * the defaults above be raised later without invalidating anything already
+ * written.
  */
 export async function verifySecret(hash: string, plain: string): Promise<boolean> {
   try {
-    return await argonVerify(hash, plain, ARGON_OPTS);
+    return verifyArgon2id(hash, plain);
   } catch {
     return false;
   }

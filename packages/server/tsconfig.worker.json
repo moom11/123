@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    // Workers globals only. The Node types are deliberately absent: anything
+    // that needs them (the migration runner, the seed, the Fastify server) is
+    // not part of the Worker bundle.
+    "types": ["@cloudflare/workers-types"]
+  },
+  "include": ["src/worker.ts", "src/routes.ts", "src/core", "src/modules", "src/jobs"],
+  "exclude": ["src/index.ts", "src/app.ts", "src/seed.ts", "src/core/migrate.ts"]
+}

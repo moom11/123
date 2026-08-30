@@ -40,7 +40,30 @@ export function clientCount(): number {
   return clients.size;
 }
 
+/**
+ * Where published events go.
+ *
+ * On Node the sockets live in this isolate, so the default transport writes to
+ * them directly. On Cloudflare Workers each request may run in a different
+ * isolate, so a `Set` here would only ever reach the sockets that happen to
+ * share it — the Worker installs a transport that forwards to a Durable Object,
+ * which is the one place all the sockets for a branch actually live.
+ */
+export type RealtimeTransport = (event: RealtimeEvent) => void;
+
+let transport: RealtimeTransport | null = null;
+
+export function setRealtimeTransport(next: RealtimeTransport | null): void {
+  transport = next;
+}
+
 export function publish(event: RealtimeEvent): void {
+  if (transport) { transport(event); return; }
+  publishLocal(event);
+}
+
+/** Deliver to sockets held in this isolate. Also used by the Durable Object. */
+export function publishLocal(event: RealtimeEvent): void {
   const message = JSON.stringify({
     type: event.type,
     payload: event.payload,

@@ -1,0 +1,72 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mara-api",
+  "main": "src/worker.ts",
+  // 2026-08-04 or later enables nodejs_compat by default, which the pg driver
+  // and node:crypto both require.
+  "compatibility_date": "2026-08-25",
+
+  "limits": {
+    // Argon2id costs roughly 350 ms of CPU per verification. The free plan's
+    // 10 ms ceiling makes login impossible, so this Worker requires the paid
+    // plan; 10 s leaves generous headroom above the measured cost.
+    "cpu_ms": 10000
+  },
+
+  "observability": { "enabled": true },
+
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      // Create with --caching-disabled. Hyperdrive does not invalidate cached
+      // reads when the application writes, and this is a point of sale: a
+      // stale stock level, wallet balance or order status is a real error, not
+      // a slightly old page.
+      "id": "REPLACE_WITH_HYPERDRIVE_ID"
+    }
+  ],
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "REALTIME", "class_name": "RealtimeHub" }
+    ]
+  },
+
+  "migrations": [
+    {
+      "tag": "v1",
+      // SQLite-backed: the only backend available on the free plan, and the
+      // recommended one for all new classes.
+      "new_sqlite_classes": ["RealtimeHub"]
+    }
+  ],
+
+  "r2_buckets": [
+    { "binding": "ATTACHMENTS", "bucket_name": "mara-attachments" }
+  ],
+
+  "triggers": {
+    "crons": [
+      "* * * * *",      // reclaim stale print jobs, check printer health
+      "15 * * * *",     // sweep expired sessions
+      "0 3 * * *"       // purge expired one-time codes
+    ]
+  },
+
+  "vars": {
+    "NODE_ENV": "production",
+    "REQUIRE_ADMIN_MFA": "true",
+    "WHATSAPP_PROVIDER": "meta_cloud",
+    "WHATSAPP_API_VERSION": "v21.0",
+    "WHATSAPP_OTP_TEMPLATE": "mara_otp",
+    "WHATSAPP_TEMPLATE_LANGUAGE": "ar",
+    "TRUST_PROXY": "true",
+    "CORS_ORIGINS": "https://pos.maralounge.sa,https://menu.maralounge.sa",
+    "PUBLIC_MENU_BASE_URL": "https://menu.maralounge.sa",
+    "AUTO_MIGRATE": "false"
+  }
+
+  // Secrets are set with `wrangler secret put`, never committed:
+  //   JWT_ACCESS_SECRET  JWT_REFRESH_SECRET  COOKIE_SECRET  MFA_SECRET_KEY
+  //   WHATSAPP_PHONE_NUMBER_ID  WHATSAPP_ACCESS_TOKEN
+}

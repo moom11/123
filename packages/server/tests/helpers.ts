@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.js';
-import { one, pool } from '../src/core/db.js';
+import { closePool, one, pool } from '../src/core/db.js';
 import { setMessageProvider, type MessageProvider } from '../src/modules/customers/whatsapp.provider.js';
 
 /**
@@ -41,7 +41,9 @@ export async function getApp(): Promise<FastifyInstance> {
 export async function closeApp(): Promise<void> {
   sessionCache.clear();
   if (app) { await app.close(); app = null; }
-  await pool.end().catch(() => {});
+  // closePool() rather than pool.end(): `pool` is now a thin façade that routes
+  // to either the Node pool or a request-scoped Workers client.
+  await closePool().catch(() => {});
 }
 
 export interface Session { accessToken: string; refreshToken: string }
