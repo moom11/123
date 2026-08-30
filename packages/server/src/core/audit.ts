@@ -86,6 +86,9 @@ export const AUDIT = {
   PRODUCT_CREATED: 'menu.product.created',
   PRODUCT_UPDATED: 'menu.product.updated',
   PRODUCT_AVAILABILITY: 'menu.product.availability_changed',
+  PRODUCT_RETIRED: 'menu.product.retired',
+  CATEGORY_SAVED: 'menu.category.saved',
+  MODIFIER_SAVED: 'menu.modifier.saved',
 
   ORDER_CREATED: 'order.created',
   ORDER_SUBMITTED: 'order.submitted',

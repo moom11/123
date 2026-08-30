@@ -15,6 +15,7 @@ import { Customers } from './pages/Customers.js';
 import { Reports } from './pages/Reports.js';
 import { AuditLog } from './pages/AuditLog.js';
 import { Printers } from './pages/Printers.js';
+import { Menu } from './pages/Menu.js';
 import { Admin } from './pages/Admin.js';
 import { CustomerMenu } from './pages/CustomerMenu.js';
 
@@ -87,6 +88,7 @@ const NAV: Array<{ section: string; items: NavEntry[] }> = [
     section: 'الإدارة',
     items: [
       { to: '/dashboard', label: 'لوحة المؤشرات', icon: '📊', permissions: ['reports.sales'] },
+      { to: '/catalog', label: 'المنيو', icon: '🍔', permissions: ['menu.manage', 'menu.availability.update'] },
       { to: '/customers', label: 'العملاء', icon: '👥', permissions: ['customers.read'] },
       { to: '/inventory', label: 'المخزون', icon: '📦', permissions: ['inventory.read'] },
       {
@@ -264,6 +266,7 @@ function Shell() {
               path="/reports"
               element={<Guard perm={['reports.products', 'reports.employees']}><Reports /></Guard>}
             />
+            <Route path="/catalog" element={<Guard perm={['menu.manage', 'menu.availability.update']}><Menu /></Guard>} />
             <Route path="/printers" element={<Guard perm={['printers.read']}><Printers /></Guard>} />
             <Route
               path="/admin"

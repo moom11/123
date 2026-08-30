@@ -29,7 +29,7 @@ export async function getMenu(
   const products = await many<any>(
     `SELECT p.id, p.category_id, p.name_ar AS name, p.name_en,
             p.description_ar AS description, p.image_url, p.price,
-            p.production_department, p.is_available, p.sort_order, p.tags,
+            p.production_department, p.is_available, p.show_in_menu, p.sort_order, p.tags,
             EXISTS (SELECT 1 FROM product_modifiers pm WHERE pm.product_id = p.id) AS has_modifiers,
             EXISTS (SELECT 1 FROM product_variants v WHERE v.product_id = p.id AND v.is_active) AS has_variants
        FROM products p
@@ -255,4 +255,203 @@ export async function searchProducts(branchId: string, term: string, limit = 30)
       ORDER BY p.name_ar LIMIT $3`,
     [branchId, term, limit],
   );
+}
+
+/**
+ * Categories.
+ *
+ * A category is never hard-deleted: products point at it and past orders were
+ * priced under it, so retiring one sets deleted_at and leaves the history
+ * readable.
+ */
+export async function upsertCategory(
+  principal: Principal,
+  input: {
+    id?: string | null; branchId: string; nameAr: string; nameEn?: string | null;
+    sortOrder?: number; showInMenu?: boolean; isActive?: boolean;
+  },
+): Promise<{ id: string }> {
+  return withTransaction(async (client) => {
+    let id = input.id ?? null;
+
+    if (id) {
+      const before = await one<any>(
+        'SELECT * FROM categories WHERE id = $1 AND deleted_at IS NULL', [id], client,
+      );
+      if (!before) throw notFound('التصنيف غير موجود');
+      await client.query(
+        `UPDATE categories SET name_ar = $2, name_en = $3, sort_order = $4,
+                show_in_menu = $5, is_active = $6
+           WHERE id = $1`,
+        [
+          id, input.nameAr, input.nameEn ?? null, input.sortOrder ?? before.sort_order,
+          input.showInMenu ?? before.show_in_menu, input.isActive ?? before.is_active,
+        ],
+      );
+    } else {
+      const row = await one<{ id: string }>(
+        `INSERT INTO categories (branch_id, name_ar, name_en, sort_order,
+                                 show_in_menu, is_active, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+        [
+          input.branchId, input.nameAr, input.nameEn ?? null, input.sortOrder ?? 0,
+          input.showInMenu ?? true, input.isActive ?? true, principal.userId,
+        ],
+        client,
+      );
+      id = row!.id;
+    }
+
+    await audit({
+      action: AUDIT.CATEGORY_SAVED, actorUserId: principal.userId,
+      actorLabel: principal.displayName, branchId: input.branchId,
+      entityType: 'category', entityId: id!,
+      newValue: { name: input.nameAr, sortOrder: input.sortOrder },
+    }, client);
+
+    return { id: id! };
+  });
+}
+
+export async function retireCategory(principal: Principal, id: string, branchId: string) {
+  return withTransaction(async (client) => {
+    const inUse = await one<{ n: string }>(
+      `SELECT count(*)::text AS n FROM products
+        WHERE category_id = $1 AND is_active AND deleted_at IS NULL`,
+      [id], client,
+    );
+    if (Number(inUse!.n) > 0) {
+      throw badRequest(`لا يمكن حذف تصنيف يحتوي ${inUse!.n} صنفاً — انقلها أولاً`);
+    }
+    await client.query(
+      'UPDATE categories SET deleted_at = now(), is_active = FALSE WHERE id = $1', [id],
+    );
+    await audit({
+      action: AUDIT.CATEGORY_SAVED, actorUserId: principal.userId,
+      actorLabel: principal.displayName, branchId,
+      entityType: 'category', entityId: id, newValue: { retired: true },
+    }, client);
+    return { ok: true };
+  });
+}
+
+/**
+ * Retire a product. Also never hard-deleted — order_items reference it, and a
+ * financial record must stay reconstructable.
+ */
+export async function retireProduct(principal: Principal, id: string, branchId: string) {
+  return withTransaction(async (client) => {
+    const before = await one<any>(
+      'SELECT name_ar FROM products WHERE id = $1 AND deleted_at IS NULL', [id], client,
+    );
+    if (!before) throw notFound('المنتج غير موجود');
+    await client.query(
+      `UPDATE products SET is_active = FALSE, is_available = FALSE,
+              show_in_menu = FALSE, deleted_at = now()
+         WHERE id = $1`,
+      [id],
+    );
+    await audit({
+      action: AUDIT.PRODUCT_RETIRED, actorUserId: principal.userId,
+      actorLabel: principal.displayName, branchId,
+      entityType: 'product', entityId: id, oldValue: { name: before.name_ar },
+    }, client);
+    return { ok: true };
+  });
+}
+
+/**
+ * A modifier group and its options, saved together.
+ *
+ * Options are matched by id: one that is present is updated, one that has gone
+ * is deactivated rather than deleted, because past order lines record which
+ * option was chosen.
+ */
+export async function upsertModifier(
+  principal: Principal,
+  input: {
+    id?: string | null; branchId: string; nameAr: string;
+    selection: 'single' | 'multi'; isRequired: boolean;
+    minSelect?: number; maxSelect?: number | null; sortOrder?: number;
+    options: Array<{
+      id?: string | null; nameAr: string; priceDelta: number;
+      isDefault?: boolean; sortOrder?: number;
+    }>;
+  },
+): Promise<{ id: string }> {
+  if (input.options.length === 0) {
+    throw badRequest('المجموعة تحتاج خياراً واحداً على الأقل');
+  }
+  if (input.isRequired && (input.minSelect ?? 1) < 1) {
+    throw badRequest('المجموعة الإلزامية تحتاج حداً أدنى لا يقل عن واحد');
+  }
+
+  return withTransaction(async (client) => {
+    let id = input.id ?? null;
+    const minSelect = input.minSelect ?? (input.isRequired ? 1 : 0);
+    const maxSelect = input.selection === 'single' ? 1 : input.maxSelect ?? null;
+
+    if (id) {
+      const before = await one<any>('SELECT id FROM modifiers WHERE id = $1', [id], client);
+      if (!before) throw notFound('المجموعة غير موجودة');
+      await client.query(
+        `UPDATE modifiers SET name_ar = $2, selection = $3, is_required = $4,
+                min_select = $5, max_select = $6, sort_order = $7
+           WHERE id = $1`,
+        [id, input.nameAr, input.selection, input.isRequired, minSelect, maxSelect,
+         input.sortOrder ?? 0],
+      );
+    } else {
+      const row = await one<{ id: string }>(
+        `INSERT INTO modifiers (branch_id, name_ar, selection, is_required,
+                                min_select, max_select, sort_order, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+        [input.branchId, input.nameAr, input.selection, input.isRequired,
+         minSelect, maxSelect, input.sortOrder ?? 0, principal.userId],
+        client,
+      );
+      id = row!.id;
+    }
+
+    const keptIds: string[] = [];
+    for (const [index, option] of input.options.entries()) {
+      if (option.id) {
+        await client.query(
+          `UPDATE modifier_options SET name_ar = $2, price_delta = $3,
+                  is_default = $4, sort_order = $5, is_active = TRUE
+             WHERE id = $1 AND modifier_id = $6`,
+          [option.id, option.nameAr, option.priceDelta, option.isDefault ?? false,
+           option.sortOrder ?? index, id],
+        );
+        keptIds.push(option.id);
+      } else {
+        const row = await one<{ id: string }>(
+          `INSERT INTO modifier_options (modifier_id, name_ar, price_delta,
+                                         is_default, sort_order)
+           VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+          [id, option.nameAr, option.priceDelta, option.isDefault ?? false,
+           option.sortOrder ?? index],
+          client,
+        );
+        keptIds.push(row!.id);
+      }
+    }
+
+    // Anything the caller dropped is deactivated, not removed: an old order
+    // line still names it.
+    await client.query(
+      `UPDATE modifier_options SET is_active = FALSE
+        WHERE modifier_id = $1 AND NOT (id = ANY($2::uuid[]))`,
+      [id, keptIds],
+    );
+
+    await audit({
+      action: AUDIT.MODIFIER_SAVED, actorUserId: principal.userId,
+      actorLabel: principal.displayName, branchId: input.branchId,
+      entityType: 'modifier', entityId: id!,
+      newValue: { name: input.nameAr, options: input.options.length },
+    }, client);
+
+    return { id: id! };
+  });
 }

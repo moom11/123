@@ -67,7 +67,12 @@ await page.waitForSelector('.cart-line', { timeout: 10000 });
 const cartText = await page.locator('.cart-lines').innerText();
 check('tapping a product adds it to the cart', cartText.includes('فلات وايت'));
 const grand = await page.locator('.total-row.grand .amount').innerText();
-check('cart total is the menu price', grand.includes('18.00'), grand);
+// Read the price from the database rather than hardcoding it: the point of
+// this check is that the cart shows the menu price, whatever it currently is.
+const menuPrice = (Number(psql(
+  "select price from products where name_ar='فلات وايت' and deleted_at is null limit 1",
+)) / 100).toFixed(2);
+check('cart total is the menu price', grand.includes(menuPrice), `${grand} vs ${menuPrice}`);
 
 // --- 6. A product with required options opens the option sheet -------------
 await page.locator('.product-tile', { hasText: 'شاي' }).first().click();

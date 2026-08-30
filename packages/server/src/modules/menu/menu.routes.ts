@@ -3,7 +3,10 @@ import { z } from 'zod';
 import { many } from '../../core/db.js';
 import { parse, requireAuth, requirePermission } from '../../core/http.js';
 import { requirePrincipal, resolveBranch } from '../../core/principal.js';
-import { getMenu, getProductOptions, searchProducts, setAvailability, updatePrice, upsertProduct } from './menu.service.js';
+import {
+  getMenu, getProductOptions, retireCategory, retireProduct, searchProducts,
+  setAvailability, updatePrice, upsertCategory, upsertModifier, upsertProduct,
+} from './menu.service.js';
 import { getRecipeDetail, projectUsage } from '../inventory/recipe.service.js';
 
 export async function menuRoutes(app: FastifyInstance): Promise<void> {
@@ -79,6 +82,62 @@ export async function menuRoutes(app: FastifyInstance): Promise<void> {
     }), req.body);
     return upsertProduct(p, { ...body, branchId: resolveBranch(p, body.branchId) });
   });
+
+  app.post('/menu/products/:id/retire', {
+    preHandler: requirePermission('menu.manage'),
+  }, async (req) => {
+    const p = requirePrincipal(req);
+    const { id } = parse(z.object({ id: z.string().uuid() }), req.params);
+    const q = parse(z.object({ branchId: z.string().uuid().optional() }), req.query);
+    return retireProduct(p, id, resolveBranch(p, q.branchId));
+  });
+
+  app.post('/menu/categories', { preHandler: requirePermission('menu.manage') },
+    async (req) => {
+      const p = requirePrincipal(req);
+      const body = parse(z.object({
+        id: z.string().uuid().nullish(),
+        branchId: z.string().uuid().optional(),
+        nameAr: z.string().min(1).max(120),
+        nameEn: z.string().max(120).nullish(),
+        sortOrder: z.number().int().optional(),
+        showInMenu: z.boolean().optional(),
+        isActive: z.boolean().optional(),
+      }), req.body);
+      return upsertCategory(p, { ...body, branchId: resolveBranch(p, body.branchId) });
+    });
+
+  app.post('/menu/categories/:id/retire', {
+    preHandler: requirePermission('menu.manage'),
+  }, async (req) => {
+    const p = requirePrincipal(req);
+    const { id } = parse(z.object({ id: z.string().uuid() }), req.params);
+    const q = parse(z.object({ branchId: z.string().uuid().optional() }), req.query);
+    return retireCategory(p, id, resolveBranch(p, q.branchId));
+  });
+
+  app.post('/menu/modifiers', { preHandler: requirePermission('menu.manage') },
+    async (req) => {
+      const p = requirePrincipal(req);
+      const body = parse(z.object({
+        id: z.string().uuid().nullish(),
+        branchId: z.string().uuid().optional(),
+        nameAr: z.string().min(1).max(120),
+        selection: z.enum(['single', 'multi']),
+        isRequired: z.boolean(),
+        minSelect: z.number().int().min(0).optional(),
+        maxSelect: z.number().int().min(1).nullish(),
+        sortOrder: z.number().int().optional(),
+        options: z.array(z.object({
+          id: z.string().uuid().nullish(),
+          nameAr: z.string().min(1).max(120),
+          priceDelta: z.number().int(),
+          isDefault: z.boolean().optional(),
+          sortOrder: z.number().int().optional(),
+        })).min(1),
+      }), req.body);
+      return upsertModifier(p, { ...body, branchId: resolveBranch(p, body.branchId) });
+    });
 
   app.get('/menu/modifiers', { preHandler: requirePermission('menu.read') }, async (req) => {
     const p = requirePrincipal(req);
