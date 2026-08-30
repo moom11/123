@@ -49,6 +49,36 @@ Postgres from Neon plus a small always-on Node host works, but any platform
 that sleeps idle containers will make the first request of each shift slow, and
 the print agent still has to run inside the venue either way.
 
+## Where this cannot run
+
+Free shared PHP hosting — ProFreeHost, InfinityFree, 000webhost, anything whose
+control panel offers PHP and MySQL over cPanel and FTP — cannot run this
+system, and no amount of configuration changes that. It is not a matter of
+uploading the right archive.
+
+| the system needs | shared PHP hosting gives |
+| --- | --- |
+| a long-lived **Node** process (`node dist/index.js`) | PHP executed per request |
+| **PostgreSQL** | MySQL |
+| an open **WebSocket** for live updates | long connections closed |
+| **cron** for the background jobs | limited or absent |
+
+The database is the harder half, and it is not a find-and-replace. The schema
+leans on `NUMERIC(18,4)` for stock quantities, `jsonb` in dozens of columns,
+partial unique indexes such as `unique (lower(email)) where deleted_at is
+null`, a `next_document_number()` function written in PL/pgSQL, and **35**
+`SELECT … FOR UPDATE` row locks. Those locks are what stop the last unit being
+sold twice and a wallet balance being spent twice; MySQL has no equivalent that
+maps across without rewriting the transactions that depend on them. Porting
+would mean giving up the guarantees that protect the money.
+
+What such a host is good for is static files. That does not help here: the
+Worker that serves the API already serves the POS app from the same origin
+(§7), so splitting them across two hosts adds CORS and a second domain while
+still leaving the API homeless.
+
+Use `--share` (§0) to try it, and §1 onward to host it.
+
 ## The order to do this in
 
 Deployment mechanics are the easy half. The half that matters is that the seed
