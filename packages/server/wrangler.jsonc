@@ -15,6 +15,19 @@
 
   "observability": { "enabled": true },
 
+  // The POS/admin PWA ships inside this same Worker, so the app and the API
+  // share one origin: no CORS, no second domain to configure on every iPad,
+  // and the /api paths the app already uses keep working unchanged.
+  // Build it first:  npm --workspace @mara/web run build
+  "assets": {
+    "directory": "../web/dist",
+    // Client-side routing: /tables, /pos, /menu/<qr> must all serve index.html.
+    "not_found_handling": "single-page-application",
+    // Only these reach the Worker script. Everything else is served straight
+    // from Cloudflare's edge cache without opening a database connection.
+    "run_worker_first": ["/api/*", "/ws", "/health"]
+  },
+
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",

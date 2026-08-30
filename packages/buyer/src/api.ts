@@ -11,8 +11,16 @@ const BASE_KEY = 'mara.buyer.base';
 
 let accessToken: string | null = null;
 
+/**
+ * Where the API lives. A build can bake in the deployed URL with
+ * VITE_API_BASE, which is what the hosted and Android builds do; anything
+ * saved on the device wins over it, so a rep can be pointed at a different
+ * server without a rebuild. Empty means same-origin, as in local development.
+ */
+const BUILT_IN_BASE = (import.meta.env?.VITE_API_BASE ?? '').replace(/\/$/, '');
+
 export function apiBase(): string {
-  return localStorage.getItem(BASE_KEY) ?? '';
+  return localStorage.getItem(BASE_KEY) ?? BUILT_IN_BASE;
 }
 export function setApiBase(url: string): void {
   localStorage.setItem(BASE_KEY, url.replace(/\/$/, ''));
