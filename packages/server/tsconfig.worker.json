@@ -15,5 +15,5 @@
     "types": ["@cloudflare/workers-types"]
   },
   "include": ["src/worker.ts", "src/routes.ts", "src/core", "src/modules", "src/jobs"],
-  "exclude": ["src/index.ts", "src/app.ts", "src/seed.ts", "src/import-menu.ts", "src/core/migrate.ts"]
+  "exclude": ["src/index.ts", "src/app.ts", "src/seed.ts", "src/import-menu.ts", "src/preflight.ts", "src/core/migrate.ts"]
 }

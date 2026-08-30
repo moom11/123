@@ -10,6 +10,7 @@
     "migrate": "tsx src/core/migrate.ts",
     "seed": "tsx src/seed.ts",
     "import-menu": "tsx src/import-menu.ts",
+    "preflight": "tsx src/preflight.ts",
     "test": "vitest run",
     "worker:dev": "wrangler dev",
     "worker:deploy": "wrangler deploy",

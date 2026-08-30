@@ -49,6 +49,37 @@ Postgres from Neon plus a small always-on Node host works, but any platform
 that sleeps idle containers will make the first request of each shift slow, and
 the print agent still has to run inside the venue either way.
 
+## The order to do this in
+
+Deployment mechanics are the easy half. The half that matters is that the seed
+publishes the owner's password and every staff PIN **in this repository**, so
+opening with any of them still in place is not a weak password — it is a
+published one. `npm --workspace @mara/server run preflight` verifies the stored
+hashes against those published values and refuses to pass while any still
+match; `scripts/deploy-cloudflare.sh` will not deploy until it does.
+
+| | what | who |
+| --- | --- | --- |
+| 1 | Cloudflare account on the **paid** Workers plan (§1.1), R2 enabled (§4) | you |
+| 2 | A Postgres database at a provider, migrated and seeded (§2) | you |
+| 3 | Hyperdrive, created `--caching-disabled` (§3) | one command |
+| 4 | Four secrets generated and set (§5) | one command each |
+| 5 | **Change the owner password and every staff PIN** | you, in the app |
+| 6 | Real printer addresses, real tables, your menu | you, in the app |
+| 7 | `npm run preflight -w @mara/server` until it says جاهز للافتتاح | one command |
+| 8 | `./scripts/deploy-cloudflare.sh` | one command |
+| 9 | Print agent on a machine inside the venue (§11) | you |
+| 10 | Enrol MFA on first admin login, print the QR labels | you |
+
+Generate each secret with something you did not choose yourself:
+
+```bash
+openssl rand -base64 48
+```
+
+Steps 5 and 6 are the ones with no shortcut, and the ones the preflight check
+exists to stop you skipping.
+
 ## 1. Prerequisites — read these before you start
 
 ### 1.1 The Workers **Paid** plan is mandatory

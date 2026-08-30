@@ -23,6 +23,13 @@ if grep -q 'REPLACE_WITH_HYPERDRIVE_ID' packages/server/wrangler.jsonc; then
   exit 1
 fi
 
+if [ "${SKIP_PREFLIGHT:-}" != "true" ]; then
+  say "Checking the branch is safe to open with"
+  # Refuses to deploy while the seed's published passwords, PINs or dev secrets
+  # are still in place. SKIP_PREFLIGHT=true to deploy a staging environment.
+  npm --workspace @mara/server run preflight
+fi
+
 say "Building the POS app (shipped inside the API Worker)"
 npm --workspace @mara/shared run build >/dev/null
 npm --workspace @mara/web run build
