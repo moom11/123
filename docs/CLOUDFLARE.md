@@ -19,6 +19,36 @@ behaviour you get in production.
   Print agent (on-site LAN) ──► polls the Worker ──► ESC/POS printers over TCP 9100
 ```
 
+## 0. Just trying it out
+
+You do not need any of this to try the system. Two commands, no account, no
+card, and it is reachable from every device in the venue:
+
+```bash
+./scripts/dev-up.sh --share
+```
+
+That brings the whole system up on your machine and opens a free Cloudflare
+quick tunnel, printing an `https://….trycloudflare.com` address. Open it in
+Safari on the iPad, Share → Add to Home Screen, and you are running the POS.
+It needs [cloudflared](https://github.com/cloudflare/cloudflared/releases/latest)
+(`brew install cloudflared` on macOS) and nothing else.
+
+The tunnel points at the preview server, which already proxies `/api` and `/ws`
+to the API, so one address serves the app, the API and the guest QR menu with
+no CORS to configure.
+
+**What this is not.** The address is temporary: it lives only as long as the
+command runs, changes every time, and anyone holding the link reaches your
+till. Use it to evaluate the system, not to run a shift, and never put real
+customer data behind it. Everything below is the permanent setup.
+
+**Free hosting for a longer trial.** Cloudflare's free Workers plan cannot run
+this — see §1.1; Argon2id needs ~1.4 s of CPU against a 10 ms ceiling. A free
+Postgres from Neon plus a small always-on Node host works, but any platform
+that sleeps idle containers will make the first request of each shift slow, and
+the print agent still has to run inside the venue either way.
+
 ## 1. Prerequisites — read these before you start
 
 ### 1.1 The Workers **Paid** plan is mandatory

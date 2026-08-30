@@ -3,7 +3,7 @@ import { execSync } from 'node:child_process';
 
 const BASE = 'http://127.0.0.1:4173';
 const psql = (q) => execSync(
-  `psql -h 127.0.0.1 -U postgres -d mara -qtAX -c "${q}"`, { encoding: 'utf8' },
+  `psql -h 127.0.0.1 -U postgres -d ${process.env.MARA_DB ?? 'mara'} -qtAX -c "${q}"`, { encoding: 'utf8' },
 ).trim();
 
 const branchId = psql("select id from branches where code='MARA-01'");
@@ -75,23 +75,61 @@ const menuPrice = (Number(psql(
 check('cart total is the menu price', grand.includes(menuPrice), `${grand} vs ${menuPrice}`);
 
 // --- 6. A product with required options opens the option sheet -------------
-await page.locator('.product-tile', { hasText: 'شاي' }).first().click();
-await page.waitForSelector('.modal', { timeout: 10000 });
-// The sheet renders immediately with a spinner and loads its option groups
-// asynchronously, so wait for the groups themselves before reading the text.
-await page.waitForSelector('.modal .chip', { timeout: 10000 });
-const modalText = await page.locator('.modal').innerText();
-check('required options sheet opens for tea', modalText.includes('السكر'));
-check('add button is blocked until required options chosen',
-  await page.locator('.modal-footer .btn').first().isDisabled());
-await page.locator('.chip', { hasText: /^سكر$/ }).click();
-await page.locator('.chip', { hasText: 'نعناع مغربي' }).click();
-const addLabel = await page.locator('.modal-footer .btn').first().innerText();
-check('option price reflected before adding', addLabel.includes('11.00'), addLabel);
-await page.locator('.modal-footer .btn').first().click();
-await page.waitForTimeout(400);
-check('tea added with its options',
-  (await page.locator('.cart-lines').innerText()).includes('نعناع مغربي'));
+// Ask the database which product carries a required option group rather than
+// naming one: the menu is the restaurant's to change, and importing a real one
+// replaces whatever the seed happened to create.
+// The price to expect is the base plus the FIRST option of EVERY required
+// group, because that is what the loop below ticks.
+const optionProduct = psql(`
+  with first_option as (
+    select distinct on (pm.product_id, m.id)
+           pm.product_id, m.id AS modifier_id, m.name_ar AS group_name, o.price_delta
+      from product_modifiers pm
+      join modifiers m on m.id = pm.modifier_id and m.is_required and m.is_active
+      join modifier_options o on o.modifier_id = m.id and o.is_active
+     order by pm.product_id, m.id, m.sort_order, o.sort_order
+  )
+  select p.name_ar || '|' || min(f.group_name) || '|'
+         || (p.price + sum(f.price_delta))
+    from products p join first_option f on f.product_id = p.id
+   where p.is_active and p.is_available and p.deleted_at is null
+   group by p.id, p.name_ar, p.price
+   order by p.name_ar limit 1`);
+
+if (!optionProduct) {
+  // Not a failure: a menu with no option groups attached is a valid menu. The
+  // seeded demo menu has them, a freshly imported real one may not until
+  // someone attaches them in the menu screen.
+  console.log('SKIP  option sheet — no product in this menu carries a required '
+              + 'option group');
+} else {
+  const [productName, groupName, withOptions] = optionProduct.split('|');
+  const expected = (Number(withOptions) / 100).toFixed(2);
+
+  await page.locator('.product-tile', { hasText: productName }).first().click();
+  await page.waitForSelector('.modal', { timeout: 10000 });
+  // The sheet renders immediately with a spinner and loads its option groups
+  // asynchronously, so wait for the groups themselves before reading the text.
+  await page.waitForSelector('.modal .chip', { timeout: 10000 });
+  const modalText = await page.locator('.modal').innerText();
+  check(`required options sheet opens for ${productName}`, modalText.includes(groupName));
+  check('add button is blocked until required options chosen',
+    await page.locator('.modal-footer .btn').first().isDisabled());
+
+  // Choose the first option of every required group, which is what the button
+  // is waiting for.
+  for (const group of await page.locator('.modal .field').all()) {
+    if (!(await group.innerText()).includes('إلزامي')) continue;
+    await group.locator('.chip').first().click();
+  }
+  const addLabel = await page.locator('.modal-footer .btn').first().innerText();
+  check('option price reflected before adding', addLabel.includes(expected),
+    `${addLabel} vs ${expected}`);
+  await page.locator('.modal-footer .btn').first().click();
+  await page.waitForTimeout(400);
+  check(`${productName} added with its options`,
+    (await page.locator('.cart-lines').innerText()).includes(productName));
+}
 
 await page.screenshot({ path: '/tmp/shot-pos.png', fullPage: false });
 

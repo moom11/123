@@ -39,6 +39,9 @@ export default defineConfig({
   },
   preview: {
     port: 4174,
+    // A Cloudflare quick tunnel (scripts/dev-up.sh --share) reaches this server
+    // under a *.trycloudflare.com host, which Vite would otherwise refuse.
+    allowedHosts: ['.trycloudflare.com', 'localhost', '127.0.0.1'],
     proxy: { '/api': { target: 'http://localhost:4000', changeOrigin: true } },
   },
   build: { target: 'es2020', outDir: 'dist' },

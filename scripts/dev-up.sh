@@ -4,6 +4,8 @@
 #
 #   ./scripts/dev-up.sh          start everything
 #   ./scripts/dev-up.sh --reset  drop the database and rebuild it first
+#   ./scripts/dev-up.sh --share  also open a free public HTTPS URL, so the
+#                                iPads and phones can reach it without a host
 #
 # Needs: Node 22+, PostgreSQL 16 running locally, npm install already done.
 #
@@ -50,7 +52,24 @@ if ! pg_isready -h "$PGHOST_" -p "$PGPORT_" >/dev/null 2>&1; then
   exit 1
 fi
 
-if [ "${1:-}" = "--reset" ]; then
+SHARE=false
+RESET=false
+for arg in "$@"; do
+  case "$arg" in
+    --share) SHARE=true ;;
+    --reset) RESET=true ;;
+    *) echo "unknown option: $arg" >&2; exit 1 ;;
+  esac
+done
+
+if [ "$SHARE" = true ] && ! command -v cloudflared >/dev/null 2>&1; then
+  echo "--share needs cloudflared. Install it, then run this again:" >&2
+  echo "  macOS   brew install cloudflared" >&2
+  echo "  Linux   https://github.com/cloudflare/cloudflared/releases/latest" >&2
+  exit 1
+fi
+
+if [ "$RESET" = true ]; then
   say "Dropping and recreating ${DB}"
   psql "postgres://${PGUSER_}:${PGPASS_}@${PGHOST_}:${PGPORT_}/postgres" -qtAX \
     -c "DROP DATABASE IF EXISTS ${DB} WITH (FORCE)" -c "CREATE DATABASE ${DB}"
@@ -100,6 +119,30 @@ curl -sf -m 2 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1 || {
   echo "API did not come up; see $LOGS/api.log" >&2; tail -20 "$LOGS/api.log" >&2; exit 1;
 }
 
+# --- optional public URL ----------------------------------------------------
+PUBLIC_URL=""
+if [ "$SHARE" = true ]; then
+  say "Opening a public URL"
+  # Tunnelling the preview server, not the API: it already proxies /api and
+  # /ws through to the API, so one URL serves the whole thing and there is no
+  # CORS to configure. A quick tunnel needs no Cloudflare account.
+  cloudflared tunnel --url "http://127.0.0.1:4173" --no-autoupdate \
+    > "$LOGS/tunnel.log" 2>&1 &
+  echo $! >> "$PIDS"
+
+  for i in $(seq 1 40); do
+    PUBLIC_URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$LOGS/tunnel.log" \
+                 | head -1 || true)
+    [ -n "$PUBLIC_URL" ] && break
+    sleep 1
+  done
+
+  if [ -z "$PUBLIC_URL" ]; then
+    echo "The tunnel did not come up; see $LOGS/tunnel.log" >&2
+    echo "Everything below still works on this machine." >&2
+  fi
+fi
+
 cat <<EOF
 
   MARA is up.
@@ -121,5 +164,21 @@ cat <<EOF
   Logs are in $LOGS/. Ctrl-C stops everything.
 
 EOF
+
+if [ -n "$PUBLIC_URL" ]; then
+  cat <<EOF
+  Reachable from any device, over HTTPS:
+
+    $PUBLIC_URL
+
+  Open it in Safari on the iPad, then Share -> Add to Home Screen.
+
+  This is a temporary address for trying the system out. It lasts only as long
+  as this command runs, it changes every time, and anyone holding the link can
+  reach your till — so do not put real customer data behind it, and stop it
+  with Ctrl-C when you are done. docs/CLOUDFLARE.md covers the permanent setup.
+
+EOF
+fi
 
 wait

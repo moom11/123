@@ -31,6 +31,23 @@ No client ever talks to the database. The iPad never talks to a printer.
 
 ## Quick start
 
+With PostgreSQL 16 running and `npm install` done, one command does everything —
+create the database, migrate, seed, build and start all three services:
+
+```bash
+./scripts/dev-up.sh              # POS on :4173, buyer app on :4174
+./scripts/dev-up.sh --share      # ...and a free public HTTPS URL for the iPads
+./scripts/dev-up.sh --reset      # start over from an empty database
+```
+
+`--share` opens a [Cloudflare quick tunnel](https://github.com/cloudflare/cloudflared/releases/latest)
+and prints an address anyone on any device can open — no account, no card. It is
+a temporary link for trying the system out, not a way to run a shift; see
+[`docs/CLOUDFLARE.md`](docs/CLOUDFLARE.md) §0.
+
+<details>
+<summary>Doing it by hand</summary>
+
 ```bash
 # 1. PostgreSQL 16
 createdb mara
@@ -48,6 +65,8 @@ npm run dev:server -w @mara/server   # API on :4000
 npm run dev -w @mara/web             # POS + guest menu on :5173
 npm run dev -w @mara/buyer           # buyer app on :5174
 ```
+
+</details>
 
 The seed creates a working branch: 20 tables with QR tokens, four printers, a
 menu whose recipes are the worked examples from the specification, opening

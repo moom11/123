@@ -3,7 +3,7 @@ import { execSync } from 'node:child_process';
 
 const BASE = 'http://127.0.0.1:4174';
 const psql = (q) => execSync(
-  `psql -h 127.0.0.1 -U postgres -d mara -qtAX -c "${q}"`, { encoding: 'utf8' },
+  `psql -h 127.0.0.1 -U postgres -d ${process.env.MARA_DB ?? 'mara'} -qtAX -c "${q}"`, { encoding: 'utf8' },
 ).trim();
 
 const results = [];
