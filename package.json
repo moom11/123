@@ -10,7 +10,9 @@
     "packages/buyer",
     "packages/print-agent"
   ],
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build:shared": "npm run build -w @mara/shared",
     "dev:server": "npm run dev -w @mara/server",
@@ -19,6 +21,7 @@
     "migrate": "npm run migrate -w @mara/server",
     "seed": "npm run seed -w @mara/server",
     "test": "npm run test -w @mara/server",
-    "build": "npm run build -w @mara/shared && npm run build -w @mara/server && npm run build -w @mara/web && npm run build -w @mara/buyer"
+    "build": "npm run build -w @mara/shared && npm run build -w @mara/server && npm run build -w @mara/web && npm run build -w @mara/buyer",
+    "start": "node scripts/dev-up.mjs"
   }
 }

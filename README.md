@@ -35,10 +35,13 @@ With PostgreSQL 16 running and `npm install` done, one command does everything â
 create the database, migrate, seed, build and start all three services:
 
 ```bash
-./scripts/dev-up.sh              # POS on :4173, buyer app on :4174
-./scripts/dev-up.sh --share      # ...and a free public HTTPS URL for the iPads
-./scripts/dev-up.sh --reset      # start over from an empty database
+npm start                  # POS on :4173, buyer app on :4174
+npm start -- --share       # ...and a free public HTTPS URL for the iPads
+npm start -- --reset       # start over from an empty database
 ```
+
+`npm start` runs `scripts/dev-up.mjs`, which works on Windows, macOS and Linux.
+`scripts/dev-up.sh` is the same thing for a POSIX shell.
 
 `--share` opens a [Cloudflare quick tunnel](https://github.com/cloudflare/cloudflared/releases/latest)
 and prints an address anyone on any device can open â€” no account, no card. It is

@@ -25,11 +25,11 @@ You do not need any of this to try the system. Two commands, no account, no
 card, and it is reachable from every device in the venue:
 
 ```bash
-./scripts/dev-up.sh --share
+npm start -- --share
 ```
 
-That brings the whole system up on your machine and opens a free Cloudflare
-quick tunnel, printing an `https://….trycloudflare.com` address. Open it in
+That brings the whole system up on your machine — on Windows, macOS or Linux —
+and opens a free Cloudflare quick tunnel, printing an `https://….trycloudflare.com` address. Open it in
 Safari on the iPad, Share → Add to Home Screen, and you are running the POS.
 It needs [cloudflared](https://github.com/cloudflare/cloudflared/releases/latest)
 (`brew install cloudflared` on macOS) and nothing else.
