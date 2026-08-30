@@ -82,12 +82,23 @@ export async function attachPrincipal(req: FastifyRequest): Promise<void> {
   if (!payload.sid) return;
   const principal = await loadPrincipal(payload.sid);
   if (!principal) return;
+
+  // Which branch is this request about? Multi-branch admins have no home
+  // branch, so they say so per request. Naming a branch is not permission to
+  // use it — resolveBranch still runs it past assertBranchAccess.
+  const header = req.headers['x-branch-id'];
+  const requested = Array.isArray(header) ? header[0] : header;
+  principal.requestedBranchId = UUID_RE.test(requested ?? '') ? requested! : null;
+
   req.principal = principal;
 
   // Cheap liveness stamp so idle-timeout has something to measure against.
   void pool.query('UPDATE sessions SET last_seen_at = now() WHERE id = $1', [payload.sid])
     .catch(() => { /* non-critical */ });
 }
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Route guard: a valid staff session is required. */
 export async function requireAuth(req: FastifyRequest): Promise<void> {

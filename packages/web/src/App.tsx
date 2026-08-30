@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useSession } from './lib/session.js';
+import { api, rememberBranch, rememberedBranch } from './lib/api.js';
 import { RealtimeProvider, useRealtime, useRealtimeEvent } from './lib/realtime.js';
 import { useToast } from './components/ui.js';
 import { Login } from './pages/Login.js';
@@ -107,6 +108,40 @@ const NAV: Array<{ section: string; items: NavEntry[] }> = [
   },
 ];
 
+/**
+ * Branch picker, shown only to a principal with no home branch — the owner,
+ * super admin and executives. Everyone else is pinned to their own branch by
+ * the server and has nothing to choose. Switching reloads so every open screen
+ * refetches against the new branch rather than showing a mix of the two.
+ */
+function BranchPicker() {
+  const { me } = useSession();
+  const [branches, setBranches] = useState<Array<{ id: string; name: string }>>([]);
+  const current = rememberedBranch() ?? '';
+
+  const spansAllBranches = me != null && me.user.branchId == null;
+
+  useEffect(() => {
+    if (!spansAllBranches) return;
+    api<{ branches: Array<{ id: string; name: string }> }>('/auth/branches')
+      .then((r) => setBranches(r.branches))
+      .catch(() => { /* the topbar is not the place to report this */ });
+  }, [spansAllBranches]);
+
+  if (!spansAllBranches || branches.length === 0) return null;
+
+  return (
+    <select
+      className="select sm"
+      value={current}
+      aria-label="الفرع"
+      onChange={(e) => { rememberBranch(e.target.value); window.location.reload(); }}
+    >
+      {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+    </select>
+  );
+}
+
 function Shell() {
   const { me, can, signOut } = useSession();
   const { connected } = useRealtime();
@@ -156,6 +191,7 @@ function Shell() {
           <small>{me?.branch?.name ?? 'مارا لاونج'}</small>
         </div>
         <div className="spacer" />
+        <BranchPicker />
         <span
           className={`badge ${connected ? 'green' : 'red'}`}
           title={connected ? 'التحديثات الفورية تعمل' : 'انقطع الاتصال الفوري'}

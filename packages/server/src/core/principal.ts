@@ -22,6 +22,13 @@ export interface Principal {
   permissions: ReadonlySet<string>;
   mfaSatisfied: boolean;
   department: string | null;
+  /**
+   * The branch this one request is acting on, taken from the X-Branch-Id
+   * header. A principal who spans every branch (owner, executive) has no home
+   * branch to fall back on, so without this every branch-scoped endpoint would
+   * refuse them. It selects, it never grants: assertBranchAccess still decides.
+   */
+  requestedBranchId: string | null;
 }
 
 /** A verified customer on the QR menu. Never carries staff permissions. */
@@ -100,10 +107,8 @@ export function assertBranchAccess(principal: Principal, branchId: string): void
  * is entitled to it, otherwise the caller's home branch.
  */
 export function resolveBranch(principal: Principal, requested?: string | null): string {
-  if (requested) {
-    assertBranchAccess(principal, requested);
-    return requested;
-  }
-  if (principal.branchId) return principal.branchId;
-  throw forbidden('يجب تحديد الفرع');
+  const branch = requested ?? principal.requestedBranchId ?? principal.branchId;
+  if (!branch) throw forbidden('يجب تحديد الفرع');
+  assertBranchAccess(principal, branch);
+  return branch;
 }

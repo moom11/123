@@ -22,7 +22,13 @@ export function Login() {
     api<{ branches: Array<{ id: string; name: string }> }>('/auth/branches')
       .then((r) => {
         setBranches(r.branches);
-        setBranchId((current) => current || r.branches[0]?.id || '');
+        setBranchId((current) => {
+          const next = current || r.branches[0]?.id || '';
+          // Persist the default too, not only an explicit change: the branch
+          // travels on every later request as X-Branch-Id.
+          if (next) rememberBranch(next);
+          return next;
+        });
       })
       .catch(() => setError('تعذّر الاتصال بالخادم'));
   }, []);

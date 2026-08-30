@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { auth, closeApp, getApp, loginAdmin, loginEmployee } from './helpers.js';
+import { auth, closeApp, getApp, getBranchId, loginAdmin, loginEmployee } from './helpers.js';
 import { one, pool } from '../src/core/db.js';
 
 afterAll(closeApp);
@@ -238,5 +238,55 @@ describe('role based access control', () => {
       method: 'GET', url: `/api/tables?branchId=${otherBranch!.id}`, headers: auth(manager),
     });
     expect(res.statusCode).toBe(403);
+  });
+
+  /**
+   * The X-Branch-Id header exists so an owner, who has no home branch, can say
+   * which branch a request is about. It must only ever select among branches
+   * the caller already has, never add one.
+   */
+  describe('the branch header selects, it does not grant', () => {
+    it('lets an owner work once they name a branch, and not before', async () => {
+      const app = await getApp();
+      const owner = await loginAdmin('owner@maralounge.sa', 'MaraOwner#2026Xy');
+      const branchId = await getBranchId();
+
+      const without = await app.inject({
+        method: 'GET', url: '/api/tables', headers: auth(owner),
+      });
+      expect(without.statusCode).toBe(403);
+
+      const withBranch = await app.inject({
+        method: 'GET', url: '/api/tables',
+        headers: { ...auth(owner), 'x-branch-id': branchId },
+      });
+      expect(withBranch.statusCode).toBe(200);
+    });
+
+    it('refuses a manager who names a branch that is not theirs', async () => {
+      const app = await getApp();
+      const manager = await loginAdmin('manager@maralounge.sa', 'MaraManager#2026Xy');
+      const otherBranch = await one<{ id: string }>(
+        `INSERT INTO branches (code, name, name_ar) VALUES ('OTHER-02','Other','فرع ثالث')
+         ON CONFLICT (code) DO UPDATE SET name_ar = EXCLUDED.name_ar RETURNING id`,
+      );
+
+      const res = await app.inject({
+        method: 'GET', url: '/api/tables',
+        headers: { ...auth(manager), 'x-branch-id': otherBranch!.id },
+      });
+      expect(res.statusCode).toBe(403);
+    });
+
+    it('ignores a malformed header rather than acting on it', async () => {
+      const app = await getApp();
+      const manager = await loginAdmin('manager@maralounge.sa', 'MaraManager#2026Xy');
+      const res = await app.inject({
+        method: 'GET', url: '/api/tables',
+        headers: { ...auth(manager), 'x-branch-id': "' OR 1=1 --" },
+      });
+      // Falls back to the manager's own branch instead of failing or leaking.
+      expect(res.statusCode).toBe(200);
+    });
   });
 });

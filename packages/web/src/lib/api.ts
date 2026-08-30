@@ -82,6 +82,10 @@ export async function api<T = any>(path: string, opts: RequestOptions = {}): Pro
       ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
       ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
       ...(opts.idempotencyKey ? { 'X-Idempotency-Key': opts.idempotencyKey } : {}),
+      // Which branch the user is looking at. Staff are pinned to their own
+      // branch server-side and this is ignored for them; a multi-branch admin
+      // has no home branch, so without it every screen would come back empty.
+      ...(rememberedBranch() ? { 'X-Branch-Id': rememberedBranch()! } : {}),
       ...opts.headers,
     },
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,

@@ -113,6 +113,8 @@ export async function loadPrincipal(sessionId: string): Promise<Principal | null
     permissions,
     mfaSatisfied: row.mfa_satisfied,
     department: row.department,
+    // Filled in per request from the X-Branch-Id header; see attachPrincipal.
+    requestedBranchId: null,
   };
 }
 
