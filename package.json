@@ -23,6 +23,7 @@
     "test": "npm run test -w @mara/server",
     "build": "npm run build -w @mara/shared && npm run build -w @mara/server && npm run build -w @mara/web && npm run build -w @mara/buyer",
     "start": "node scripts/dev-up.mjs",
-    "build:menu-site": "node scripts/build-static-menu.mjs"
+    "build:menu-site": "node scripts/build-static-menu.mjs",
+    "build:upload": "node scripts/build-upload.mjs"
   }
 }

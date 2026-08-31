@@ -16,3 +16,5 @@ tsconfig.tsbuildinfo
 packages/server/.wrangler/
 .dev-logs/
 dist-menu-site/
+upload/
+api-url.txt
