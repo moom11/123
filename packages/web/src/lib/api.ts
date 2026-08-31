@@ -11,6 +11,27 @@
 
 const REFRESH_KEY = 'mara.refresh';
 const BRANCH_KEY = 'mara.branch';
+const BASE_KEY = 'mara.api';
+
+/**
+ * Where the API lives.
+ *
+ * Empty means same-origin, which is how it is served in development and from
+ * the Worker in production. A build can point it somewhere else with
+ * VITE_API_BASE, which is what lets the app be hosted apart from its API — on
+ * static-only hosting, say. A value saved on the device wins over the build,
+ * so one device can be pointed at another server without a rebuild.
+ */
+const BUILT_IN_BASE = (import.meta.env?.VITE_API_BASE ?? '').replace(/\/$/, '');
+
+export function apiBase(): string {
+  return localStorage.getItem(BASE_KEY) ?? BUILT_IN_BASE;
+}
+export function setApiBase(url: string): void {
+  const clean = url.trim().replace(/\/$/, '');
+  if (clean) localStorage.setItem(BASE_KEY, clean);
+  else localStorage.removeItem(BASE_KEY);
+}
 
 let accessToken: string | null = null;
 let refreshing: Promise<boolean> | null = null;
@@ -48,7 +69,7 @@ async function refresh(): Promise<boolean> {
   if (!refreshing) {
     refreshing = (async () => {
       try {
-        const res = await fetch('/api/auth/refresh', {
+        const res = await fetch(`${apiBase()}/api/auth/refresh`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ refreshToken: token }),
@@ -76,7 +97,7 @@ export interface RequestOptions {
 }
 
 export async function api<T = any>(path: string, opts: RequestOptions = {}): Promise<T> {
-  const send = async (): Promise<Response> => fetch(`/api${path}`, {
+  const send = async (): Promise<Response> => fetch(`${apiBase()}/api${path}`, {
     method: opts.method ?? 'GET',
     headers: {
       ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
@@ -129,8 +150,7 @@ export function connectRealtime(
       timer = window.setTimeout(open, 2000);
       return;
     }
-    const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-    socket = new WebSocket(`${protocol}://${location.host}/ws`);
+    socket = new WebSocket(realtimeUrl());
 
     socket.onopen = () => { attempt = 0; };
     socket.onmessage = (e) => {
@@ -157,6 +177,8 @@ export function connectRealtime(
  * where the server's onRequest hook can read it during the upgrade.
  */
 export function realtimeUrl(): string {
+  const base = apiBase();
+  if (base) return `${base.replace(/^http/, 'ws')}/ws`;
   const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
   return `${protocol}://${location.host}/ws`;
 }

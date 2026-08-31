@@ -45,7 +45,13 @@ export async function buildApp(): Promise<FastifyInstance> {
     },
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-Label', 'X-Idempotency-Key'],
+    // X-Branch-Id must be here or a cross-origin deployment — the app served
+    // from one host, the API from another — has every request rejected by the
+    // browser before it is sent. Same-origin never exercises this list.
+    allowedHeaders: [
+      'Content-Type', 'Authorization', 'X-Device-Label', 'X-Idempotency-Key',
+      'X-Branch-Id',
+    ],
   });
 
   await app.register(cookie, { secret: config.security.cookieSecret });
