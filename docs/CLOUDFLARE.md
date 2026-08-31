@@ -63,14 +63,20 @@ uploading the right archive.
 | an open **WebSocket** for live updates | long connections closed |
 | **cron** for the background jobs | limited or absent |
 
-The database is the harder half, and it is not a find-and-replace. The schema
-leans on `NUMERIC(18,4)` for stock quantities, `jsonb` in dozens of columns,
-partial unique indexes such as `unique (lower(email)) where deleted_at is
-null`, a `next_document_number()` function written in PL/pgSQL, and **35**
-`SELECT … FOR UPDATE` row locks. Those locks are what stop the last unit being
-sold twice and a wallet balance being spent twice; MySQL has no equivalent that
-maps across without rewriting the transactions that depend on them. Porting
-would mean giving up the guarantees that protect the money.
+The first row is the one with no way around it. The API is **13,500 lines of
+TypeScript** across 139 routes; PHP hosting will not execute a line of it.
+Making it run there is not configuration, it is rewriting the whole backend in
+another language.
+
+The database is the smaller obstacle, and worth stating accurately. Most of the
+schema does have a MySQL 8 counterpart: `NUMERIC(18,4)` maps to `DECIMAL`,
+`jsonb` to `JSON`, the PL/pgSQL numbering function to a stored procedure, and
+InnoDB **does** support `SELECT … FOR UPDATE`, which is what the 35 row locks
+guarding stock and wallet balances rely on. What does not carry over is the
+partial unique index — `unique (lower(email)) where deleted_at is null` and
+others like it, which is how soft-deleted rows stay out of uniqueness — and
+that needs a different design, not a different keyword. Real work, but not the
+blocker; the missing language runtime is.
 
 What such a host is good for is static files. That does not help here: the
 Worker that serves the API already serves the POS app from the same origin
