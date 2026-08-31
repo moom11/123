@@ -34,6 +34,12 @@ No client ever talks to the database. The iPad never talks to a printer.
 With PostgreSQL 16 running and `npm install` done, one command does everything —
 create the database, migrate, seed, build and start all three services:
 
+Double-click **START-MARA.bat** on Windows or **START-MARA.command** on macOS.
+It checks the prerequisites, installs dependencies the first time, starts
+everything and opens the browser.
+
+From a terminal, the same thing:
+
 ```bash
 npm start                  # POS on :4173, buyer app on :4174
 npm start -- --share       # ...and a free public HTTPS URL for the iPads
