@@ -15,3 +15,4 @@ uploads/
 tsconfig.tsbuildinfo
 packages/server/.wrangler/
 .dev-logs/
+dist-menu-site/
