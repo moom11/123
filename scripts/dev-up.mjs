@@ -145,7 +145,38 @@ async function waitForHealth(seconds) {
 }
 
 function psql(target, sqlArgs) {
-  return run('psql', [url(target), '-qtAX', ...sqlArgs], { quiet: true });
+  const res = spawnSync('psql', [url(target), '-qtAX', ...sqlArgs], {
+    cwd: root, env, stdio: 'pipe', shell: isWindows,
+  });
+  return {
+    status: res.status,
+    stdout: String(res.stdout ?? '').trim(),
+    stderr: String(res.stderr ?? '').trim(),
+  };
+}
+
+/**
+ * The likeliest first-run failure by a wide margin: PostgreSQL's installer asks
+ * for a password and people rarely pick the one this script assumes. Saying so
+ * beats a bare exit code.
+ */
+function checkCredentials() {
+  const res = psql('postgres', ['-c', 'select 1']);
+  if (res.status === 0) return;
+
+  if (/password authentication failed|no password supplied/i.test(res.stderr)) {
+    console.error(
+      `\nPostgreSQL refused the password for user "${PG.user}".\n\n`
+      + `This script assumes the password is "postgres". If you chose a\n`
+      + 'different one when installing PostgreSQL, pass it instead:\n\n'
+      + (isWindows
+        ? '  set PGPASSWORD=your-password\n  npm start\n'
+        : '  PGPASSWORD=your-password npm start\n'),
+    );
+  } else {
+    console.error(`\nCould not reach PostgreSQL:\n${res.stderr}\n`);
+  }
+  process.exit(1);
 }
 
 async function main() {
@@ -171,6 +202,8 @@ async function main() {
     );
     process.exit(1);
   }
+
+  checkCredentials();
 
   if (reset) {
     say(`Dropping and recreating ${PG.db}`);
