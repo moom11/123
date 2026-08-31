@@ -34,7 +34,15 @@ No client ever talks to the database. The iPad never talks to a printer.
 With PostgreSQL 16 running and `npm install` done, one command does everything —
 create the database, migrate, seed, build and start all three services:
 
-Double-click **START-MARA.bat** on Windows or **START-MARA.command** on macOS.
+Clone it rather than downloading a zip — that is what lets `UPDATE-MARA` pull
+new work later:
+
+```bash
+git clone -b claude/mara-lounge-management-system-tlrc2b https://github.com/moom11/123.git mara
+cd mara && npm install
+```
+
+Then double-click **START-MARA.bat** on Windows or **START-MARA.command** on macOS.
 It checks the prerequisites, installs dependencies the first time, starts
 everything and opens the browser.
 
@@ -48,6 +56,10 @@ npm start -- --reset       # start over from an empty database
 
 `npm start` runs `scripts/dev-up.mjs`, which works on Windows, macOS and Linux.
 `scripts/dev-up.sh` is the same thing for a POSIX shell.
+
+**UPDATE-MARA.bat** / **UPDATE-MARA.command** pull the latest changes and
+refresh dependencies. A folder unzipped rather than cloned has no link to the
+repository; the script says so and prints the clone command.
 
 `--share` opens a [Cloudflare quick tunnel](https://github.com/cloudflare/cloudflared/releases/latest)
 and prints an address anyone on any device can open — no account, no card. It is
