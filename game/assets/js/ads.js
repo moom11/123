@@ -78,6 +78,18 @@ window.Ads = (function () {
   const api = {
     /** يُستدعى مرة واحدة عند تحميل الصفحة. */
     init() {
+      // فحص تشخيصي: يخبرك في الـ Console إن كان سكربت الشبكة مفقوداً.
+      setTimeout(() => {
+        [['interstitial', CONFIG.interstitial], ['rewarded', CONFIG.rewarded]].forEach(([k, c]) => {
+          if (c.enabled && c.zoneId && typeof window['show_' + c.zoneId] !== 'function' && !c.directLink) {
+            console.warn(
+              `[Ads] الزون "${c.zoneId}" (${k}) مُفعّل لكن الدالة show_${c.zoneId} غير موجودة.\n` +
+              'تأكد أنك لصقت سكربت الشبكة داخل <head> في index.html، وأن مانع الإعلانات مُعطّل.'
+            );
+          }
+        });
+      }, 3000);
+
       const slot = document.getElementById('ad-banner');
       if (slot && CONFIG.banner.enabled && CONFIG.banner.html.trim()) {
         slot.hidden = false;
