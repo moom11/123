@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>نيزك — لعبة الفضاء العربية</title>
+<meta name="description" content="نيزك: لعبة عربية سريعة، تفادَ الصخور واجمع العملات وسجّل اسمك في قائمة الأبطال.">
+<meta name="theme-color" content="#070b1c">
+<meta property="og:title" content="نيزك — لعبة الفضاء العربية">
+<meta property="og:description" content="كم ثانية تصمد بين النيازك؟ العب مجاناً وسجّل رقمك القياسي.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚀</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body>
+
+<div id="stage">
+  <canvas id="game"></canvas>
+
+  <!-- شريط المعلومات أثناء اللعب -->
+  <div id="hud" class="hidden">
+    <div class="hud-pill"><span class="ico">⭐</span><span id="hud-score">0</span></div>
+    <div class="hud-pill"><span class="ico">🪙</span><span id="hud-coins">0</span></div>
+    <button id="btn-pause" class="hud-btn" aria-label="إيقاف مؤقت">⏸</button>
+  </div>
+
+  <!-- تأثيرات القوى الفعّالة -->
+  <div id="buffs" class="hidden"></div>
+
+  <!-- القائمة الرئيسية -->
+  <section id="scr-menu" class="screen">
+    <div class="panel">
+      <h1 class="logo">نيــزك</h1>
+      <p class="tag">تفادَ الصخور • اجمع العملات • احطِم الرقم القياسي</p>
+      <div class="best-row">
+        <div class="stat"><b id="stat-best">0</b><span>أفضل نتيجة</span></div>
+        <div class="stat"><b id="stat-wallet">0</b><span>محفظتك 🪙</span></div>
+      </div>
+      <button class="btn primary big" id="btn-play">ابدأ اللعب</button>
+      <div class="row">
+        <button class="btn" id="btn-shop">🎨 المتجر</button>
+        <button class="btn" id="btn-board">🏆 الأبطال</button>
+      </div>
+      <button class="btn ghost" id="btn-how">كيف ألعب؟</button>
+    </div>
+  </section>
+
+  <!-- شاشة النهاية -->
+  <section id="scr-over" class="screen hidden">
+    <div class="panel">
+      <h2 id="over-title">انتهت الجولة!</h2>
+      <div class="score-big" id="over-score">0</div>
+      <p class="sub" id="over-sub">أفضل نتيجة: 0</p>
+      <div class="row" id="revive-row">
+        <button class="btn reward" id="btn-revive">🎁 شاهد إعلاناً وأكمل</button>
+      </div>
+      <button class="btn primary big" id="btn-again">العب مرة أخرى</button>
+      <div class="row">
+        <button class="btn" id="btn-save">💾 سجّل نتيجتك</button>
+        <button class="btn" id="btn-share">📤 شارك</button>
+      </div>
+      <button class="btn ghost" id="btn-home">القائمة الرئيسية</button>
+    </div>
+  </section>
+
+  <!-- المتجر -->
+  <section id="scr-shop" class="screen hidden">
+    <div class="panel">
+      <h2>المتجر</h2>
+      <p class="sub">اشترِ مركبات جديدة بالعملات التي تجمعها.</p>
+      <div id="shop-grid" class="grid"></div>
+      <p class="sub">محفظتك: <b id="shop-wallet">0</b> 🪙</p>
+      <button class="btn ghost" data-back>رجوع</button>
+    </div>
+  </section>
+
+  <!-- لوحة الأبطال -->
+  <section id="scr-board" class="screen hidden">
+    <div class="panel">
+      <h2>🏆 قائمة الأبطال</h2>
+      <ol id="board-list" class="board"><li class="muted">جاري التحميل…</li></ol>
+      <button class="btn ghost" data-back>رجوع</button>
+    </div>
+  </section>
+
+  <!-- طريقة اللعب -->
+  <section id="scr-how" class="screen hidden">
+    <div class="panel">
+      <h2>كيف ألعب؟</h2>
+      <ul class="how">
+        <li>📱 على الجوال: مرّر إصبعك يميناً ويساراً لتحريك المركبة.</li>
+        <li>💻 على الحاسوب: حرّك الفأرة أو استخدم الأسهم ← →.</li>
+        <li>☄️ تجنّب النيازك — اصطدام واحد ينهي الجولة.</li>
+        <li>🪙 اجمع العملات لشراء مركبات من المتجر.</li>
+        <li>🛡️ درع يمتص ضربة • 🧲 مغناطيس يجذب العملات • ⏳ يبطئ الوقت.</li>
+      </ul>
+      <button class="btn ghost" data-back>رجوع</button>
+    </div>
+  </section>
+
+  <!-- الإيقاف المؤقت -->
+  <section id="scr-pause" class="screen hidden">
+    <div class="panel">
+      <h2>إيقاف مؤقت</h2>
+      <button class="btn primary big" id="btn-resume">متابعة</button>
+      <button class="btn ghost" id="btn-quit">إنهاء الجولة</button>
+    </div>
+  </section>
+</div>
+
+<!-- مساحة إعلان بانر (تُملأ من ads.js) -->
+<div id="ad-banner" class="ad-slot" hidden></div>
+
+<footer id="site-footer">
+  <a href="privacy.html">سياسة الخصوصية</a>
+  <span>·</span>
+  <span>© <span id="year"></span> نيزك</span>
+</footer>
+
+<script src="assets/js/ads.js"></script>
+<script src="assets/js/api.js"></script>
+<script src="assets/js/game.js"></script>
+</body>
+</html>
