@@ -96,37 +96,59 @@ game/
 **المرحلة 2 — بعد وصولك ~200 زائر يومياً:**
 اشترِ نطاقاً خاصاً وانقل اللعبة إليه، ثم قدّم على AdSense (عوائده أعلى وأنظف).
 
-### كيف تضع كود الإعلان؟ (كل شيء في ملف واحد)
+### الإعلانات — مربوطة بـ Google AdSense ✅
 
-افتح `assets/js/ads.js` وعدّل كائن `CONFIG` فقط:
+اللعبة مربوطة أصلاً بحساب AdSense رقم `ca-pub-6226134520950898`:
+
+- **`index.html`** — سكربت AdSense مضاف في `<head>` مع `data-ad-frequency-hint="60s"`.
+- **`ads.txt`** — يحتوي سطر التفويض الخاص بحسابك.
+- **`privacy.html`** — يذكر AdSense وملف DART cookie كما تشترط سياسات جوجل.
+
+#### أنواع الإعلانات المفعّلة
+
+تستخدم اللعبة **H5 Games Ads** — منتج جوجل المخصّص لألعاب الويب عبر
+`adBreak()` و`adConfig()`:
+
+| الموضع | النوع | التكرار |
+|---|---|---|
+| زر «🎁 شاهد إعلاناً وأكمل» | `reward` | باختيار اللاعب، بفاصل 45 ثانية |
+| بين الجولات | `next` | كل 3 جولات، بفاصل 90 ثانية |
+
+الضبط كله في أعلى `assets/js/ads.js`:
 
 ```js
-banner: {
+adsense: {
   enabled: true,
-  html: '<هنا تلصق كود البانر الذي أعطتك إياه الشبكة>'
+  client: 'ca-pub-6226134520950898',
+  gameAds: true,                      // إعلانات الألعاب (بيني + مكافأة)
+  banner: { enabled: false, slot: '' } // ⬅️ ضع رقم الوحدة الإعلانية لتفعيل البانر
 },
 
-interstitial: {          // إعلان بين الجولات
-  enabled: true,
-  zoneId: '1234567',     // رقم الزون من Monetag/Adsterra
-  everyNGames: 3,        // كل 3 جولات
-  minSecondsBetween: 90
-},
-
-rewarded: {              // إعلان "شاهد وأكمل اللعب" — الأعلى ربحاً
-  enabled: true,
-  zoneId: '7654321',
-  minSecondsBetween: 45
-}
+interstitialEveryNGames: 3,
+minSecondsBetweenAds: 90,
+minSecondsBetweenRewards: 45,
+maxAdsPerSession: 12
 ```
 
-- إن أعطتك الشبكة **سكربت SDK** (مثل Monetag): ضع السكربت في `<head>` داخل
-  `index.html`، وضع رقم الزون في `zoneId`. الكود يستدعي `show_<zoneId>()` تلقائياً.
-- إن أعطتك **Direct Link** فقط: ضعه في `directLink` بدل `zoneId`.
-- إن تركت كل شيء `enabled: false` تعمل اللعبة بلا إعلانات إطلاقاً.
+#### لتفعيل البانر أسفل اللعبة
 
-ثم عدّل `ads.txt` بالأسطر التي تعطيك إياها الشبكة، وأضف اسم الشبكة وبريدك
-في `privacy.html` — أكثر الشبكات تشترط ذلك للموافقة على موقعك.
+أنشئ **وحدة إعلانية عرضية (Display ad unit)** في AdSense، وخذ رقم
+`data-ad-slot` منها، ثم:
+
+```js
+banner: { enabled: true, slot: '1234567890' }
+```
+
+#### إن لم تُعتمد ميزة H5 Games Ads بعد
+
+اجعل `gameAds: false` واكتفِ بالبانر، أو استخدم شبكة بديلة عبر كائن `network`
+في نفس الملف (يدعم Monetag/Adsterra برقم زون أو Direct Link).
+
+#### التحقق من عمل الإعلانات
+
+افتح اللعبة، اضغط **F12 → Console**. إن ظهر تحذير `[Ads] AdSense H5 Games Ads
+غير متاح` فالسبب أحد ثلاثة: مانع إعلانات مُفعّل، أو الموقع لم يُعتمد في AdSense
+بعد، أو الميزة غير مُفعّلة في حسابك. **اللعبة تعمل طبيعياً في كل الأحوال.**
 
 ### كم المتوقع فعلياً؟
 
