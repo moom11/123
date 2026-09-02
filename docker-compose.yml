@@ -1,0 +1,23 @@
+services:
+  hr:
+    build: .
+    container_name: hr-system
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - hr-data:/data
+    environment:
+      TZ: Asia/Riyadh
+      HR_TIMEZONE: Asia/Riyadh
+      # غيّر المفتاح وكلمة المرور قبل أول تشغيل
+      HR_SECRET_KEY: "${HR_SECRET_KEY:?اضبط HR_SECRET_KEY في ملف .env}"
+      HR_ADMIN_PASSWORD: "${HR_ADMIN_PASSWORD:?اضبط HR_ADMIN_PASSWORD في ملف .env}"
+      # مزامنة تلقائية لأجهزة وضع السحب كل 10 دقائق (0 = تعطيل)
+      HR_AUTO_SYNC_MINUTES: "${HR_AUTO_SYNC_MINUTES:-0}"
+    # لوضع السحب (الاتصال بجهاز البصمة على المنفذ 4370 داخل الشبكة المحلية)
+    # احذف قسم ports أعلاه واستخدم شبكة المضيف بدلاً منه:
+    # network_mode: host
+
+volumes:
+  hr-data:
