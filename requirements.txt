@@ -6,5 +6,6 @@ PyJWT>=2.8
 bcrypt>=4.1
 python-multipart>=0.0.9
 pyzk>=0.9          # بروتوكول ZKTeco (المنفذ 4370) - مطلوب لوضع السحب فقط
+openpyxl>=3.1      # استيراد الموظفين من ملفات Excel
 pytest>=8.0        # للاختبارات
 httpx>=0.27        # يستخدمه TestClient

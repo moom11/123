@@ -20,6 +20,7 @@ from ..schemas import (
     ShiftOut,
 )
 from ..security import get_current_user, require_hr
+from ..services import audit
 
 router = APIRouter(prefix="/api", tags=["employees"])
 
@@ -74,12 +75,16 @@ def list_employees(
     return [employee_out(e) for e in rows]
 
 
-@router.post("/employees", response_model=EmployeeOut, status_code=201, dependencies=[Depends(require_hr)])
-def create_employee(payload: EmployeeIn, db: Session = Depends(get_db)):
+@router.post("/employees", response_model=EmployeeOut, status_code=201)
+def create_employee(
+    payload: EmployeeIn, db: Session = Depends(get_db), user: User = Depends(require_hr)
+):
     if db.scalar(select(Employee).where(Employee.code == payload.code)):
         raise HTTPException(status_code=400, detail="رقم الموظف مستخدم مسبقاً")
     emp = Employee(**payload.model_dump())
     db.add(emp)
+    db.flush()
+    audit.log(db, user, "create", "employee", emp.id, f"{emp.code} - {emp.full_name}", commit=False)
     db.commit()
     db.refresh(emp)
     _link_orphan_punches(db, emp)
@@ -114,8 +119,13 @@ def get_employee(employee_id: int, db: Session = Depends(get_db), user: User = D
     return employee_out(emp)
 
 
-@router.patch("/employees/{employee_id}", response_model=EmployeeOut, dependencies=[Depends(require_hr)])
-def update_employee(employee_id: int, payload: EmployeeUpdate, db: Session = Depends(get_db)):
+@router.patch("/employees/{employee_id}", response_model=EmployeeOut)
+def update_employee(
+    employee_id: int,
+    payload: EmployeeUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_hr),
+):
     emp = db.get(Employee, employee_id)
     if not emp:
         raise HTTPException(status_code=404, detail="الموظف غير موجود")
@@ -125,16 +135,19 @@ def update_employee(employee_id: int, payload: EmployeeUpdate, db: Session = Dep
             raise HTTPException(status_code=400, detail="رقم الموظف مستخدم مسبقاً")
     for key, value in data.items():
         setattr(emp, key, value)
+    audit.log(db, user, "update", "employee", emp.id,
+              "الحقول: " + "، ".join(data.keys()), commit=False)
     db.commit()
     db.refresh(emp)
     return employee_out(emp)
 
 
-@router.delete("/employees/{employee_id}", dependencies=[Depends(require_hr)])
-def delete_employee(employee_id: int, db: Session = Depends(get_db)):
+@router.delete("/employees/{employee_id}")
+def delete_employee(employee_id: int, db: Session = Depends(get_db), user: User = Depends(require_hr)):
     emp = db.get(Employee, employee_id)
     if not emp:
         raise HTTPException(status_code=404, detail="الموظف غير موجود")
+    audit.log(db, user, "delete", "employee", emp.id, f"{emp.code} - {emp.full_name}", commit=False)
     db.delete(emp)
     db.commit()
     return {"ok": True}

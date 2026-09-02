@@ -133,6 +133,8 @@ def compute_day(
         status = DayStatus.holiday
     elif not is_work_day:
         status = DayStatus.weekend
+    elif day > date.today():
+        status = DayStatus.scheduled   # يوم عمل قادم: لا يُحتسب غياباً
     else:
         status = DayStatus.absent
 

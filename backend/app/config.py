@@ -43,3 +43,16 @@ ADMIN_USERNAME = os.getenv("HR_ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("HR_ADMIN_PASSWORD", "admin123")
 
 MAX_UPLOAD_BYTES = int(os.getenv("HR_MAX_UPLOAD_BYTES", str(5 * 1024 * 1024)))
+
+# ------------------------------ الإشعارات ------------------------------
+# البريد (اختياري): اضبط الخادم لتفعيل إرسال الإشعارات بالبريد
+SMTP_HOST = os.getenv("HR_SMTP_HOST", "")
+SMTP_PORT = int(os.getenv("HR_SMTP_PORT", "587"))
+SMTP_USER = os.getenv("HR_SMTP_USER", "")
+SMTP_PASSWORD = os.getenv("HR_SMTP_PASSWORD", "")
+SMTP_FROM = os.getenv("HR_SMTP_FROM", SMTP_USER or "hr@localhost")
+SMTP_TLS = os.getenv("HR_SMTP_TLS", "true").lower() in ("1", "true", "yes")
+
+# رابط ويب هوك اختياري (واتساب عبر بوابة، تلجرام، Slack، n8n ...)
+# يستقبل JSON: {title, body, category, employee, username, email}
+NOTIFY_WEBHOOK_URL = os.getenv("HR_WEBHOOK_URL", "")

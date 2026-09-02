@@ -13,6 +13,23 @@ DEFAULTS: dict[str, str] = {
     "web_punch_requires_location": "true",
     # أقصى هامش خطأ مقبول لدقة تحديد الموقع (بالأمتار)
     "geo_max_accuracy_meters": "150",
+    # ------------------------------ الرواتب ------------------------------
+    # عدد أيام الشهر المعتمدة لاحتساب أجر اليوم
+    "payroll_days_per_month": "30",
+    # ساعات يوم العمل لاحتساب أجر الساعة
+    "payroll_workday_hours": "8",
+    # معامل أجر الساعة الإضافية (نظام العمل السعودي: 1.5)
+    "payroll_overtime_multiplier": "1.5",
+    # خصم التأخير: proportional = بمقدار زمن التأخير، none = بدون خصم
+    "payroll_late_deduction_mode": "proportional",
+    # معامل خصم يوم الغياب (1 = أجر يوم كامل)
+    "payroll_absence_multiplier": "1",
+    # ------------------------------ المخالفات ------------------------------
+    # المدة التي تُمحى بعدها المخالفة من سجل التكرار (نظام العمل: 180 يوماً)
+    "violation_reset_days": "180",
+    # ------------------------------ الوثائق ------------------------------
+    # التنبيه قبل انتهاء الوثيقة بعدد أيام
+    "document_alert_days": "30",
 }
 
 BOOL_KEYS = {"web_punch_enabled", "web_punch_requires_location"}

@@ -17,8 +17,8 @@ from ..schemas import (
     DeviceUserOut,
     SyncResult,
 )
-from ..security import require_hr
-from ..services import zk_service
+from ..security import get_current_user, require_hr
+from ..services import audit, zk_service
 from ..zk import driver
 from ..zk.driver import DeviceError
 
@@ -31,13 +31,17 @@ def list_devices(db: Session = Depends(get_db)):
 
 
 @router.post("", response_model=DeviceOut, status_code=201)
-def create_device(payload: DeviceIn, db: Session = Depends(get_db)):
+def create_device(
+    payload: DeviceIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     if payload.mode == DeviceMode.pull and not payload.ip:
         raise HTTPException(status_code=400, detail="أجهزة وضع السحب تتطلب عنوان IP")
     if payload.mode == DeviceMode.push and not payload.serial_number:
         raise HTTPException(status_code=400, detail="أجهزة وضع الدفع تتطلب الرقم التسلسلي (SN)")
     device = Device(**payload.model_dump())
     db.add(device)
+    db.flush()
+    audit.log(db, user, "create", "device", device.id, device.name, commit=False)
     db.commit()
     db.refresh(device)
     return device
@@ -97,11 +101,13 @@ def test_device(device_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{device_id}/sync", response_model=SyncResult)
-def sync_device(device_id: int, db: Session = Depends(get_db)):
+def sync_device(device_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     device = db.get(Device, device_id)
     if not device:
         raise HTTPException(status_code=404, detail="الجهاز غير موجود")
-    return SyncResult(**zk_service.sync_device(db, device))
+    result = zk_service.sync_device(db, device)
+    audit.log(db, user, "sync", "device", device.id, result.get("message"))
+    return SyncResult(**result)
 
 
 @router.post("/sync-all", response_model=list[SyncResult])

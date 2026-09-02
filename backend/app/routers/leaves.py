@@ -35,6 +35,7 @@ from ..schemas import (
 )
 from ..security import can_view_employee, get_current_user, require_hr, require_manager
 from ..services import attendance as attendance_service
+from ..services import audit, notifications
 from ..services import leave as leave_service
 
 router = APIRouter(prefix="/api", tags=["leaves"])
@@ -196,6 +197,14 @@ def create_request(
         status=LeaveStatus.pending,
     )
     db.add(req)
+    db.flush()
+    audit.log(db, user, "create", "leave_request", req.id,
+              f"{emp.full_name} - {lt.name} {payload.start_date}→{payload.end_date}", commit=False)
+    notifications.notify_approvers(
+        db, emp.id, f"طلب إجازة جديد: {emp.full_name}",
+        body=f"{lt.name} من {payload.start_date} إلى {payload.end_date} ({days} يوم)",
+        category="leave", link_page="leaves", commit=False,
+    )
     db.commit()
     db.refresh(req)
     return request_out(req)
@@ -242,6 +251,12 @@ def approve_request(
     if req.leave_type.requires_attachment and not req.attachment_path:
         raise HTTPException(status_code=400, detail="هذا النوع يتطلب إرفاق مستند قبل الاعتماد")
     req = leave_service.approve(db, req, user.id, payload.decision_note if payload else None)
+    audit.log(db, user, "approve", "leave_request", req.id, f"{req.days} يوم")
+    notifications.notify_employee(
+        db, req.employee_id, "تم اعتماد طلب إجازتك",
+        body=f"{req.leave_type.name} من {req.start_date} إلى {req.end_date} ({req.days} يوم)",
+        category="leave", link_page="leaves",
+    )
     return request_out(req)
 
 
@@ -258,6 +273,12 @@ def reject_request(
     if not _can_decide(user, req, db):
         raise HTTPException(status_code=403, detail="لا تملك صلاحية رفض هذا الطلب")
     req = leave_service.reject(db, req, user.id, payload.decision_note if payload else None)
+    audit.log(db, user, "reject", "leave_request", req.id, payload.decision_note if payload else None)
+    notifications.notify_employee(
+        db, req.employee_id, "تم رفض طلب إجازتك",
+        body=(payload.decision_note if payload and payload.decision_note else "راجع الموارد البشرية للتفاصيل"),
+        category="leave", link_page="leaves",
+    )
     return request_out(req)
 
 
@@ -274,6 +295,7 @@ def cancel_request(
     if is_owner and user.role == Role.employee and req.status == LeaveStatus.approved:
         raise HTTPException(status_code=400, detail="راجع الموارد البشرية لإلغاء إجازة معتمدة")
     req = leave_service.cancel(db, req, user.id)
+    audit.log(db, user, "cancel", "leave_request", req.id)
     return request_out(req)
 
 

@@ -10,6 +10,7 @@ from ..database import get_db
 from ..models import User
 from ..schemas import PasswordChange, Token, UserOut
 from ..security import create_access_token, get_current_user, hash_password, verify_password
+from ..services import audit
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -32,6 +33,7 @@ def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get
         raise HTTPException(status_code=401, detail="اسم المستخدم أو كلمة المرور غير صحيحة")
     if not user.is_active:
         raise HTTPException(status_code=403, detail="الحساب موقوف، راجع مدير النظام")
+    audit.log(db, user, "login", "user", user.id, f"دخول {user.username}")
     return Token(access_token=create_access_token(user), user=user_out(user))
 
 
@@ -49,5 +51,6 @@ def change_password(
     if not verify_password(payload.current_password, user.password_hash):
         raise HTTPException(status_code=400, detail="كلمة المرور الحالية غير صحيحة")
     user.password_hash = hash_password(payload.new_password)
+    audit.log(db, user, "password", "user", user.id, "تغيير كلمة المرور الذاتية", commit=False)
     db.commit()
     return {"ok": True, "message": "تم تغيير كلمة المرور"}

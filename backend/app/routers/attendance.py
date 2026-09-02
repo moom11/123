@@ -31,7 +31,7 @@ from ..schemas import (
 )
 from ..security import can_view_employee, get_current_user, require_hr
 from ..services import attendance as attendance_service
-from ..services import geo, settings_store
+from ..services import audit, geo, settings_store
 
 router = APIRouter(prefix="/api/attendance", tags=["attendance"])
 
@@ -43,6 +43,7 @@ STATUS_LABELS = {
     DayStatus.holiday: "عطلة رسمية",
     DayStatus.weekend: "راحة أسبوعية",
     DayStatus.missing_out: "بصمة انصراف ناقصة",
+    DayStatus.scheduled: "لم يحن بعد",
 }
 
 
@@ -129,8 +130,10 @@ def list_punches(
     return [punch_out(p) for p in rows]
 
 
-@router.post("/punches", response_model=PunchOut, status_code=201, dependencies=[Depends(require_hr)])
-def add_punch(payload: PunchIn, db: Session = Depends(get_db)):
+@router.post("/punches", response_model=PunchOut, status_code=201)
+def add_punch(
+    payload: PunchIn, db: Session = Depends(get_db), user: User = Depends(require_hr)
+):
     """إدخال بصمة يدوياً (مثلاً عند نسيان الموظف البصم)."""
     emp = db.get(Employee, payload.employee_id)
     if not emp:
@@ -154,17 +157,21 @@ def add_punch(payload: PunchIn, db: Session = Depends(get_db)):
     )
     db.add(punch)
     db.flush()
+    audit.log(db, user, "create", "punch", punch.id,
+              f"{emp.full_name} {payload.punch_time}", commit=False)
     attendance_service.recompute_for_punches(db, [punch])
     db.refresh(punch)
     return punch_out(punch)
 
 
-@router.delete("/punches/{punch_id}", dependencies=[Depends(require_hr)])
-def delete_punch(punch_id: int, db: Session = Depends(get_db)):
+@router.delete("/punches/{punch_id}")
+def delete_punch(punch_id: int, db: Session = Depends(get_db), user: User = Depends(require_hr)):
     punch = db.get(Punch, punch_id)
     if not punch:
         raise HTTPException(status_code=404, detail="البصمة غير موجودة")
     emp_id, day = punch.employee_id, punch.punch_time.date()
+    audit.log(db, user, "delete", "punch", punch.id,
+              f"{punch.employee_code} {punch.punch_time}", commit=False)
     db.delete(punch)
     db.flush()
     if emp_id:
@@ -298,8 +305,13 @@ def employee_sheet(
     return [day_out(r) for r in rows]
 
 
-@router.patch("/day/{day_id}", response_model=AttendanceDayOut, dependencies=[Depends(require_hr)])
-def override_day(day_id: int, payload: AttendanceOverride, db: Session = Depends(get_db)):
+@router.patch("/day/{day_id}", response_model=AttendanceDayOut)
+def override_day(
+    day_id: int,
+    payload: AttendanceOverride,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_hr),
+):
     """تعديل يدوي على يوم حضور (تسوية إدارية)."""
     row = db.get(AttendanceDay, day_id)
     if not row:
@@ -313,21 +325,25 @@ def override_day(day_id: int, payload: AttendanceOverride, db: Session = Depends
         )
     if "note" not in data:
         row.note = "تعديل يدوي"
+    audit.log(db, user, "update", "attendance_day", row.id,
+              f"موظف {row.employee_id} - {row.work_date}", commit=False)
     db.commit()
     db.refresh(row)
     return day_out(row)
 
 
-@router.post("/recompute", dependencies=[Depends(require_hr)])
+@router.post("/recompute")
 def recompute_range(
     date_from: date,
     date_to: date,
     employee_id: int | None = None,
     db: Session = Depends(get_db),
+    user: User = Depends(require_hr),
 ):
     count = attendance_service.recompute(
         db, date_from, date_to, [employee_id] if employee_id else None
     )
+    audit.log(db, user, "recompute", "attendance_day", None, f"{date_from} → {date_to} ({count} يوم)")
     return {"ok": True, "days": count, "message": f"تمت إعادة احتساب {count} يوم"}
 
 

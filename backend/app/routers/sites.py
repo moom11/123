@@ -17,7 +17,7 @@ from ..schemas import (
     WorkSiteUpdate,
 )
 from ..security import get_current_user, require_hr
-from ..services import geo, settings_store
+from ..services import audit, geo, settings_store
 
 router = APIRouter(prefix="/api", tags=["sites"])
 
@@ -46,12 +46,16 @@ def list_sites(db: Session = Depends(get_db), _: User = Depends(get_current_user
     ]
 
 
-@router.post("/sites", response_model=WorkSiteOut, status_code=201, dependencies=[Depends(require_hr)])
-def create_site(payload: WorkSiteIn, db: Session = Depends(get_db)):
+@router.post("/sites", response_model=WorkSiteOut, status_code=201)
+def create_site(
+    payload: WorkSiteIn, db: Session = Depends(get_db), user: User = Depends(require_hr)
+):
     if db.scalar(select(WorkSite).where(WorkSite.name == payload.name)):
         raise HTTPException(status_code=400, detail="اسم الموقع مستخدم مسبقاً")
     site = WorkSite(**payload.model_dump())
     db.add(site)
+    db.flush()
+    audit.log(db, user, "create", "site", site.id, f"{site.name} ({site.radius_meters} م)", commit=False)
     db.commit()
     db.refresh(site)
     return site_out(site)
@@ -104,21 +108,34 @@ def check_location(
     )
 
 
+def _settings_out(values: dict) -> SettingsOut:
+    return SettingsOut(
+        web_punch_enabled=values["web_punch_enabled"] == "true",
+        web_punch_requires_location=values["web_punch_requires_location"] == "true",
+        geo_max_accuracy_meters=int(float(values["geo_max_accuracy_meters"])),
+        payroll_days_per_month=int(float(values["payroll_days_per_month"])),
+        payroll_workday_hours=int(float(values["payroll_workday_hours"])),
+        payroll_overtime_multiplier=float(values["payroll_overtime_multiplier"]),
+        payroll_late_deduction_mode=values["payroll_late_deduction_mode"],
+        payroll_absence_multiplier=float(values["payroll_absence_multiplier"]),
+        violation_reset_days=int(float(values["violation_reset_days"])),
+        document_alert_days=int(float(values["document_alert_days"])),
+    )
+
+
 @router.get("/settings", response_model=SettingsOut)
 def get_settings(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
-    values = settings_store.get_all(db)
-    return SettingsOut(
-        web_punch_enabled=values["web_punch_enabled"] == "true",
-        web_punch_requires_location=values["web_punch_requires_location"] == "true",
-        geo_max_accuracy_meters=int(float(values["geo_max_accuracy_meters"])),
-    )
+    return _settings_out(settings_store.get_all(db))
 
 
-@router.put("/settings", response_model=SettingsOut, dependencies=[Depends(require_hr)])
-def update_settings(payload: SettingsIn, db: Session = Depends(get_db)):
-    values = settings_store.set_many(db, payload.model_dump(exclude_unset=True))
-    return SettingsOut(
-        web_punch_enabled=values["web_punch_enabled"] == "true",
-        web_punch_requires_location=values["web_punch_requires_location"] == "true",
-        geo_max_accuracy_meters=int(float(values["geo_max_accuracy_meters"])),
+@router.put("/settings", response_model=SettingsOut)
+def update_settings(
+    payload: SettingsIn, db: Session = Depends(get_db), user: User = Depends(require_hr)
+):
+    changes = payload.model_dump(exclude_unset=True)
+    values = settings_store.set_many(db, changes)
+    audit.log(
+        db, user, "settings", "settings", None,
+        "، ".join(f"{k}={v}" for k, v in changes.items()),
     )
+    return _settings_out(values)

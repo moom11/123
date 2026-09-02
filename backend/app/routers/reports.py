@@ -36,6 +36,7 @@ STATUS_LABELS = {
     DayStatus.holiday: "عطلة",
     DayStatus.weekend: "راحة",
     DayStatus.missing_out: "انصراف ناقص",
+    DayStatus.scheduled: "لم يحن بعد",
 }
 
 

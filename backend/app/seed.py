@@ -17,8 +17,10 @@ from .models import (
     Holiday,
     LeaveType,
     Role,
+    PenaltyAction,
     Shift,
     User,
+    ViolationType,
     WorkSite,
 )
 from .security import hash_password
@@ -34,6 +36,39 @@ DEFAULT_LEAVE_TYPES = [
          exclude_holidays=False, requires_attachment=True, color="#b3477a"),
     dict(code="marriage", name="إجازة زواج", annual_quota_days=5, exclude_weekends=False,
          exclude_holidays=False, color="#3d7fc2"),
+]
+
+
+# أنواع مخالفات افتراضية على نمط جدول المخالفات والجزاءات في لائحة تنظيم العمل.
+# القيم قابلة للتعديل بالكامل من الإعدادات، ويجب مطابقتها للائحة المعتمدة لدى المنشأة.
+W = PenaltyAction.warning
+P = PenaltyAction.deduction_percent_day
+D = PenaltyAction.deduction_days
+DEFAULT_VIOLATION_TYPES = [
+    dict(code="dress_code", name="عدم الالتزام بالزي الرسمي أو المظهر اللائق",
+         category="المظهر والزي", level2_value=5, level3_value=10, level4_action=D, level4_value=0.5),
+    dict(code="hygiene", name="عدم الالتزام بالنظافة الشخصية أو نظافة موقع العمل",
+         category="النظافة والسلامة", level2_value=5, level3_value=10, level4_action=D, level4_value=0.5),
+    dict(code="workplace_absence", name="عدم التواجد في المكان المخصص للعمل أثناء الدوام",
+         category="الالتزام بموقع العمل", level2_value=10, level3_value=15, level4_action=D, level4_value=1),
+    dict(code="leave_site", name="مغادرة موقع العمل قبل نهاية الدوام بدون إذن",
+         category="الالتزام بموقع العمل", level2_value=10, level3_value=20, level4_action=D, level4_value=1),
+    dict(code="safety_gear", name="عدم استخدام أدوات ومعدات السلامة المقررة",
+         category="النظافة والسلامة", level1_action=P, level1_value=5, level2_value=10,
+         level3_value=25, level4_action=D, level4_value=1),
+    dict(code="smoking", name="التدخين في الأماكن الممنوعة",
+         category="النظافة والسلامة", level2_value=10, level3_value=15, level4_action=D, level4_value=1),
+    dict(code="phone_use", name="الانشغال بالجوال أو أعمال شخصية أثناء ساعات العمل",
+         category="سلوك عام", level2_value=5, level3_value=10, level4_value=0.5, level4_action=D),
+    dict(code="misconduct", name="سوء التعامل مع العملاء أو الزملاء",
+         category="سلوك عام", level1_action=P, level1_value=10, level2_value=20,
+         level3_action=D, level3_value=1, level4_action=D, level4_value=2),
+    dict(code="refuse_order", name="رفض تنفيذ تعليمات العمل المشروعة",
+         category="الانضباط الوظيفي", level1_action=P, level1_value=10, level2_value=20,
+         level3_action=D, level3_value=1, level4_action=PenaltyAction.termination, level4_value=0),
+    dict(code="property_damage", name="الإهمال المتسبب في تلف ممتلكات المنشأة",
+         category="الانضباط الوظيفي", level1_action=P, level1_value=15, level2_value=30,
+         level3_action=D, level3_value=2, level4_action=PenaltyAction.termination, level4_value=0),
 ]
 
 
@@ -69,6 +104,11 @@ def ensure_defaults(db: Session) -> None:
     for data in DEFAULT_LEAVE_TYPES:
         if data["code"] not in existing_types:
             db.add(LeaveType(**data))
+
+    existing_violations = {v.code for v in db.scalars(select(ViolationType)).all()}
+    for data in DEFAULT_VIOLATION_TYPES:
+        if data["code"] not in existing_violations:
+            db.add(ViolationType(**data))
 
     if not db.scalar(select(User).where(User.username == ADMIN_USERNAME)):
         db.add(

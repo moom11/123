@@ -64,6 +64,30 @@ class DayStatus(str, enum.Enum):
     holiday = "holiday"
     weekend = "weekend"
     missing_out = "missing_out"
+    scheduled = "scheduled"   # يوم عمل لم يحن بعد (لا يُحتسب غياباً)
+
+
+class PenaltyAction(str, enum.Enum):
+    """الجزاء المقرر للمخالفة وفق لائحة تنظيم العمل."""
+
+    warning = "warning"                       # إنذار كتابي
+    deduction_percent_day = "deduction_percent_day"  # خصم نسبة من أجر يوم
+    deduction_days = "deduction_days"         # خصم أجر أيام
+    suspension = "suspension"                 # إيقاف عن العمل بدون أجر
+    termination = "termination"               # الفصل
+
+
+class ViolationStatus(str, enum.Enum):
+    pending = "pending"            # مسجلة بانتظار إشعار الموظف
+    acknowledged = "acknowledged"  # أقرّ الموظف بالاطلاع
+    objected = "objected"          # تظلّم الموظف
+    approved = "approved"          # معتمدة ويُطبَّق الجزاء
+    cancelled = "cancelled"        # ملغاة
+
+
+class PayrollStatus(str, enum.Enum):
+    draft = "draft"
+    approved = "approved"
 
 
 class DeviceMode(str, enum.Enum):
@@ -333,3 +357,142 @@ class DeviceCommand(Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime)
     result: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class Notification(Base):
+    """إشعار داخل النظام لمستخدم معيّن."""
+
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(160))
+    body: Mapped[str | None] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(40), default="general")
+    link_page: Mapped[str | None] = mapped_column(String(40))
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+
+
+class ViolationType(Base):
+    """نوع مخالفة مع سلّم الجزاءات حسب عدد التكرار."""
+
+    __tablename__ = "violation_types"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(32), unique=True)
+    name: Mapped[str] = mapped_column(String(200))
+    category: Mapped[str] = mapped_column(String(60), default="سلوك عام")
+    description: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # سلّم الجزاءات: المخالفة الأولى حتى الرابعة فأكثر
+    level1_action: Mapped[PenaltyAction] = mapped_column(Enum(PenaltyAction), default=PenaltyAction.warning)
+    level1_value: Mapped[float] = mapped_column(Float, default=0)
+    level2_action: Mapped[PenaltyAction] = mapped_column(
+        Enum(PenaltyAction), default=PenaltyAction.deduction_percent_day
+    )
+    level2_value: Mapped[float] = mapped_column(Float, default=5)
+    level3_action: Mapped[PenaltyAction] = mapped_column(
+        Enum(PenaltyAction), default=PenaltyAction.deduction_percent_day
+    )
+    level3_value: Mapped[float] = mapped_column(Float, default=10)
+    level4_action: Mapped[PenaltyAction] = mapped_column(
+        Enum(PenaltyAction), default=PenaltyAction.deduction_days
+    )
+    level4_value: Mapped[float] = mapped_column(Float, default=1)
+
+
+class Violation(Base):
+    """مخالفة مسجلة على موظف مع الجزاء المترتب عليها."""
+
+    __tablename__ = "violations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    violation_type_id: Mapped[int] = mapped_column(ForeignKey("violation_types.id", ondelete="RESTRICT"))
+    occurred_on: Mapped[date] = mapped_column(Date, index=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    repetition_no: Mapped[int] = mapped_column(Integer, default=1)
+    penalty_action: Mapped[PenaltyAction] = mapped_column(Enum(PenaltyAction), default=PenaltyAction.warning)
+    penalty_value: Mapped[float] = mapped_column(Float, default=0)
+    penalty_amount: Mapped[float] = mapped_column(Float, default=0)  # قيمة الخصم بالريال
+    status: Mapped[ViolationStatus] = mapped_column(
+        Enum(ViolationStatus), default=ViolationStatus.pending, index=True
+    )
+    reported_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    decided_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime)
+    employee_note: Mapped[str | None] = mapped_column(Text)   # رد الموظف أو تظلّمه
+    decision_note: Mapped[str | None] = mapped_column(Text)
+    attachment_path: Mapped[str | None] = mapped_column(String(255))
+    site_id: Mapped[int | None] = mapped_column(ForeignKey("work_sites.id", ondelete="SET NULL"))
+    latitude: Mapped[float | None] = mapped_column(Float)
+    longitude: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    employee: Mapped[Employee] = relationship()
+    violation_type: Mapped[ViolationType] = relationship()
+    site: Mapped[WorkSite | None] = relationship()
+
+
+class EmployeeDocument(Base):
+    """وثيقة موظف (إقامة، جواز، عقد...) مع تاريخ الانتهاء للتنبيه."""
+
+    __tablename__ = "employee_documents"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    doc_type: Mapped[str] = mapped_column(String(60))
+    number: Mapped[str | None] = mapped_column(String(64))
+    issue_date: Mapped[date | None] = mapped_column(Date)
+    expiry_date: Mapped[date | None] = mapped_column(Date, index=True)
+    file_path: Mapped[str | None] = mapped_column(String(255))
+    note: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    employee: Mapped[Employee] = relationship()
+
+
+class PayrollRun(Base):
+    """مسير رواتب لشهر محدد."""
+
+    __tablename__ = "payroll_runs"
+    __table_args__ = (UniqueConstraint("year", "month", name="uq_payroll_period"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    year: Mapped[int] = mapped_column(Integer, index=True)
+    month: Mapped[int] = mapped_column(Integer)
+    status: Mapped[PayrollStatus] = mapped_column(Enum(PayrollStatus), default=PayrollStatus.draft)
+    note: Mapped[str | None] = mapped_column(String(255))
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class Payslip(Base):
+    """قسيمة راتب موظف ضمن مسير."""
+
+    __tablename__ = "payslips"
+    __table_args__ = (UniqueConstraint("run_id", "employee_id", name="uq_payslip"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("payroll_runs.id", ondelete="CASCADE"), index=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    basic_salary: Mapped[float] = mapped_column(Float, default=0)
+    present_days: Mapped[int] = mapped_column(Integer, default=0)
+    absent_days: Mapped[int] = mapped_column(Integer, default=0)
+    paid_leave_days: Mapped[float] = mapped_column(Float, default=0)
+    unpaid_leave_days: Mapped[float] = mapped_column(Float, default=0)
+    late_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    overtime_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    absence_deduction: Mapped[float] = mapped_column(Float, default=0)
+    late_deduction: Mapped[float] = mapped_column(Float, default=0)
+    unpaid_leave_deduction: Mapped[float] = mapped_column(Float, default=0)
+    violation_deduction: Mapped[float] = mapped_column(Float, default=0)
+    overtime_amount: Mapped[float] = mapped_column(Float, default=0)
+    other_additions: Mapped[float] = mapped_column(Float, default=0)
+    other_deductions: Mapped[float] = mapped_column(Float, default=0)
+    net_pay: Mapped[float] = mapped_column(Float, default=0)
+    note: Mapped[str | None] = mapped_column(String(255))
+
+    employee: Mapped[Employee] = relationship()

@@ -5,7 +5,18 @@ from datetime import date, datetime, time
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .models import DayStatus, DeviceMode, EmployeeStatus, LeaveStatus, PunchSource, PunchType, Role
+from .models import (
+    DayStatus,
+    DeviceMode,
+    EmployeeStatus,
+    LeaveStatus,
+    PayrollStatus,
+    PenaltyAction,
+    PunchSource,
+    PunchType,
+    Role,
+    ViolationStatus,
+)
 
 
 class ORMModel(BaseModel):
@@ -245,12 +256,26 @@ class SettingsOut(BaseModel):
     web_punch_enabled: bool
     web_punch_requires_location: bool
     geo_max_accuracy_meters: int
+    payroll_days_per_month: int = 30
+    payroll_workday_hours: int = 8
+    payroll_overtime_multiplier: float = 1.5
+    payroll_late_deduction_mode: str = "proportional"
+    payroll_absence_multiplier: float = 1
+    violation_reset_days: int = 180
+    document_alert_days: int = 30
 
 
 class SettingsIn(BaseModel):
     web_punch_enabled: bool | None = None
     web_punch_requires_location: bool | None = None
     geo_max_accuracy_meters: int | None = Field(default=None, ge=10, le=5000)
+    payroll_days_per_month: int | None = Field(default=None, ge=20, le=31)
+    payroll_workday_hours: int | None = Field(default=None, ge=1, le=16)
+    payroll_overtime_multiplier: float | None = Field(default=None, ge=1, le=3)
+    payroll_late_deduction_mode: str | None = None
+    payroll_absence_multiplier: float | None = Field(default=None, ge=0, le=3)
+    violation_reset_days: int | None = Field(default=None, ge=30, le=730)
+    document_alert_days: int | None = Field(default=None, ge=1, le=365)
 
 
 class AttendanceOverride(BaseModel):
@@ -455,3 +480,189 @@ class MonthlySummaryRow(BaseModel):
 
 
 Token.model_rebuild()
+
+
+# ------------------------------ الإشعارات وسجل التدقيق ------------------------------
+class NotificationOut(ORMModel):
+    id: int
+    title: str
+    body: str | None = None
+    category: str
+    link_page: str | None = None
+    is_read: bool
+    created_at: datetime | None = None
+
+
+class AuditLogOut(BaseModel):
+    id: int
+    user_id: int | None = None
+    username: str | None = None
+    action: str
+    action_label: str
+    entity: str
+    entity_label: str
+    entity_id: str | None = None
+    detail: str | None = None
+    created_at: datetime | None = None
+
+
+# ------------------------------ المخالفات والجزاءات ------------------------------
+class ViolationTypeIn(BaseModel):
+    code: str
+    name: str
+    category: str = "سلوك عام"
+    description: str | None = None
+    is_active: bool = True
+    level1_action: PenaltyAction = PenaltyAction.warning
+    level1_value: float = 0
+    level2_action: PenaltyAction = PenaltyAction.deduction_percent_day
+    level2_value: float = 5
+    level3_action: PenaltyAction = PenaltyAction.deduction_percent_day
+    level3_value: float = 10
+    level4_action: PenaltyAction = PenaltyAction.deduction_days
+    level4_value: float = 1
+
+
+class ViolationTypeOut(ORMModel):
+    id: int
+    code: str
+    name: str
+    category: str
+    description: str | None = None
+    is_active: bool
+    level1_action: PenaltyAction
+    level1_value: float
+    level2_action: PenaltyAction
+    level2_value: float
+    level3_action: PenaltyAction
+    level3_value: float
+    level4_action: PenaltyAction
+    level4_value: float
+
+
+class ViolationIn(BaseModel):
+    employee_id: int
+    violation_type_id: int
+    occurred_on: date
+    description: str | None = None
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    site_id: int | None = None
+
+
+class ViolationDecision(BaseModel):
+    note: str | None = None
+
+
+class ViolationOut(ORMModel):
+    id: int
+    employee_id: int
+    employee_code: str | None = None
+    employee_name: str | None = None
+    violation_type_id: int
+    violation_type_name: str | None = None
+    category: str | None = None
+    occurred_on: date
+    description: str | None = None
+    repetition_no: int
+    penalty_action: PenaltyAction
+    penalty_action_label: str | None = None
+    penalty_value: float
+    penalty_amount: float
+    status: ViolationStatus
+    status_label: str | None = None
+    employee_note: str | None = None
+    decision_note: str | None = None
+    attachment_path: str | None = None
+    site_id: int | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    created_at: datetime | None = None
+
+
+class ViolationPreview(BaseModel):
+    repetition_no: int
+    penalty_action: str
+    penalty_action_label: str
+    penalty_value: float
+    penalty_amount: float
+    daily_wage: float
+
+
+# ------------------------------ وثائق الموظفين ------------------------------
+class DocumentIn(BaseModel):
+    employee_id: int
+    doc_type: str
+    number: str | None = None
+    issue_date: date | None = None
+    expiry_date: date | None = None
+    note: str | None = None
+
+
+class DocumentOut(ORMModel):
+    id: int
+    employee_id: int
+    employee_name: str | None = None
+    employee_code: str | None = None
+    doc_type: str
+    number: str | None = None
+    issue_date: date | None = None
+    expiry_date: date | None = None
+    file_path: str | None = None
+    note: str | None = None
+    days_left: int | None = None
+
+
+class ImportReport(BaseModel):
+    created: int = 0
+    updated: int = 0
+    skipped: int = 0
+    errors: list[str] = []
+    message: str = ""
+
+
+# ------------------------------ الرواتب ------------------------------
+class PayrollRunOut(ORMModel):
+    id: int
+    year: int
+    month: int
+    status: PayrollStatus
+    note: str | None = None
+    created_at: datetime | None = None
+    approved_at: datetime | None = None
+    employees: int = 0
+    basic_total: float = 0
+    deductions_total: float = 0
+    overtime_total: float = 0
+    net_total: float = 0
+
+
+class PayslipOut(ORMModel):
+    id: int
+    run_id: int
+    employee_id: int
+    employee_code: str | None = None
+    employee_name: str | None = None
+    department_name: str | None = None
+    basic_salary: float
+    present_days: int
+    absent_days: int
+    paid_leave_days: float
+    unpaid_leave_days: float
+    late_minutes: int
+    overtime_minutes: int
+    absence_deduction: float
+    late_deduction: float
+    unpaid_leave_deduction: float
+    violation_deduction: float
+    overtime_amount: float
+    other_additions: float
+    other_deductions: float
+    net_pay: float
+    note: str | None = None
+
+
+class PayslipAdjust(BaseModel):
+    other_additions: float | None = None
+    other_deductions: float | None = None
+    note: str | None = None
