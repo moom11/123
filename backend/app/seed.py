@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import ADMIN_PASSWORD, ADMIN_USERNAME
+from . import migrate
 from .database import Base, SessionLocal, engine
 from .models import (
     Department,
@@ -18,6 +19,7 @@ from .models import (
     Role,
     Shift,
     User,
+    WorkSite,
 )
 from .security import hash_password
 
@@ -37,6 +39,7 @@ DEFAULT_LEAVE_TYPES = [
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
+    migrate.run()
 
 
 def ensure_defaults(db: Session) -> None:
@@ -152,6 +155,17 @@ def seed_demo(db: Session, with_punches: bool = True) -> dict:
     national_day = date(today.year, 9, 23)
     if not db.scalar(select(Holiday).where(Holiday.holiday_date == national_day)):
         db.add(Holiday(holiday_date=national_day, name="اليوم الوطني"))
+
+    if not db.scalar(select(WorkSite).limit(1)):
+        db.add(
+            WorkSite(
+                name="المقر الرئيسي",
+                latitude=24.774265,
+                longitude=46.738586,
+                radius_meters=200,
+                address="الرياض - طريق الملك فهد",
+            )
+        )
 
     device = db.scalar(select(Device).where(Device.mode == DeviceMode.demo))
     if device is None:

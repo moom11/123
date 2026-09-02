@@ -37,6 +37,8 @@ def employee_out(emp: Employee) -> EmployeeOut:
         department_name=emp.department.name if emp.department else None,
         shift_id=emp.shift_id,
         shift_name=emp.shift.name if emp.shift else None,
+        site_id=emp.site_id,
+        site_name=emp.site.name if emp.site else None,
         manager_id=emp.manager_id,
         hire_date=emp.hire_date,
         basic_salary=emp.basic_salary,

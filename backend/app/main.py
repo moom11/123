@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import AUTO_SYNC_MINUTES, FRONTEND_DIR, TIMEZONE_NAME, UPLOAD_DIR
 from .database import SessionLocal
-from .routers import attendance, auth, devices, employees, iclock, leaves, reports, users
+from .routers import attendance, auth, devices, employees, iclock, leaves, reports, sites, users
 from .seed import bootstrap
 from .services import zk_service
 
@@ -68,6 +68,7 @@ for router in (
     attendance.router,
     leaves.router,
     devices.router,
+    sites.router,
     reports.router,
     iclock.router,
 ):

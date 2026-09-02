@@ -72,6 +72,30 @@ class DeviceMode(str, enum.Enum):
     demo = "demo"   # جهاز تجريبي لتشغيل النظام بدون عتاد
 
 
+class AppSetting(Base):
+    """إعدادات النظام كقيم مفتاح/قيمة نصية."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(255))
+
+
+class WorkSite(Base):
+    """موقع عمل معتمد للحضور الذاتي من التطبيق (نطاق جغرافي)."""
+
+    __tablename__ = "work_sites"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    latitude: Mapped[float] = mapped_column(Float)
+    longitude: Mapped[float] = mapped_column(Float)
+    radius_meters: Mapped[int] = mapped_column(Integer, default=150)
+    address: Mapped[str | None] = mapped_column(String(255))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -131,6 +155,7 @@ class Employee(Base):
     job_title: Mapped[str | None] = mapped_column(String(120))
     department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.id", ondelete="SET NULL"))
     shift_id: Mapped[int | None] = mapped_column(ForeignKey("shifts.id", ondelete="SET NULL"))
+    site_id: Mapped[int | None] = mapped_column(ForeignKey("work_sites.id", ondelete="SET NULL"))
     manager_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id", ondelete="SET NULL"))
     hire_date: Mapped[date | None] = mapped_column(Date)
     basic_salary: Mapped[float] = mapped_column(Float, default=0.0)
@@ -141,6 +166,7 @@ class Employee(Base):
         back_populates="employees", foreign_keys=[department_id]
     )
     shift: Mapped[Shift | None] = relationship(back_populates="employees")
+    site: Mapped["WorkSite | None"] = relationship()
     manager: Mapped["Employee | None"] = relationship(remote_side=[id], foreign_keys=[manager_id])
     user: Mapped[User | None] = relationship(
         back_populates="employee", foreign_keys=[User.employee_id], uselist=False
@@ -183,11 +209,17 @@ class Punch(Base):
     device_id: Mapped[int | None] = mapped_column(ForeignKey("devices.id", ondelete="SET NULL"))
     verify_mode: Mapped[str | None] = mapped_column(String(16))   # 1=بصمة، 4=بطاقة، 15=وجه...
     status_code: Mapped[str | None] = mapped_column(String(16))
+    latitude: Mapped[float | None] = mapped_column(Float)
+    longitude: Mapped[float | None] = mapped_column(Float)
+    accuracy_meters: Mapped[float | None] = mapped_column(Float)
+    site_id: Mapped[int | None] = mapped_column(ForeignKey("work_sites.id", ondelete="SET NULL"))
+    distance_meters: Mapped[float | None] = mapped_column(Float)
     note: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     employee: Mapped[Employee | None] = relationship()
     device: Mapped[Device | None] = relationship()
+    site: Mapped[WorkSite | None] = relationship()
 
 
 class AttendanceDay(Base):

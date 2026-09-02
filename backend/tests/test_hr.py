@@ -275,9 +275,9 @@ def test_employee_role_scope(client, auth):
     assert denied.status_code == 403
     other_id = _employee_id(client, auth, "9001")
     assert client.get(f"/api/employees/{other_id}", headers=h).status_code == 403
-    # تسجيل بصمة ذاتية
-    punch = client.post("/api/attendance/self-punch", headers=h)
-    assert punch.status_code == 201
+    # البصم الذاتي من التطبيق مرفوض بدون إحداثيات الموقع (يُختبر بالتفصيل لاحقاً)
+    punch = client.post("/api/attendance/self-punch", headers=h, json={})
+    assert punch.status_code == 400
 
 
 def test_night_shift_spans_midnight(client, auth):
@@ -297,3 +297,131 @@ def test_night_shift_spans_midnight(client, auth):
     ).json()
     assert rows[0]["status"] == DayStatus.present.value
     assert rows[0]["worked_minutes"] == 490
+
+
+# ------------------------------ الحضور الذاتي بالموقع الجغرافي ------------------------------
+HQ_LAT, HQ_LNG = 24.774265, 46.738586  # مقر تجريبي في الرياض
+
+
+def _emp_token(client, auth, code, username):
+    """ينشئ موظفاً وحساباً له ويعيد ترويسة المصادقة ومعرّف الموظف."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": code, "full_name": f"موظف {code}"}).json()
+    client.post("/api/users", headers=auth, json={
+        "username": username, "password": "Aa123456", "role": "employee", "employee_id": emp["id"]})
+    token = client.post(
+        "/api/auth/login", data={"username": username, "password": "Aa123456"}
+    ).json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}, emp["id"]
+
+
+def test_create_work_site(client, auth):
+    res = client.post("/api/sites", headers=auth, json={
+        "name": "المقر الرئيسي", "latitude": HQ_LAT, "longitude": HQ_LNG,
+        "radius_meters": 150, "address": "الرياض"})
+    assert res.status_code == 201, res.text
+    assert res.json()["radius_meters"] == 150
+    dup = client.post("/api/sites", headers=auth, json={
+        "name": "المقر الرئيسي", "latitude": HQ_LAT, "longitude": HQ_LNG})
+    assert dup.status_code == 400
+
+
+def test_self_punch_requires_location(client, auth):
+    h, _ = _emp_token(client, auth, "9200", "geo_none")
+    res = client.post("/api/attendance/self-punch", headers=h, json={})
+    assert res.status_code == 400
+    assert "الموقع الجغرافي" in res.json()["detail"]
+
+
+def test_self_punch_inside_site_accepted(client, auth):
+    h, emp_id = _emp_token(client, auth, "9201", "geo_in")
+    res = client.post("/api/attendance/self-punch", headers=h, json={
+        "latitude": HQ_LAT + 0.0003, "longitude": HQ_LNG, "accuracy_meters": 12})
+    assert res.status_code == 201, res.text
+    data = res.json()
+    assert data["site_name"] == "المقر الرئيسي"
+    assert data["distance_meters"] < 150
+    assert data["punch"]["source"] == "web"
+    assert data["punch"]["latitude"] is not None
+    # البصمة مسجلة فعلياً مع الموقع
+    punches = client.get(f"/api/attendance/punches?employee_id={emp_id}", headers=auth).json()
+    assert punches[0]["site_name"] == "المقر الرئيسي"
+    assert punches[0]["distance_meters"] is not None
+
+
+def test_self_punch_outside_site_rejected(client, auth):
+    h, _ = _emp_token(client, auth, "9202", "geo_out")
+    res = client.post("/api/attendance/self-punch", headers=h, json={
+        "latitude": HQ_LAT + 0.02, "longitude": HQ_LNG, "accuracy_meters": 10})  # ~2 كم
+    assert res.status_code == 403
+    assert "خارج نطاق" in res.json()["detail"]
+
+
+def test_self_punch_low_accuracy_rejected(client, auth):
+    h, _ = _emp_token(client, auth, "9203", "geo_acc")
+    res = client.post("/api/attendance/self-punch", headers=h, json={
+        "latitude": HQ_LAT, "longitude": HQ_LNG, "accuracy_meters": 900})
+    assert res.status_code == 400
+    assert "دقة تحديد الموقع" in res.json()["detail"]
+
+
+def test_employee_bound_to_specific_site(client, auth):
+    """موظف مرتبط بموقع محدد لا يُقبل بصمه من موقع آخر."""
+    branch = client.post("/api/sites", headers=auth, json={
+        "name": "فرع الشمال", "latitude": HQ_LAT + 0.05, "longitude": HQ_LNG,
+        "radius_meters": 120}).json()
+    h, emp_id = _emp_token(client, auth, "9204", "geo_branch")
+    client.patch(f"/api/employees/{emp_id}", headers=auth, json={"site_id": branch["id"]})
+
+    at_hq = client.post("/api/attendance/self-punch", headers=h, json={
+        "latitude": HQ_LAT, "longitude": HQ_LNG, "accuracy_meters": 10})
+    assert at_hq.status_code == 403
+
+    at_branch = client.post("/api/attendance/self-punch", headers=h, json={
+        "latitude": branch["latitude"], "longitude": branch["longitude"], "accuracy_meters": 10})
+    assert at_branch.status_code == 201
+    assert at_branch.json()["site_name"] == "فرع الشمال"
+
+
+def test_geo_check_endpoint(client, auth):
+    h, _ = _emp_token(client, auth, "9205", "geo_check")
+    inside = client.post("/api/sites/check", headers=h, json={
+        "latitude": HQ_LAT, "longitude": HQ_LNG, "accuracy_meters": 10}).json()
+    assert inside["allowed"] is True and inside["site_name"] == "المقر الرئيسي"
+    outside = client.post("/api/sites/check", headers=h, json={
+        "latitude": HQ_LAT + 0.3, "longitude": HQ_LNG}).json()
+    assert outside["allowed"] is False and outside["distance_meters"] > 1000
+
+
+def test_settings_toggle_disables_geofence(client, auth):
+    h, _ = _emp_token(client, auth, "9206", "geo_toggle")
+    assert client.get("/api/settings", headers=h).json()["web_punch_requires_location"] is True
+
+    # الموظف لا يملك صلاحية تعديل الإعدادات
+    assert client.put("/api/settings", headers=h, json={"web_punch_enabled": False}).status_code == 403
+
+    client.put("/api/settings", headers=auth, json={"web_punch_requires_location": False})
+    res = client.post("/api/attendance/self-punch", headers=h, json={})
+    assert res.status_code == 201, res.text
+
+    # تعطيل البصم من التطبيق كلياً
+    client.put("/api/settings", headers=auth, json={"web_punch_enabled": False})
+    h2, _ = _emp_token(client, auth, "9207", "geo_off")
+    blocked = client.post("/api/attendance/self-punch", headers=h2, json={})
+    assert blocked.status_code == 403 and "معطّل" in blocked.json()["detail"]
+
+    # إعادة الإعدادات الافتراضية
+    client.put("/api/settings", headers=auth, json={
+        "web_punch_enabled": True, "web_punch_requires_location": True})
+    assert client.get("/api/settings", headers=auth).json()["web_punch_requires_location"] is True
+
+
+def test_distance_formula_accuracy():
+    """التحقق من صيغة هافرساين مقابل مسافة معروفة (الرياض - جدة ≈ 845 كم)."""
+    from app.services.geo import distance_meters
+
+    riyadh = (24.7136, 46.6753)
+    jeddah = (21.4858, 39.1925)
+    km = distance_meters(*riyadh, *jeddah) / 1000
+    assert 840 <= km <= 860
+    assert distance_meters(24.7136, 46.6753, 24.7136, 46.6753) == 0

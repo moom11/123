@@ -21,9 +21,17 @@ from ..models import (
     Role,
     User,
 )
-from ..schemas import AttendanceDayOut, AttendanceOverride, PunchIn, PunchOut
+from ..schemas import (
+    AttendanceDayOut,
+    AttendanceOverride,
+    PunchIn,
+    PunchOut,
+    SelfPunchIn,
+    SelfPunchResult,
+)
 from ..security import can_view_employee, get_current_user, require_hr
 from ..services import attendance as attendance_service
+from ..services import geo, settings_store
 
 router = APIRouter(prefix="/api/attendance", tags=["attendance"])
 
@@ -50,6 +58,12 @@ def punch_out(p: Punch) -> PunchOut:
         device_id=p.device_id,
         device_name=p.device.name if p.device else None,
         verify_mode=p.verify_mode,
+        latitude=p.latitude,
+        longitude=p.longitude,
+        accuracy_meters=p.accuracy_meters,
+        site_id=p.site_id,
+        site_name=p.site.name if p.site else None,
+        distance_meters=p.distance_meters,
         note=p.note,
     )
 
@@ -159,12 +173,31 @@ def delete_punch(punch_id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
-@router.post("/self-punch", response_model=PunchOut, status_code=201)
-def self_punch(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """تسجيل حضور/انصراف ذاتي من الويب للموظف المرتبط بالحساب."""
+@router.post("/self-punch", response_model=SelfPunchResult, status_code=201)
+def self_punch(
+    payload: SelfPunchIn | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """تسجيل حضور/انصراف ذاتي من التطبيق، مقيّد بموقع العمل الجغرافي.
+
+    يتحقق النظام من أن إحداثيات الموظف داخل نطاق موقع عمل معتمد (Geofencing)
+    قبل قبول البصمة، ويخزّن الموقع والمسافة مع السجل للمراجعة.
+    """
     if not user.employee_id:
         raise HTTPException(status_code=400, detail="الحساب غير مرتبط بملف موظف")
+    if not settings_store.get_bool(db, "web_punch_enabled"):
+        raise HTTPException(status_code=403, detail="تسجيل الحضور من التطبيق معطّل حالياً")
+
     emp = db.get(Employee, user.employee_id)
+    if emp.status != EmployeeStatus.active:
+        raise HTTPException(status_code=403, detail="لا يمكن تسجيل الحضور لموظف غير نشط")
+
+    data = payload or SelfPunchIn()
+    site, distance = geo.verify_location(
+        db, emp, data.latitude, data.longitude, data.accuracy_meters
+    )
+
     now = datetime.now().replace(microsecond=0)
     recent = db.scalar(
         select(Punch)
@@ -173,18 +206,37 @@ def self_punch(db: Session = Depends(get_db), user: User = Depends(get_current_u
     )
     if recent:
         raise HTTPException(status_code=400, detail="تم تسجيل بصمة قبل أقل من دقيقتين")
+
     punch = Punch(
         employee_code=emp.code,
         employee_id=emp.id,
         punch_time=now,
         punch_type=PunchType.auto,
         source=PunchSource.web,
+        latitude=data.latitude,
+        longitude=data.longitude,
+        accuracy_meters=data.accuracy_meters,
+        site_id=site.id if site else None,
+        distance_meters=distance,
     )
     db.add(punch)
     db.flush()
     attendance_service.recompute_for_punches(db, [punch])
     db.refresh(punch)
-    return punch_out(punch)
+
+    day = db.scalar(
+        select(AttendanceDay).where(
+            AttendanceDay.employee_id == emp.id, AttendanceDay.work_date == now.date()
+        )
+    )
+    kind = "انصراف" if day and day.check_out else "حضور"
+    where = f" من موقع «{site.name}»" if site else ""
+    return SelfPunchResult(
+        punch=punch_out(punch),
+        site_name=site.name if site else None,
+        distance_meters=distance,
+        message=f"تم تسجيل {kind} الساعة {now:%H:%M}{where}",
+    )
 
 
 # ------------------------------ الكشوف ------------------------------

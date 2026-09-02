@@ -145,21 +145,69 @@ function go(page) {
 }
 const render = (html) => { el('view').innerHTML = html; };
 
+function currentPosition(options = {}) {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error('المتصفح لا يدعم تحديد الموقع'));
+      return;
+    }
+    if (!window.isSecureContext && !['localhost', '127.0.0.1'].includes(location.hostname)) {
+      reject(new Error('تحديد الموقع يتطلب تشغيل النظام عبر HTTPS'));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+        accuracy_meters: Math.round(pos.coords.accuracy),
+      }),
+      (err) => {
+        const messages = {
+          1: 'رفضت المتصفح صلاحية الموقع. فعّلها من إعدادات الموقع في المتصفح ثم أعد المحاولة.',
+          2: 'تعذر تحديد موقعك. تأكد من تفعيل GPS/خدمة الموقع.',
+          3: 'انتهت مهلة تحديد الموقع، حاول مرة أخرى في مكان مكشوف.',
+        };
+        reject(new Error(messages[err.code] || 'تعذر تحديد الموقع'));
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0, ...options }
+    );
+  });
+}
+
 async function selfPunch() {
+  const btn = el('selfPunchBtn');
+  btn.disabled = true;
+  const original = btn.textContent;
   try {
-    const p = await api('/api/attendance/self-punch', { method: 'POST' });
-    toast('تم تسجيل البصمة الساعة ' + fmtTime(p.punch_time), 'ok');
+    let coords = {};
+    const settings = state.cache.settings || (state.cache.settings = await api('/api/settings'));
+    if (settings.web_punch_requires_location) {
+      btn.textContent = 'جارٍ تحديد موقعك…';
+      coords = await currentPosition();
+    }
+    btn.textContent = 'جارٍ التسجيل…';
+    const res = await api('/api/attendance/self-punch', { method: 'POST', body: coords });
+    const dist = res.distance_meters !== null && res.distance_meters !== undefined
+      ? ` (على بُعد ${Math.round(res.distance_meters)} م من الموقع)` : '';
+    toast(res.message + dist, 'ok');
     if (['dashboard', 'attendance', 'punches'].includes(state.page)) go(state.page);
-  } catch (e) { toast(e.message, 'err'); }
+  } catch (e) {
+    toast(e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
 }
 
 /* ------------------------------ بيانات مساعدة ------------------------------ */
 async function loadLookups(force = false) {
   if (!state.cache.lookups || force) {
-    const [employees, departments, shifts, leaveTypes] = await Promise.all([
-      api('/api/employees'), api('/api/departments'), api('/api/shifts'), api('/api/leave-types'),
+    const [employees, departments, shifts, leaveTypes, sites] = await Promise.all([
+      api('/api/employees'), api('/api/departments'), api('/api/shifts'),
+      api('/api/leave-types'), api('/api/sites'),
     ]);
-    state.cache.lookups = { employees, departments, shifts, leaveTypes };
+    state.cache.sites = sites;
+    state.cache.lookups = { employees, departments, shifts, leaveTypes, sites };
   }
   return state.cache.lookups;
 }
@@ -198,10 +246,27 @@ views.dashboard = async () => {
       </div>
       <div class="card-body"><div class="bars">${stats.weekly_trend.map(bar).join('')}</div></div>
     </div>
+    ${state.user.employee_id ? `<div class="card"><div class="card-head"><h3>تسجيل حضوري من التطبيق</h3>
+      <button class="btn sm ghost" id="checkLoc">التحقق من موقعي</button></div>
+      <div class="card-body inline">
+        <button class="btn ok" id="punchNow">🕒 تسجيل حضور / انصراف</button>
+        <span class="help" id="locHint">يجب أن تكون داخل نطاق موقع العمل المعتمد عند التسجيل.</span>
+      </div></div>` : ''}
     <div class="card"><div class="card-head"><h3>حضور اليوم</h3>
       <button class="btn sm ghost" onclick="go('attendance')">فتح الكشف اليومي</button></div>
       <div id="todayTable"><div class="empty">جارٍ التحميل…</div></div>
     </div>`);
+  if (el('punchNow')) {
+    el('punchNow').onclick = selfPunch;
+    el('checkLoc').onclick = async () => {
+      el('locHint').textContent = 'جارٍ تحديد موقعك…';
+      try {
+        const pos = await currentPosition();
+        const res = await api('/api/sites/check', { method: 'POST', body: pos });
+        el('locHint').textContent = res.message + ` — دقة التحديد ${pos.accuracy_meters} م`;
+      } catch (e) { el('locHint').textContent = e.message; }
+    };
+  }
   const rows = await api('/api/attendance/daily?work_date=' + today());
   el('todayTable').innerHTML = table(
     ['رقم الموظف', 'الاسم', 'الحضور', 'الانصراف', 'ساعات', 'التأخير (د)', 'الحالة'],
@@ -324,11 +389,14 @@ views.punches = async () => {
     const rows = await api('/api/attendance/punches?' + q);
     el('pCount').textContent = `${rows.length} بصمة`;
     el('pTable').innerHTML = table(
-      ['الوقت', 'رقم الموظف', 'الاسم', 'المصدر', 'الجهاز', 'ملاحظة', ''],
+      ['الوقت', 'رقم الموظف', 'الاسم', 'المصدر', 'الجهاز / الموقع', 'المسافة', 'الخريطة', 'ملاحظة', ''],
       rows,
       (r) => `<tr><td>${fmtDateTime(r.punch_time)}</td><td>${esc(r.employee_code)}</td>
         <td>${esc(r.employee_name || 'غير مرتبط')}</td><td>${SOURCES[r.source] || r.source}</td>
-        <td>${esc(r.device_name || '—')}</td><td>${esc(r.note || '')}</td>
+        <td>${esc(r.device_name || r.site_name || '—')}</td>
+        <td>${r.distance_meters !== null && r.distance_meters !== undefined ? Math.round(r.distance_meters) + ' م' : '—'}</td>
+        <td>${r.latitude ? `<a href="https://www.openstreetmap.org/?mlat=${r.latitude}&mlon=${r.longitude}#map=18/${r.latitude}/${r.longitude}" target="_blank" rel="noopener">عرض</a>` : '—'}</td>
+        <td>${esc(r.note || '')}</td>
         <td>${isHR() ? `<button class="btn sm danger" onclick="deletePunch(${r.id})">حذف</button>` : ''}</td></tr>`,
       'لا توجد بصمات في هذه الفترة');
   };
@@ -569,6 +637,7 @@ function employeeModal(emp, departments, shifts, after) {
       <div class="field"><label>المسمى الوظيفي</label><input id="fTitle" value="${esc(v('job_title'))}" /></div>
       <div class="field"><label>الإدارة</label><select id="fDep"><option value="">—</option>${options(departments, v('department_id'))}</select></div>
       <div class="field"><label>الوردية</label><select id="fShift"><option value="">—</option>${options(shifts, v('shift_id'))}</select></div>
+      <div class="field"><label>موقع العمل (للبصم من التطبيق)</label><select id="fSite"><option value="">كل المواقع المعتمدة</option>${options(state.cache.sites || [], v('site_id'))}</select></div>
       <div class="field"><label>تاريخ التعيين</label><input type="date" id="fHire" value="${v('hire_date')}" /></div>
       <div class="field"><label>الراتب الأساسي</label><input type="number" id="fSalary" value="${v('basic_salary', 0)}" /></div>
       <div class="field"><label>الحالة</label><select id="fStatus">
@@ -588,6 +657,7 @@ function employeeModal(emp, departments, shifts, after) {
           email: el('fEmail').value || null, job_title: el('fTitle').value || null,
           department_id: el('fDep').value ? Number(el('fDep').value) : null,
           shift_id: el('fShift').value ? Number(el('fShift').value) : null,
+          site_id: el('fSite').value ? Number(el('fSite').value) : null,
           hire_date: el('fHire').value || null, basic_salary: Number(el('fSalary').value || 0),
           status: el('fStatus').value,
         };
@@ -798,6 +868,7 @@ views.settings = async () => {
       <button data-tab="shifts">الورديات</button>
       <button data-tab="leaveTypes">أنواع الإجازات</button>
       <button data-tab="holidays">العطل الرسمية</button>
+      <button data-tab="sites">مواقع العمل والبصم الذاتي</button>
       ${can('admin') ? '<button data-tab="users">المستخدمون</button>' : ''}
     </div><div id="setBody"></div>`);
   el('setTabs').querySelectorAll('button').forEach((b) => b.onclick = () => {
@@ -961,6 +1032,100 @@ settingsTabs.holidays = async () => {
   window.holDel = async (id) => {
     if (!confirm('حذف العطلة؟')) return;
     try { await api('/api/holidays/' + id, { method: 'DELETE' }); toast('تم الحذف', 'ok'); settingsTabs.holidays(); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+};
+
+settingsTabs.sites = async () => {
+  const [rows, settings] = await Promise.all([api('/api/sites'), api('/api/settings')]);
+  state.cache.sites = rows;
+  state.cache.settings = settings;
+  el('setBody').innerHTML = `
+    <div class="card"><div class="card-head"><h3>إعدادات البصم من التطبيق</h3></div>
+      <div class="card-body">
+        <div class="inline">
+          <div class="field"><label>السماح بالبصم من التطبيق</label><select id="stEnabled">
+            <option value="true" ${settings.web_punch_enabled ? 'selected' : ''}>مفعّل</option>
+            <option value="false" ${!settings.web_punch_enabled ? 'selected' : ''}>معطّل</option></select></div>
+          <div class="field"><label>إلزام التواجد داخل موقع العمل</label><select id="stGeo">
+            <option value="true" ${settings.web_punch_requires_location ? 'selected' : ''}>إلزامي</option>
+            <option value="false" ${!settings.web_punch_requires_location ? 'selected' : ''}>غير إلزامي</option></select></div>
+          <div class="field"><label>أقصى هامش خطأ للموقع (متر)</label>
+            <input type="number" id="stAcc" value="${settings.geo_max_accuracy_meters}" /></div>
+          <button class="btn" id="stSave">حفظ الإعدادات</button>
+        </div>
+        <div class="help">عند تفعيل الإلزام، لا تُقبل بصمة الموظف من التطبيق إلا إذا كان داخل نطاق
+          أحد مواقع العمل أدناه. الموظف المرتبط بموقع محدد يُقبل منه البصم من ذلك الموقع فقط.
+          <br>ملاحظة: متصفحات الجوال تمنح صلاحية الموقع فقط عبر <b>HTTPS</b> (أو localhost أثناء التجربة).</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>مواقع العمل المعتمدة</h3><button class="btn sm ok" id="siteNew">إضافة موقع</button></div>
+      ${table(['الموقع', 'خط العرض', 'خط الطول', 'النطاق (متر)', 'العنوان', 'الموظفون', 'الحالة', ''], rows, (s) =>
+        `<tr><td>${esc(s.name)}</td><td>${s.latitude.toFixed(6)}</td><td>${s.longitude.toFixed(6)}</td>
+          <td>${s.radius_meters}</td><td>${esc(s.address || '—')}</td><td>${s.employees_count}</td>
+          <td><span class="tag ${s.is_active ? 'on' : 'off'}">${s.is_active ? 'مفعّل' : 'موقوف'}</span></td>
+          <td><a class="btn sm ghost" href="https://www.openstreetmap.org/?mlat=${s.latitude}&mlon=${s.longitude}#map=17/${s.latitude}/${s.longitude}" target="_blank" rel="noopener">الخريطة</a>
+              <button class="btn sm ghost" onclick="siteEdit(${s.id})">تعديل</button>
+              <button class="btn sm danger" onclick="siteDel(${s.id})">حذف</button></td></tr>`,
+        'لا توجد مواقع معتمدة — أضف موقعاً حتى يتمكن الموظفون من البصم من التطبيق')}
+    </div>`;
+
+  el('stSave').onclick = async () => {
+    try {
+      state.cache.settings = await api('/api/settings', { method: 'PUT', body: {
+        web_punch_enabled: el('stEnabled').value === 'true',
+        web_punch_requires_location: el('stGeo').value === 'true',
+        geo_max_accuracy_meters: Number(el('stAcc').value) } });
+      toast('تم حفظ الإعدادات', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+  };
+
+  const form = (site) => modal({
+    title: site ? 'تعديل موقع عمل' : 'إضافة موقع عمل',
+    body: `<div class="grid cols-2">
+        <div class="field"><label>اسم الموقع</label><input id="siName" value="${esc(site ? site.name : '')}" placeholder="المقر الرئيسي" /></div>
+        <div class="field"><label>النطاق المسموح (متر)</label><input type="number" id="siRad" value="${site ? site.radius_meters : 150}" /></div>
+        <div class="field"><label>خط العرض (Latitude)</label><input id="siLat" value="${site ? site.latitude : ''}" placeholder="24.774265" /></div>
+        <div class="field"><label>خط الطول (Longitude)</label><input id="siLng" value="${site ? site.longitude : ''}" placeholder="46.738586" /></div>
+        <div class="field"><label>العنوان</label><input id="siAddr" value="${esc(site ? site.address || '' : '')}" /></div>
+        <div class="field"><label>الحالة</label><select id="siAct">
+          <option value="true" ${!site || site.is_active ? 'selected' : ''}>مفعّل</option>
+          <option value="false" ${site && !site.is_active ? 'selected' : ''}>موقوف</option></select></div>
+      </div>
+      <button class="btn ghost" id="siHere">📍 التقاط موقعي الحالي</button>
+      <div class="help" id="siHint">قف داخل موقع العمل واضغط الزر لتعبئة الإحداثيات تلقائياً،
+        أو انسخها من خرائط Google بالضغط المطوّل على المكان.</div>`,
+    width: 700,
+    footer: `<button class="btn" id="siSave">حفظ</button><button class="btn gray" data-close>إلغاء</button>`,
+    onOpen: (root) => {
+      $('#siHere', root).onclick = async () => {
+        el('siHint').textContent = 'جارٍ تحديد الموقع…';
+        try {
+          const pos = await currentPosition();
+          el('siLat').value = pos.latitude.toFixed(6);
+          el('siLng').value = pos.longitude.toFixed(6);
+          el('siHint').textContent = `تم التقاط الموقع بدقة ${pos.accuracy_meters} متر.`;
+        } catch (e) { el('siHint').textContent = e.message; }
+      };
+      $('#siSave', root).onclick = async () => {
+        const body = { name: el('siName').value.trim(), latitude: Number(el('siLat').value),
+          longitude: Number(el('siLng').value), radius_meters: Number(el('siRad').value),
+          address: el('siAddr').value || null, is_active: el('siAct').value === 'true' };
+        if (!body.latitude || !body.longitude) { toast('أدخل إحداثيات الموقع', 'err'); return; }
+        try {
+          if (site) await api('/api/sites/' + site.id, { method: 'PATCH', body });
+          else await api('/api/sites', { method: 'POST', body });
+          toast('تم الحفظ', 'ok'); closeModal(); loadLookups(true).then(settingsTabs.sites);
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    },
+  });
+  el('siteNew').onclick = () => form(null);
+  window.siteEdit = (id) => form(rows.find((s) => s.id === id));
+  window.siteDel = async (id) => {
+    if (!confirm('حذف الموقع؟ سيتمكن الموظفون المرتبطون به من البصم من أي موقع معتمد آخر.')) return;
+    try { await api('/api/sites/' + id, { method: 'DELETE' }); toast('تم الحذف', 'ok'); settingsTabs.sites(); }
     catch (e) { toast(e.message, 'err'); }
   };
 };

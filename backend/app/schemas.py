@@ -93,6 +93,7 @@ class EmployeeIn(BaseModel):
     job_title: str | None = None
     department_id: int | None = None
     shift_id: int | None = None
+    site_id: int | None = None
     manager_id: int | None = None
     hire_date: date | None = None
     basic_salary: float = 0
@@ -108,6 +109,7 @@ class EmployeeUpdate(BaseModel):
     job_title: str | None = None
     department_id: int | None = None
     shift_id: int | None = None
+    site_id: int | None = None
     manager_id: int | None = None
     hire_date: date | None = None
     basic_salary: float | None = None
@@ -126,6 +128,8 @@ class EmployeeOut(ORMModel):
     department_name: str | None = None
     shift_id: int | None = None
     shift_name: str | None = None
+    site_id: int | None = None
+    site_name: str | None = None
     manager_id: int | None = None
     hire_date: date | None = None
     basic_salary: float = 0
@@ -152,6 +156,12 @@ class PunchOut(ORMModel):
     device_id: int | None = None
     device_name: str | None = None
     verify_mode: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    accuracy_meters: float | None = None
+    site_id: int | None = None
+    site_name: str | None = None
+    distance_meters: float | None = None
     note: str | None = None
 
 
@@ -170,6 +180,77 @@ class AttendanceDayOut(ORMModel):
     status: DayStatus
     punches_count: int = 0
     note: str | None = None
+
+
+class SelfPunchIn(BaseModel):
+    """تسجيل حضور ذاتي من التطبيق مع إحداثيات الموظف."""
+
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    accuracy_meters: float | None = Field(default=None, ge=0)
+
+
+class SelfPunchResult(BaseModel):
+    ok: bool = True
+    punch: PunchOut
+    site_name: str | None = None
+    distance_meters: float | None = None
+    message: str = ""
+
+
+class WorkSiteIn(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    radius_meters: int = Field(default=150, ge=20, le=20000)
+    address: str | None = None
+    is_active: bool = True
+
+
+class WorkSiteUpdate(BaseModel):
+    name: str | None = None
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    radius_meters: int | None = Field(default=None, ge=20, le=20000)
+    address: str | None = None
+    is_active: bool | None = None
+
+
+class WorkSiteOut(ORMModel):
+    id: int
+    name: str
+    latitude: float
+    longitude: float
+    radius_meters: int
+    address: str | None = None
+    is_active: bool
+    employees_count: int = 0
+
+
+class GeoCheckIn(BaseModel):
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    accuracy_meters: float | None = None
+
+
+class GeoCheckOut(BaseModel):
+    allowed: bool
+    site_name: str | None = None
+    distance_meters: float | None = None
+    radius_meters: int | None = None
+    message: str
+
+
+class SettingsOut(BaseModel):
+    web_punch_enabled: bool
+    web_punch_requires_location: bool
+    geo_max_accuracy_meters: int
+
+
+class SettingsIn(BaseModel):
+    web_punch_enabled: bool | None = None
+    web_punch_requires_location: bool | None = None
+    geo_max_accuracy_meters: int | None = Field(default=None, ge=10, le=5000)
 
 
 class AttendanceOverride(BaseModel):
