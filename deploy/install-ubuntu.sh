@@ -47,19 +47,73 @@ systemctl daemon-reload
 systemctl enable --now hr
 systemctl restart hr
 
+rm -f /etc/nginx/sites-enabled/default
+
 if [ -n "$DOMAIN" ]; then
   echo "==> إعداد Nginx للنطاق $DOMAIN"
-  sed "s/hr.example.com/$DOMAIN/g" "$APP_DIR/deploy/nginx.conf" > /etc/nginx/sites-available/hr
+  apt-get install -y -qq certbot
+  mkdir -p /var/www/html
+
+  # (1) إعداد HTTP مؤقت: يخدم النظام ويسمح لـ Let's Encrypt بالتحقق من ملكية النطاق
+  cat > /etc/nginx/sites-available/hr <<NGINX
+server {
+    listen 80 default_server;
+    server_name ${DOMAIN};
+    client_max_body_size 8m;
+
+    location /.well-known/acme-challenge/ { root /var/www/html; }
+
+    location / {
+        proxy_pass         http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_read_timeout 120s;
+    }
+}
+NGINX
   ln -sf /etc/nginx/sites-available/hr /etc/nginx/sites-enabled/hr
-  rm -f /etc/nginx/sites-enabled/default
-  # شهادة SSL (مطلوبة لعمل تحديد الموقع على الجوالات)
-  apt-get install -y -qq certbot python3-certbot-nginx
-  certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos --register-unsafely-without-email || \
-    echo "    تعذر إصدار الشهادة تلقائياً - أصدرها يدوياً: certbot --nginx -d $DOMAIN"
   nginx -t && systemctl reload nginx
-  echo "==> جاهز: https://$DOMAIN"
+
+  # (2) إصدار الشهادة دون تعديل إعداد nginx
+  if certbot certonly --webroot -w /var/www/html -d "$DOMAIN" \
+       --non-interactive --agree-tos --register-unsafely-without-email; then
+    # (3) الإعداد النهائي: HTTPS للموظفين، و/iclock على HTTP لأجهزة البصمة
+    sed "s/hr.example.com/$DOMAIN/g" "$APP_DIR/deploy/nginx.conf" > /etc/nginx/sites-available/hr
+    nginx -t && systemctl reload nginx
+    systemctl enable certbot.timer 2>/dev/null || true
+    echo "==> جاهز: https://$DOMAIN"
+  else
+    echo "==> تعذّر إصدار الشهادة. تأكد أن $DOMAIN يشير إلى عنوان هذا الخادم وأن المنفذ 80 مفتوح،"
+    echo "    ثم أعد: sudo certbot certonly --webroot -w /var/www/html -d $DOMAIN"
+    echo "==> النظام يعمل مؤقتاً على http://$DOMAIN (بدون HTTPS لن يعمل تحديد الموقع للبصم الذاتي)"
+  fi
 else
-  echo "==> جاهز على http://<عنوان-الخادم>:8000 (مرّر النطاق للسكربت لإعداد HTTPS)"
+  # بدون نطاق: وسيط على المنفذ 80 للوصول بعنوان IP مباشرة
+  echo "==> إعداد Nginx للوصول بعنوان IP (بدون نطاق)"
+  cat > /etc/nginx/sites-available/hr <<'NGINX'
+server {
+    listen 80 default_server;
+    server_name _;
+    client_max_body_size 8m;
+
+    location / {
+        proxy_pass         http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Real-IP $remote_addr;
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 120s;
+    }
+}
+NGINX
+  ln -sf /etc/nginx/sites-available/hr /etc/nginx/sites-enabled/hr
+  nginx -t && systemctl reload nginx
+  PUBLIC_IP="$(curl -s --max-time 5 https://api.ipify.org || hostname -I | awk '{print $1}')"
+  echo "==> جاهز: http://${PUBLIC_IP}"
+  echo "    تنبيه: تحديد الموقع للبصم الذاتي يحتاج HTTPS — أعد التشغيل مع نطاق:"
+  echo "    sudo bash deploy/install-ubuntu.sh hr.example.com"
 fi
 
 echo "==> حالة الخدمة:"; systemctl --no-pager --lines=5 status hr || true
