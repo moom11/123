@@ -11,7 +11,9 @@ import pytest
 
 TMP = tempfile.mkdtemp(prefix="hr_test_")
 os.environ["HR_DATA_DIR"] = TMP
-os.environ["HR_DATABASE_URL"] = f"sqlite:///{Path(TMP) / 'test.db'}"
+# افتراضياً SQLite؛ ولتشغيل نفس الاختبارات على PostgreSQL:
+#   HR_DATABASE_URL="postgresql+psycopg://user:pass@localhost/hr_test" pytest backend/tests
+os.environ.setdefault("HR_DATABASE_URL", f"sqlite:///{Path(TMP) / 'test.db'}")
 os.environ["HR_ADMIN_PASSWORD"] = "admin123"
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

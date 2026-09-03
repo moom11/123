@@ -180,7 +180,7 @@ backend/tests/       اختبارات شاملة للمسارات وقواعد �
 
 | المتغير | الافتراضي | الوصف |
 |---|---|---|
-| `HR_DATABASE_URL` | `sqlite:///data/hr.db` | رابط قاعدة البيانات (يدعم PostgreSQL) |
+| `HR_DATABASE_URL` | `sqlite:///data/hr.db` | رابط قاعدة البيانات — SQLite افتراضياً، ويدعم PostgreSQL (مُختبَر) عبر `postgresql+psycopg://...` |
 | `HR_DATA_DIR` | `./data` | مجلد البيانات والمرفقات |
 | `HR_SECRET_KEY` | يُولَّد تلقائياً | مفتاح توقيع التوكن |
 | `HR_TOKEN_MINUTES` | `720` | مدة صلاحية الجلسة بالدقائق |
