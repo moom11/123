@@ -25,6 +25,59 @@ export async function runScheduledMaintenance(cron: string): Promise<void> {
   if (cron.startsWith('0 3 ')) {
     await purgeExpiredOtps(30);
   }
+
+  // Every quarter hour: push invoices to ZATCA. The deadline is 24 hours, so
+  // this is deliberately unhurried — but it must run often enough that a
+  // transient outage does not eat the whole window before anyone notices.
+  if (cron.startsWith('15 ') || cron === '*/15 * * * *' || cron.startsWith('0 ')) {
+    await reportInvoices();
+  }
+}
+
+/**
+ * Drain each branch's reporting queue.
+ *
+ * Per branch rather than globally: credentials are per branch, and one branch
+ * whose CSID has expired must not stop another branch's invoices from being
+ * reported.
+ */
+async function reportInvoices(): Promise<void> {
+  const { many } = await import('../core/db.js');
+  const { reportPending } = await import('../modules/invoicing/invoicing.service.js');
+
+  const branches = await many<{ branch_id: string }>(
+    `SELECT DISTINCT branch_id FROM invoices
+      WHERE report_status IN ('pending','failed') AND report_attempts < 10`,
+  );
+
+  for (const { branch_id: branchId } of branches) {
+    try {
+      const result = await reportPending(branchId, 100);
+      if (result.failed > 0) {
+        console.warn(`[zatca] branch ${branchId}: ${result.reported} reported, ${result.failed} failed`);
+      }
+    } catch (err) {
+      console.error(`[zatca] branch ${branchId} reporting run failed`, err);
+    }
+  }
+
+  // Past the deadline is no longer a queue, it is a compliance breach, and it
+  // needs a human rather than another retry.
+  const { one } = await import('../core/db.js');
+  const overdue = await one<{ n: string; branch_id: string }>(
+    `SELECT count(*)::text AS n, min(branch_id::text) AS branch_id FROM invoices
+      WHERE report_status IN ('pending','failed')
+        AND issued_at < now() - interval '20 hours'`,
+  );
+  if (Number(overdue?.n ?? 0) > 0) {
+    const { notify } = await import('../core/notify.js');
+    await notify({
+      branchId: overdue!.branch_id, kind: 'invoices_unreported', severity: 'critical',
+      title: 'فواتير لم تُبلَّغ للهيئة',
+      body: `${overdue!.n} فاتورة مضى عليها أكثر من 20 ساعة دون إبلاغ — المهلة 24 ساعة.`,
+      targetPermissions: ['invoices.report'],
+    });
+  }
 }
 
 async function reclaimStalePrintJobs(): Promise<void> {

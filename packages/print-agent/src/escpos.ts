@@ -31,6 +31,33 @@ export const CMD = {
 };
 
 /**
+ * QR code, the GS ( k family.
+ *
+ * Every simplified tax invoice must carry one, and an inspector scans it off
+ * the paper — so module size and error correction are not cosmetic choices.
+ * Size 6 with correction level M survives thermal paper that has been in a
+ * pocket, which is where these receipts actually end up.
+ */
+export function qrCode(payload: string, moduleSize = 6): Buffer {
+  const data = Buffer.from(payload, 'ascii');
+  // Store length is the data plus the two bytes of the cn/fn pair.
+  const storeLen = data.length + 3;
+  return Buffer.concat([
+    // Model 2
+    Buffer.from([GS, 0x28, 0x6b, 0x04, 0x00, 0x31, 0x41, 0x32, 0x00]),
+    // Module size
+    Buffer.from([GS, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x43, moduleSize]),
+    // Error correction level M
+    Buffer.from([GS, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x45, 0x31]),
+    // Store the payload
+    Buffer.from([GS, 0x28, 0x6b, storeLen & 0xff, (storeLen >> 8) & 0xff, 0x31, 0x50, 0x30]),
+    data,
+    // Print what was stored
+    Buffer.from([GS, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x51, 0x30]),
+  ]);
+}
+
+/**
  * Letters that join only to their right: they connect to the preceding letter
  * but never to the following one, so the letter after them always starts a new
  * shape.
@@ -303,6 +330,124 @@ export function renderTicket(payload: TicketPayload, charsPerLine = 42): Buffer 
   line(latin(payload.kind.toUpperCase()));
   parts.push(CMD.FEED, CMD.FEED, CMD.FEED, CMD.CUT);
 
+  return Buffer.concat(parts);
+}
+
+/**
+ * The customer's copy of a settled bill.
+ *
+ * Distinct from renderTicket, which prints for the kitchen: this one carries
+ * money, VAT and the ZATCA QR, and none of that belongs on a station ticket.
+ * The QR is what makes it a tax invoice rather than a piece of paper.
+ */
+export interface ReceiptPayload {
+  header: string;
+  branchNameAr: string;
+  vatNumber: string;
+  address?: string | null;
+  invoiceNumber: string;
+  orderNumber?: string | null;
+  tableNumber?: string | null;
+  cashierName?: string | null;
+  customerName?: string | null;
+  time: string;
+  isCreditNote?: boolean;
+  items: Array<{ name: string; quantity: number; unitPrice: number; lineTotal: number }>;
+  /** halalas throughout, formatted here and nowhere else */
+  subtotal: number;
+  discountTotal: number;
+  vatAmount: number;
+  vatPercent: number;
+  grandTotal: number;
+  paidBy?: string | null;
+  changeGiven?: number;
+  /** base64 TLV — printed verbatim */
+  qr: string;
+  footer?: string | null;
+}
+
+const riyals = (halalas: number): string => {
+  const sign = halalas < 0 ? '-' : '';
+  const abs = Math.abs(Math.trunc(halalas));
+  return `${sign}${Math.floor(abs / 100)}.${String(abs % 100).padStart(2, '0')}`;
+};
+
+export function renderReceipt(payload: ReceiptPayload, charsPerLine = 42): Buffer {
+  const parts: Buffer[] = [CMD.INIT, CMD.CODEPAGE_CP864];
+  const arabic = (text: string): Buffer => encodeCp864(shapeArabic(text));
+  const latin = (text: string): Buffer => Buffer.from(text, 'ascii');
+  const line = (buf: Buffer) => { parts.push(buf, CMD.FEED); };
+  const rule = () => line(latin('-'.repeat(charsPerLine)));
+
+  /** label left, amount right, on one line — the only way totals read cleanly. */
+  const amountRow = (label: string, halalas: number, bold = false) => {
+    const value = riyals(halalas);
+    const pad = Math.max(1, charsPerLine - label.length - value.length);
+    if (bold) parts.push(CMD.BOLD_ON);
+    line(latin(`${label}${' '.repeat(pad)}${value}`));
+    if (bold) parts.push(CMD.BOLD_OFF);
+  };
+
+  parts.push(CMD.ALIGN_CENTER, CMD.SIZE_DOUBLE_H, CMD.BOLD_ON);
+  line(latin(payload.header));
+  parts.push(CMD.SIZE_NORMAL, CMD.BOLD_OFF);
+  line(arabic(payload.branchNameAr));
+  if (payload.address) line(arabic(payload.address));
+
+  // The Arabic title is what makes this a recognised tax document; without it
+  // the receipt is not compliant even with a perfect QR.
+  parts.push(CMD.BOLD_ON);
+  line(arabic(payload.isCreditNote ? 'إشعار دائن' : 'فاتورة ضريبية مبسطة'));
+  parts.push(CMD.BOLD_OFF);
+  line(latin(`VAT NO: ${payload.vatNumber}`));
+  rule();
+
+  parts.push(CMD.ALIGN_LEFT);
+  line(latin(`INVOICE: ${payload.invoiceNumber}`));
+  if (payload.orderNumber) line(latin(`ORDER:   ${payload.orderNumber}`));
+  if (payload.tableNumber) line(latin(`TABLE:   ${payload.tableNumber}`));
+  if (payload.cashierName) {
+    parts.push(latin('CASHIER: '));
+    line(arabic(payload.cashierName));
+  }
+  if (payload.customerName) {
+    parts.push(latin('CUSTOMER: '));
+    line(arabic(payload.customerName));
+  }
+  line(latin(`TIME:    ${formatTime(payload.time)}`));
+  rule();
+
+  for (const item of payload.items) {
+    parts.push(latin(`${trimNumber(item.quantity)} x `));
+    line(arabic(item.name));
+    amountRow(`    ${riyals(item.unitPrice)} x ${trimNumber(item.quantity)}`, item.lineTotal);
+  }
+
+  rule();
+  amountRow('SUBTOTAL', payload.subtotal);
+  if (payload.discountTotal !== 0) amountRow('DISCOUNT', -Math.abs(payload.discountTotal));
+  amountRow(`VAT ${payload.vatPercent.toFixed(0)}%`, payload.vatAmount);
+  rule();
+  parts.push(CMD.SIZE_DOUBLE_H);
+  amountRow('TOTAL', payload.grandTotal, true);
+  parts.push(CMD.SIZE_NORMAL);
+
+  if (payload.paidBy) line(latin(`PAID BY: ${payload.paidBy.toUpperCase()}`));
+  if (payload.changeGiven) amountRow('CHANGE', payload.changeGiven);
+
+  // The QR: centred, with the invoice hash under it so a failed scan still
+  // leaves something an inspector can check against the reported batch.
+  parts.push(CMD.FEED, CMD.ALIGN_CENTER);
+  parts.push(qrCode(payload.qr));
+  parts.push(CMD.FEED);
+  line(arabic('امسح الرمز للتحقق من الفاتورة'));
+
+  if (payload.footer) {
+    parts.push(CMD.FEED);
+    line(arabic(payload.footer));
+  }
+
+  parts.push(CMD.FEED, CMD.FEED, CMD.CUT);
   return Buffer.concat(parts);
 }
 

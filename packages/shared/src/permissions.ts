@@ -129,6 +129,15 @@ export const PERMISSIONS = [
   'reports.financial',
   'reports.all_branches',
 
+  // --- E-invoicing (ZATCA) ---------------------------------------------------
+  // Reading an invoice is an everyday cashier need (reprint a receipt).
+  // Managing credentials is not: whoever holds them can stamp invoices in the
+  // branch's name, so it sits with the owner alongside the other keys.
+  'invoices.read',
+  'invoices.report',             // flush the reporting queue by hand
+  'invoices.credit_note',        // issue a correction against a settled invoice
+  'invoices.manage_credentials',
+
   // --- Audit / notifications -------------------------------------------------
   'audit.read',
   'notifications.read',

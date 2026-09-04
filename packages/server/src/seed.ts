@@ -507,6 +507,25 @@ async function main(): Promise<void> {
     );
   }
 
+  // --- E-invoicing stamping identity ----------------------------------------
+  // Generated so a fresh install can take payment immediately; SANDBOX, and
+  // with no CSID, which is exactly what preflight refuses to open with. Real
+  // credentials come from ZATCA after onboarding — this is a working key, not
+  // a legal one, and the distinction is enforced rather than documented.
+  const hasZatca = await one('SELECT 1 FROM zatca_credentials WHERE branch_id = $1', [branchId]);
+  if (!hasZatca) {
+    const { generateStampKeyPair } = await import('./core/zatca/sign.js');
+    const { encryptSecret } = await import('./core/crypto.js');
+    const pair = generateStampKeyPair();
+    await pool.query(
+      `INSERT INTO zatca_credentials
+         (branch_id, environment, private_key_enc, public_key_der, created_by)
+       VALUES ($1,'sandbox',$2,$3,$4)`,
+      [branchId, encryptSecret(pair.privateKeyPem), pair.publicKeyDer, owner!.id],
+    );
+    log('ZATCA sandbox stamping key generated (no CSID — not valid for live sales)');
+  }
+
   const qrSample = await one<{ qr_token: string }>(
     'SELECT qr_token FROM restaurant_tables WHERE branch_id = $1 AND table_number = $2',
     [branchId, '12'],

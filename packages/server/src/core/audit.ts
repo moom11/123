@@ -113,6 +113,13 @@ export const AUDIT = {
   OTP_VERIFIED: 'otp.verified',
   OTP_FAILED: 'otp.failed',
 
+  INVOICE_ISSUED: 'invoice.issued',
+  INVOICE_REPORTED: 'invoice.reported',
+  INVOICE_REPORT_FAILED: 'invoice.report_failed',
+  INVOICE_CREDIT_NOTE: 'invoice.credit_note',
+  ZATCA_PROVISIONED: 'invoice.zatca.provisioned',
+  ZATCA_CERTIFICATE_STORED: 'invoice.zatca.certificate_stored',
+
   PRINT_QUEUED: 'print.queued',
   PRINT_SUCCEEDED: 'print.succeeded',
   PRINT_FAILED: 'print.failed',

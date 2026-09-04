@@ -28,7 +28,8 @@ export interface TicketItem {
 
 export interface TicketPayload {
   header: string;               // 'MARA LOUNGE'
-  kind: 'new_order' | 'add_item' | 'void' | 'reprint' | 'charcoal_request' | 'bill';
+  kind: 'new_order' | 'add_item' | 'void' | 'reprint' | 'charcoal_request' | 'bill'
+      | 'receipt' | 'credit_note';
   /** Banner printed large at the top: 'ADD ITEM', 'VOID', 'REPRINT'. */
   banner?: string | null;
   orderNumber?: string | null;

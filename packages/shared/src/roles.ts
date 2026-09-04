@@ -78,6 +78,8 @@ const EXECUTIVE: Permission[] = [
   'purchases.read', 'suppliers.read', 'suppliers.manage',
   'reports.sales', 'reports.products', 'reports.employees', 'reports.customers',
   'reports.inventory', 'reports.purchasing', 'reports.financial', 'reports.all_branches',
+  'invoices.read', 'invoices.report', 'invoices.credit_note',
+  'invoices.manage_credentials',
   'audit.read', 'notifications.read',
 ];
 
@@ -111,6 +113,9 @@ const BRANCH_MANAGER: Permission[] = [
   'purchases.read', 'purchases.receive', 'suppliers.read', 'suppliers.manage',
   'reports.sales', 'reports.products', 'reports.employees', 'reports.customers',
   'reports.inventory', 'reports.purchasing',
+  // Not invoices.manage_credentials: the stamping key is the branch's legal
+  // identity, and a branch manager may not mint one for themselves.
+  'invoices.read', 'invoices.report', 'invoices.credit_note',
   'audit.read', 'notifications.read',
 ];
 
@@ -128,6 +133,7 @@ const ACCOUNTANT: Permission[] = [
   'purchase_requests.read.branch', 'purchases.read', 'suppliers.read',
   'reports.sales', 'reports.products', 'reports.employees', 'reports.customers',
   'reports.inventory', 'reports.purchasing', 'reports.financial',
+  'invoices.read', 'invoices.report',
   'audit.read', 'notifications.read',
 ];
 
@@ -143,6 +149,8 @@ const CASHIER: Permission[] = [
   'customers.read', 'customers.create', 'customers.wallet.read',
   'customers.points.redeem', 'customers.special_prices.read',
   'print_jobs.read', 'print_jobs.retry', 'printers.read',
+  // A cashier reprints receipts, and a reprint must carry the same QR.
+  'invoices.read',
   'notifications.read',
 ];
 

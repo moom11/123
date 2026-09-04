@@ -2,7 +2,7 @@
  * Renderer checks. Run with `npm test` — no printer or network required.
  */
 import { strict as assert } from 'node:assert';
-import { encodeCp864, renderTicket, shapeArabic, CMD } from './escpos.js';
+import { encodeCp864, qrCode, renderReceipt, renderTicket, shapeArabic, CMD } from './escpos.js';
 
 let passed = 0;
 const test = (name: string, fn: () => void) => {
@@ -88,6 +88,88 @@ test('REPRINT tickets are unmistakably marked', () => {
     time: new Date().toISOString(), items: [],
   });
   assert.ok(buf.toString('latin1').includes('*** REPRINT ***'));
+});
+
+// --- The customer's copy, and the tax QR on it -------------------------------
+
+const GS = 0x1d;
+
+/** A realistic settled bill, in halalas throughout. */
+const sampleReceipt = {
+  header: 'MARA LOUNGE',
+  branchNameAr: 'مارا لاونج',
+  vatNumber: '300000000000003',
+  address: 'الرياض',
+  invoiceNumber: 'ORD-2026-000041',
+  orderNumber: 'ORD-2026-000041',
+  tableNumber: '12',
+  cashierName: 'سارة',
+  time: '2026-09-04T12:30:00.000Z',
+  items: [
+    { name: 'فلات وايت', quantity: 2, unitPrice: 1800, lineTotal: 3600 },
+    { name: 'معسل تفاحتين', quantity: 1, unitPrice: 6500, lineTotal: 6500 },
+  ],
+  subtotal: 10100,
+  discountTotal: 0,
+  vatAmount: 1515,
+  vatPercent: 15,
+  grandTotal: 11615,
+  paidBy: 'mada',
+  changeGiven: 0,
+  qr: 'AQphYmMCDzMwMDAwMDAwMDAwMDAwMw==',
+};
+
+test('the QR command emits every block a printer needs', () => {
+  const bytes = qrCode('hello');
+  const blocks = [...bytes].reduce<number[]>((acc, b, i) => {
+    if (b === GS && bytes[i + 1] === 0x28 && bytes[i + 2] === 0x6b) acc.push(i);
+    return acc;
+  }, []);
+  // Model, module size, error correction, store, print.
+  assert.equal(blocks.length, 5);
+  assert.ok(bytes.includes(Buffer.from('hello', 'ascii')));
+});
+
+test('the QR store length is two little-endian bytes', () => {
+  // 300 bytes crosses the single-byte boundary, which is exactly where a naive
+  // implementation truncates the code and prints something unscannable.
+  const bytes = qrCode('x'.repeat(300));
+  const storeLen = 303;
+  assert.ok(bytes.includes(Buffer.from(
+    [GS, 0x28, 0x6b, storeLen & 0xff, (storeLen >> 8) & 0xff, 0x31, 0x50, 0x30],
+  )));
+});
+
+test('the receipt prints the totals actually charged', () => {
+  const text = renderReceipt(sampleReceipt).toString('binary');
+  assert.ok(text.includes('101.00'), 'subtotal');
+  assert.ok(text.includes('15.15'), 'VAT');
+  assert.ok(text.includes('116.15'), 'total');
+  assert.ok(text.includes('PAID BY: MADA'));
+  assert.ok(text.includes('VAT NO: 300000000000003'));
+});
+
+test('the receipt carries the QR payload verbatim', () => {
+  const bytes = renderReceipt(sampleReceipt);
+  assert.ok(bytes.includes(Buffer.from(sampleReceipt.qr, 'ascii')));
+});
+
+test('a discount shows as its own negative line', () => {
+  const text = renderReceipt({ ...sampleReceipt, discountTotal: 1000 }).toString('binary');
+  // The subtotal stays what was rung up; the discount is visible beneath it,
+  // rather than being quietly folded into a smaller number.
+  assert.ok(text.includes('101.00'));
+  assert.ok(text.includes('-10.00'));
+});
+
+test('a credit note does not render as a sale', () => {
+  const sale = renderReceipt(sampleReceipt);
+  const note = renderReceipt({
+    ...sampleReceipt, isCreditNote: true,
+    subtotal: -10100, vatAmount: -1515, grandTotal: -11615,
+  });
+  assert.ok(note.toString('binary').includes('-116.15'));
+  assert.ok(!note.equals(sale));
 });
 
 console.log(`\n${passed} renderer checks passed`);

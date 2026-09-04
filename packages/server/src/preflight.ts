@@ -206,6 +206,79 @@ async function checkBranchData(): Promise<void> {
   }
 }
 
+/**
+ * E-invoicing. A restaurant that takes a riyal without a compliant invoice is
+ * not "missing a feature", it is trading illegally — so this is a blocker, not
+ * a warning, and it checks the credentials rather than the code.
+ */
+async function checkInvoicing(): Promise<void> {
+  const branches = await many<{ id: string; name_ar: string; vat_number: string | null }>(
+    'SELECT id, name_ar, vat_number FROM branches WHERE is_active',
+  );
+  const noVat = branches.filter((b) => !b.vat_number);
+  if (noVat.length > 0) {
+    fail(`${noVat.length} فرع بلا رقم ضريبي: ${noVat.map((b) => b.name_ar).join('، ')} — `
+       + 'الفاتورة الضريبية المبسطة لا تصدر بدونه.');
+  }
+
+  const creds = await many<{
+    branch_id: string; environment: string; has_certificate: boolean;
+    is_production: boolean; expires_at: Date | null;
+  }>(
+    `SELECT branch_id, environment, certificate IS NOT NULL AS has_certificate,
+            is_production, expires_at
+       FROM zatca_credentials`,
+  );
+  const byBranch = new Map(creds.map((c) => [c.branch_id, c]));
+
+  const missing = branches.filter((b) => !byBranch.has(b.id));
+  if (missing.length > 0) {
+    fail(`${missing.length} فرع بلا بيانات اعتماد ZATCA: `
+       + `${missing.map((b) => b.name_ar).join('، ')} — لن يتمكن الكاشير من إغلاق أي فاتورة.`);
+  }
+
+  const notLive = branches
+    .filter((b) => byBranch.has(b.id))
+    .filter((b) => {
+      const c = byBranch.get(b.id)!;
+      return !c.has_certificate || !c.is_production || c.environment !== 'production';
+    });
+  if (notLive.length > 0) {
+    fail(`${notLive.length} فرع ما زال على بيانات اعتماد تجريبية: `
+       + `${notLive.map((b) => b.name_ar).join('، ')} — `
+       + 'أكمل التسجيل في فاتورة واحفظ شهادة CSID الإنتاجية.');
+  } else if (branches.length > 0) {
+    ok(`${branches.length} فرع ببيانات اعتماد ZATCA إنتاجية`);
+  }
+
+  const expiring = creds.filter(
+    (c) => c.expires_at && c.expires_at.getTime() - Date.now() < 30 * 24 * 3600 * 1000,
+  );
+  if (expiring.length > 0) {
+    warn(`${expiring.length} شهادة CSID تنتهي خلال ثلاثين يوماً — جدّدها قبل انتهائها.`);
+  }
+
+  // A chain with a hole is a rejected month, and the cheapest moment to find
+  // out is before opening rather than during a tax audit.
+  const chainBreaks = await many<{ branch_id: string; icv: string }>(
+    `SELECT a.branch_id, a.icv FROM invoices a
+       JOIN invoices b ON b.branch_id = a.branch_id AND b.icv = a.icv - 1
+      WHERE a.pih <> b.invoice_hash`,
+  );
+  if (chainBreaks.length > 0) {
+    fail(`${chainBreaks.length} انقطاع في سلسلة الفواتير — الفاتورة لا تتسلسل مع سابقتها. `
+       + 'لا تفتح قبل معرفة السبب (استرجاع نسخة قديمة غالباً).');
+  }
+
+  const unreported = await one<{ n: string }>(
+    `SELECT count(*)::text AS n FROM invoices
+      WHERE report_status IN ('pending','failed') AND issued_at < now() - interval '24 hours'`,
+  );
+  if (Number(unreported!.n) > 0) {
+    fail(`${unreported!.n} فاتورة مضى على إصدارها أكثر من 24 ساعة دون إبلاغ الهيئة.`);
+  }
+}
+
 async function main(): Promise<void> {
   console.log('\nفحص ما قبل الافتتاح\n');
 
@@ -215,6 +288,7 @@ async function main(): Promise<void> {
   checkFlags();
   await checkMfaEnrolment();
   await checkBranchData();
+  await checkInvoicing();
 
   for (const p of passed) console.log(`  ✅  ${p}`);
   if (warnings.length > 0) {

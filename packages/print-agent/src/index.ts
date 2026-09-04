@@ -18,7 +18,7 @@
  */
 import net from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { renderTicket, type TicketPayload } from './escpos.js';
+import { renderReceipt, renderTicket, type ReceiptPayload, type TicketPayload } from './escpos.js';
 
 interface Config {
   apiUrl: string;
@@ -51,7 +51,7 @@ function loadConfig(): Config {
 interface Job {
   id: string;
   kind: string;
-  payload: TicketPayload;
+  payload: TicketPayload | ReceiptPayload;
   copies: number;
   attempt_count: number;
   ip_address: string;
@@ -131,7 +131,11 @@ class Agent {
 
   private async processJob(job: Job): Promise<void> {
     try {
-      const data = renderTicket(job.payload, job.chars_per_line ?? 42);
+      // A receipt and a station ticket are different documents on the same
+      // printer: one carries money and the tax QR, the other carries none of it.
+      const data = job.kind === 'receipt' || job.kind === 'credit_note'
+        ? renderReceipt(job.payload as ReceiptPayload, job.chars_per_line ?? 42)
+        : renderTicket(job.payload as TicketPayload, job.chars_per_line ?? 42);
       for (let copy = 0; copy < Math.max(1, job.copies); copy += 1) {
         await this.sendToPrinter(job, data);
       }

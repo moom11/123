@@ -1,6 +1,8 @@
 import { splitEvenly } from '@mara/shared';
 import { many, one, withTransaction } from '../../core/db.js';
 import { AUDIT, audit } from '../../core/audit.js';
+import { issueInvoiceForOrder } from '../invoicing/invoicing.service.js';
+import { queueReceipt } from '../invoicing/receipt.service.js';
 import { badRequest, conflict, notFound, unprocessable } from '../../core/errors.js';
 import { EVENTS, publish } from '../../core/realtime.js';
 import { assertBranchAccess, type Principal } from '../../core/principal.js';
@@ -35,10 +37,16 @@ export async function takePayment(
 ): Promise<{
   paid: number; outstanding: number; status: string; payments: unknown[];
   changeGiven: number; pointsEarned: number;
+  invoice?: { id: string; number: string; icv: number; qr: string } | null;
 }> {
   if (input.parts.length === 0) throw badRequest('حدد طريقة دفع واحدة على الأقل');
 
-  return withTransaction(async (client) => {
+  // Work that must happen only once the payment is durably committed. A
+  // printer is slow and sometimes offline; a database transaction is neither
+  // the place to wait for one nor to be undone by one.
+  const afterCommit: Array<() => Promise<unknown>> = [];
+
+  const result = await withTransaction(async (client) => {
     if (input.idempotencyKey) {
       const existing = await many<{ id: string }>(
         'SELECT id FROM payments WHERE branch_id = (SELECT branch_id FROM orders WHERE id = $1) AND idempotency_key = $2',
@@ -128,6 +136,7 @@ export async function takePayment(
     );
 
     let pointsEarned = 0;
+    let issuedInvoice: Awaited<ReturnType<typeof issueInvoiceForOrder>> | null = null;
     const fullySettled = paidAfter >= order.grand_total;
 
     if (fullySettled) {
@@ -169,6 +178,25 @@ export async function takePayment(
         }
       }
 
+      // The tax invoice is issued in the same transaction as the settlement:
+      // an order cannot be paid without one, and an invoice cannot exist for an
+      // unpaid order. If stamping fails the payment rolls back — which is the
+      // correct outcome, because handing a customer an unstamped receipt is a
+      // compliance breach, not an inconvenience.
+      const invoice = await issueInvoiceForOrder(input.orderId, client);
+      issuedInvoice = invoice;
+
+      await audit({
+        action: AUDIT.INVOICE_ISSUED, actorUserId: principal.userId,
+        actorEmployeeId: principal.employeeId, actorLabel: principal.displayName,
+        actorKind: 'employee', branchId: order.branch_id,
+        entityType: 'invoice', entityId: invoice.id,
+        newValue: {
+          invoiceNumber: invoice.invoiceNumber, icv: invoice.icv,
+          grandTotal: invoice.grandTotal, vatAmount: invoice.vatAmount,
+        },
+      }, client);
+
       await audit({
         action: AUDIT.ORDER_PAID, actorUserId: principal.userId,
         actorEmployeeId: principal.employeeId, actorLabel: principal.displayName,
@@ -190,9 +218,38 @@ export async function takePayment(
 
     if (order.table_id) await refreshTableStatus(order.table_id, client);
 
+    // Outside the transaction's critical path: an offline printer must never
+    // roll back a payment the customer has already made.
+    if (issuedInvoice) {
+      const invoiceId = issuedInvoice.id;
+      afterCommit.push(() => queueReceipt(invoiceId, {
+        userId: principal.userId, employeeId: principal.employeeId,
+        cashierName: principal.displayName,
+      }));
+    }
+
     const summary = await summarisePayment(input.orderId, client);
-    return { ...summary, changeGiven, pointsEarned };
+    return {
+      ...summary, changeGiven, pointsEarned,
+      // The POS prints this: the invoice number and the QR the customer's copy
+      // must carry.
+      invoice: issuedInvoice && {
+        id: issuedInvoice.id, number: issuedInvoice.invoiceNumber,
+        icv: issuedInvoice.icv, qr: issuedInvoice.qr,
+      },
+    };
   });
+
+  // The customer has paid and the invoice exists; a failure here costs a piece
+  // of paper that can be reprinted, so it is logged rather than thrown.
+  for (const task of afterCommit) {
+    await task().catch((err: unknown) => {
+      console.error('receipt print could not be queued:',
+        err instanceof Error ? err.message : err);
+    });
+  }
+
+  return result;
 }
 
 async function summarisePayment(orderId: string, client: import('pg').PoolClient) {
