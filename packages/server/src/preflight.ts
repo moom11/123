@@ -221,37 +221,43 @@ async function checkInvoicing(): Promise<void> {
        + 'الفاتورة الضريبية المبسطة لا تصدر بدونه.');
   }
 
-  const creds = await many<{
-    branch_id: string; environment: string; has_certificate: boolean;
-    is_production: boolean; expires_at: Date | null;
+  // Per device, not per branch: ZATCA issues a CSID to each unit that invoices,
+  // and a second till with no certificate is a branch that half works.
+  const tills = await many<{
+    id: string; branch_id: string; branch_name: string; label: string;
+    onboarding_step: string | null; is_production: boolean | null;
+    has_certificate: boolean | null; expires_at: Date | null;
   }>(
-    `SELECT branch_id, environment, certificate IS NOT NULL AS has_certificate,
-            is_production, expires_at
-       FROM zatca_credentials`,
+    `SELECT d.id, d.branch_id, b.name_ar AS branch_name, d.label,
+            z.onboarding_step, z.is_production,
+            z.certificate IS NOT NULL AS has_certificate, z.expires_at
+       FROM devices d
+       JOIN branches b ON b.id = d.branch_id
+       LEFT JOIN zatca_credentials z ON z.device_id = d.id
+      WHERE d.kind = 'cashier' AND d.is_active AND d.deleted_at IS NULL
+        AND b.is_active`,
   );
-  const byBranch = new Map(creds.map((c) => [c.branch_id, c]));
 
-  const missing = branches.filter((b) => !byBranch.has(b.id));
-  if (missing.length > 0) {
-    fail(`${missing.length} فرع بلا بيانات اعتماد ZATCA: `
-       + `${missing.map((b) => b.name_ar).join('، ')} — لن يتمكن الكاشير من إغلاق أي فاتورة.`);
+  const branchesWithoutTill = branches.filter(
+    (b) => !tills.some((t) => t.branch_id === b.id),
+  );
+  if (branchesWithoutTill.length > 0) {
+    fail(`${branchesWithoutTill.length} فرع بلا جهاز كاشير: `
+       + `${branchesWithoutTill.map((b) => b.name_ar).join('، ')} — لن يُقفل أي حساب.`);
   }
 
-  const notLive = branches
-    .filter((b) => byBranch.has(b.id))
-    .filter((b) => {
-      const c = byBranch.get(b.id)!;
-      return !c.has_certificate || !c.is_production || c.environment !== 'production';
-    });
+  const notLive = tills.filter(
+    (t) => !t.has_certificate || !t.is_production || t.onboarding_step !== 'production',
+  );
   if (notLive.length > 0) {
-    fail(`${notLive.length} فرع ما زال على بيانات اعتماد تجريبية: `
-       + `${notLive.map((b) => b.name_ar).join('، ')} — `
-       + 'أكمل التسجيل في فاتورة واحفظ شهادة CSID الإنتاجية.');
-  } else if (branches.length > 0) {
-    ok(`${branches.length} فرع ببيانات اعتماد ZATCA إنتاجية`);
+    fail(`${notLive.length} جهاز كاشير لم يُكمل التسجيل لدى الهيئة: `
+       + `${notLive.map((t) => `${t.label} — ${t.branch_name}`).join('، ')} — `
+       + 'أنشئ CSR ثم أكمل التسجيل برمز بوابة فاتورة.');
+  } else if (tills.length > 0) {
+    ok(`${tills.length} جهاز كاشير بشهادة CSID إنتاجية`);
   }
 
-  const expiring = creds.filter(
+  const expiring = tills.filter(
     (c) => c.expires_at && c.expires_at.getTime() - Date.now() < 30 * 24 * 3600 * 1000,
   );
   if (expiring.length > 0) {
@@ -260,14 +266,20 @@ async function checkInvoicing(): Promise<void> {
 
   // A chain with a hole is a rejected month, and the cheapest moment to find
   // out is before opening rather than during a tax audit.
-  const chainBreaks = await many<{ branch_id: string; icv: string }>(
-    `SELECT a.branch_id, a.icv FROM invoices a
-       JOIN invoices b ON b.branch_id = a.branch_id AND b.icv = a.icv - 1
+  // Per device: the chain belongs to the EGS unit, so two tills in one branch
+  // legitimately interleave. Joining on branch would report breaks that are
+  // not there — and hide the real ones behind the noise.
+  const chainBreaks = await many<{ label: string; icv: string }>(
+    `SELECT d.label, a.icv FROM invoices a
+       JOIN invoices b ON b.device_id = a.device_id AND b.icv = a.icv - 1
+       JOIN devices d ON d.id = a.device_id
       WHERE a.pih <> b.invoice_hash`,
   );
   if (chainBreaks.length > 0) {
-    fail(`${chainBreaks.length} انقطاع في سلسلة الفواتير — الفاتورة لا تتسلسل مع سابقتها. `
-       + 'لا تفتح قبل معرفة السبب (استرجاع نسخة قديمة غالباً).');
+    fail(`${chainBreaks.length} انقطاع في سلسلة الفواتير `
+       + `(${[...new Set(chainBreaks.map((c) => c.label))].join('، ')}) — `
+       + 'الفاتورة لا تتسلسل مع سابقتها. لا تفتح قبل معرفة السبب '
+       + '(استرجاع نسخة احتياطية قديمة هو السبب الأشيع).');
   }
 
   const unreported = await one<{ n: string }>(

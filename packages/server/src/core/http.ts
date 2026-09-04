@@ -50,6 +50,21 @@ function bearer(req: FastifyRequest): string | null {
  * can still benefit from knowing who the caller is.
  */
 export async function attachPrincipal(req: FastifyRequest): Promise<void> {
+  // Which terminal is this? Resolved first and independently of the session:
+  // the session says WHO, the device token says WHERE, and a terminal asks what
+  // it is at startup — before anyone has logged in.
+  const deviceHeader = req.headers['x-device-token'];
+  const deviceToken = Array.isArray(deviceHeader) ? deviceHeader[0] : deviceHeader;
+  if (deviceToken) {
+    const { resolveDevice, touchDevice } =
+      await import('../modules/devices/devices.service.js');
+    const device = await resolveDevice(deviceToken);
+    if (device) {
+      req.device = device;
+      touchDevice(device.id, req.ip);
+    }
+  }
+
   const token = bearer(req);
   if (!token) return;
 

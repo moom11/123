@@ -3,6 +3,7 @@ import { many, one, withTransaction } from '../../core/db.js';
 import { AUDIT, audit } from '../../core/audit.js';
 import { issueInvoiceForOrder } from '../invoicing/invoicing.service.js';
 import { queueReceipt } from '../invoicing/receipt.service.js';
+import { requireCashierDevice, type Device } from '../devices/devices.service.js';
 import { badRequest, conflict, notFound, unprocessable } from '../../core/errors.js';
 import { EVENTS, publish } from '../../core/realtime.js';
 import { assertBranchAccess, type Principal } from '../../core/principal.js';
@@ -31,6 +32,8 @@ export async function takePayment(
   input: {
     orderId: string;
     parts: PaymentPart[];
+    /** The terminal the request came from. Must be a till. */
+    device?: Device | null;
     idempotencyKey?: string | null;
     closeOrder?: boolean;
   },
@@ -45,6 +48,12 @@ export async function takePayment(
   // printer is slow and sometimes offline; a database transaction is neither
   // the place to wait for one nor to be undone by one.
   const afterCommit: Array<() => Promise<unknown>> = [];
+
+  // The kind check needs nothing but the device, so it runs before any path
+  // that could return early — including the idempotent replay below.
+  if (input.device && input.device.kind !== 'cashier') {
+    requireCashierDevice(input.device, input.device.branchId);
+  }
 
   const result = await withTransaction(async (client) => {
     if (input.idempotencyKey) {
@@ -66,6 +75,10 @@ export async function takePayment(
     );
     if (!order) throw notFound('الطلب غير موجود');
     assertBranchAccess(principal, order.branch_id);
+
+    // Checked after the order is loaded so the message can name the branch
+    // mismatch, and before any money moves.
+    const till = requireCashierDevice(input.device ?? null, order.branch_id);
     if (order.status === 'cancelled') throw unprocessable('الطلب ملغي');
     if (order.status === 'paid') {
       // Already settled — return the existing state rather than double-charging.
@@ -111,8 +124,8 @@ export async function takePayment(
         `INSERT INTO payments (
            payment_number, branch_id, order_id, method, amount, tendered,
            change_given, reference, split_group, split_item_ids, is_partial,
-           idempotency_key, taken_by_employee_id, taken_by_user_id
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
+           idempotency_key, taken_by_employee_id, taken_by_user_id, device_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
         [
           numRow!.n, order.branch_id, input.orderId, part.method, part.amount,
           part.tendered ?? null, change, part.reference ?? null, splitGroup,
@@ -120,7 +133,7 @@ export async function takePayment(
           // Only the first part carries the idempotency key; the unique index
           // is what actually blocks a duplicate submission of the whole batch.
           created.length === 0 ? input.idempotencyKey ?? null : null,
-          principal.employeeId, principal.userId,
+          principal.employeeId, principal.userId, till.id,
         ],
         client,
       ).catch((err: { code?: string }) => {
@@ -183,7 +196,7 @@ export async function takePayment(
       // unpaid order. If stamping fails the payment rolls back — which is the
       // correct outcome, because handing a customer an unstamped receipt is a
       // compliance breach, not an inconvenience.
-      const invoice = await issueInvoiceForOrder(input.orderId, client);
+      const invoice = await issueInvoiceForOrder(input.orderId, till, client);
       issuedInvoice = invoice;
 
       await audit({
@@ -256,6 +269,13 @@ async function summarisePayment(orderId: string, client: import('pg').PoolClient
   const order = await one<{ grand_total: number; paid_total: number; status: string }>(
     'SELECT grand_total, paid_total, status FROM orders WHERE id = $1', [orderId], client,
   );
+  // Include the invoice on every path, not only a first settlement: a retried
+  // submit is exactly when the till most needs the number and QR to reprint.
+  const invoice = await one<{ id: string; invoice_number: string; icv: string; qr_tlv: string }>(
+    `SELECT id, invoice_number, icv, qr_tlv FROM invoices
+      WHERE order_id = $1 AND document_type = 'invoice'`,
+    [orderId], client,
+  );
   const payments = await many(
     `SELECT id, payment_number, method, amount, tendered, change_given, reference,
             split_group, created_at
@@ -269,6 +289,10 @@ async function summarisePayment(orderId: string, client: import('pg').PoolClient
     payments,
     changeGiven: 0,
     pointsEarned: 0,
+    invoice: invoice && {
+      id: invoice.id, number: invoice.invoice_number,
+      icv: Number(invoice.icv), qr: invoice.qr_tlv,
+    },
   };
 }
 

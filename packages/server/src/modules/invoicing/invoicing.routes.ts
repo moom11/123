@@ -3,8 +3,8 @@ import { z } from 'zod';
 import { parse, requirePermission } from '../../core/http.js';
 import { requirePrincipal, resolveBranch } from '../../core/principal.js';
 import {
-  getInvoice, listInvoices, provisionCredentials, reportPending, storeCertificate,
-  verifyChain,
+  getInvoice, listInvoices, onboardDevice, provisionCredentials, reportPending,
+  storeCertificate, verifyChain,
 } from './invoicing.service.js';
 import { issueCreditNote } from './credit-note.service.js';
 
@@ -69,45 +69,72 @@ export async function invoicingRoutes(app: FastifyInstance): Promise<void> {
       return issueCreditNote(p, id, body.reason);
     });
 
-  // --- Credentials ----------------------------------------------------------
+  // --- ZATCA onboarding, per device ----------------------------------------
+  //
+  // The order is fixed and each step gates the next: CSR, then the compliance
+  // and production CSIDs. A device that stops halfway can sign and print, and
+  // every one of those invoices is worthless — so the step reached is stored
+  // and preflight refuses to open on anything below production.
 
   app.get('/invoices/credentials',
     { preHandler: requirePermission('invoices.manage_credentials') }, async (req) => {
       const p = requirePrincipal(req);
       const q = parse(z.object({ branchId: z.string().uuid().optional() }), req.query);
       const branchId = resolveBranch(p, q.branchId);
-      const { one } = await import('../../core/db.js');
+      const { many } = await import('../../core/db.js');
       // Deliberately never selects private_key_enc. There is no endpoint that
       // returns the stamping key, by design.
-      const row = await one(
-        `SELECT branch_id, environment, public_key_der, certificate IS NOT NULL AS has_certificate,
-                certificate_serial, is_production, onboarded_at, expires_at
-           FROM zatca_credentials WHERE branch_id = $1`,
+      const rows = await many(
+        `SELECT z.device_id, d.label AS device_label, d.serial_number,
+                z.environment, z.onboarding_step, z.egs_serial, z.is_production,
+                z.certificate IS NOT NULL AS has_certificate,
+                z.csr IS NOT NULL AS has_csr,
+                z.onboarded_at, z.expires_at
+           FROM zatca_credentials z JOIN devices d ON d.id = z.device_id
+          WHERE z.branch_id = $1 AND d.deleted_at IS NULL
+          ORDER BY d.label`,
         [branchId],
       );
-      return { credentials: row ?? null };
+      return { credentials: rows };
     });
 
-  app.post('/invoices/credentials',
+  /** Step 0: generate the key (once) and build the certificate request. */
+  app.post('/devices/:id/zatca/csr',
     { preHandler: requirePermission('invoices.manage_credentials') }, async (req) => {
       const p = requirePrincipal(req);
+      const { id } = parse(z.object({ id: z.string().uuid() }), req.params);
       const body = parse(z.object({
-        branchId: z.string().uuid().optional(),
         environment: z.enum(['sandbox', 'simulation', 'production']).default('sandbox'),
       }), req.body ?? {});
-      return provisionCredentials(p, resolveBranch(p, body.branchId), body);
+      return provisionCredentials(p, id, body);
     });
 
-  app.post('/invoices/credentials/certificate',
+  /**
+   * Steps 1-3: exchange the CSR for a compliance CSID and then a production
+   * one. The OTP comes from the taxpayer's Fatoora portal, lives for minutes,
+   * and is never stored.
+   */
+  app.post('/devices/:id/zatca/onboard',
     { preHandler: requirePermission('invoices.manage_credentials') }, async (req) => {
       const p = requirePrincipal(req);
+      const { id } = parse(z.object({ id: z.string().uuid() }), req.params);
+      const { otp } = parse(z.object({
+        otp: z.string().min(4, 'أدخل رمز التحقق من بوابة فاتورة').max(20),
+      }), req.body);
+      return onboardDevice(p, id, otp);
+    });
+
+  /** Escape hatch: a CSID obtained out of band. */
+  app.post('/devices/:id/zatca/certificate',
+    { preHandler: requirePermission('invoices.manage_credentials') }, async (req) => {
+      const p = requirePrincipal(req);
+      const { id } = parse(z.object({ id: z.string().uuid() }), req.params);
       const body = parse(z.object({
-        branchId: z.string().uuid().optional(),
         certificate: z.string().min(20, 'الصق شهادة CSID كما أعادتها الهيئة'),
         secret: z.string().min(1).optional(),
         isProduction: z.boolean().default(false),
       }), req.body);
-      await storeCertificate(p, resolveBranch(p, body.branchId), body);
+      await storeCertificate(p, id, body);
       return { ok: true };
     });
 }

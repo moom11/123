@@ -12,6 +12,7 @@
 const REFRESH_KEY = 'mara.refresh';
 const BRANCH_KEY = 'mara.branch';
 const BASE_KEY = 'mara.api';
+const DEVICE_KEY = 'mara.device';
 
 /**
  * Where the API lives.
@@ -60,6 +61,21 @@ export function hasSession(): boolean {
 export function rememberBranch(id: string): void { localStorage.setItem(BRANCH_KEY, id); }
 export function rememberedBranch(): string | null { return localStorage.getItem(BRANCH_KEY); }
 
+/**
+ * Which terminal this is.
+ *
+ * Pinned to the machine, not to the person: the token is entered once when the
+ * device is set up and stays through every shift and every login. A till closes
+ * bills; a waiter's tablet does not, and the server is what enforces that — this
+ * only tells it which machine is asking.
+ */
+export function setDeviceToken(token: string): void {
+  const clean = token.trim();
+  if (clean) localStorage.setItem(DEVICE_KEY, clean);
+  else localStorage.removeItem(DEVICE_KEY);
+}
+export function deviceToken(): string | null { return localStorage.getItem(DEVICE_KEY); }
+
 async function refresh(): Promise<boolean> {
   const token = localStorage.getItem(REFRESH_KEY);
   if (!token) return false;
@@ -107,6 +123,7 @@ export async function api<T = any>(path: string, opts: RequestOptions = {}): Pro
       // branch server-side and this is ignored for them; a multi-branch admin
       // has no home branch, so without it every screen would come back empty.
       ...(rememberedBranch() ? { 'X-Branch-Id': rememberedBranch()! } : {}),
+      ...(deviceToken() ? { 'X-Device-Token': deviceToken()! } : {}),
       ...opts.headers,
     },
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,

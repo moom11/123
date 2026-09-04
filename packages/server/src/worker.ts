@@ -104,7 +104,8 @@ function preflight(origin: string | null): Response {
     headers.set('access-control-allow-credentials', 'true');
     headers.set('access-control-allow-methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
     headers.set('access-control-allow-headers',
-      'Content-Type, Authorization, X-Device-Label, X-Idempotency-Key, X-Branch-Id');
+      'Content-Type, Authorization, X-Device-Label, X-Idempotency-Key, X-Branch-Id, '
+      + 'X-Device-Token');
     headers.set('access-control-max-age', '86400');
   }
   return new Response(null, { status: 204, headers });

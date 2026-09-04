@@ -1,8 +1,9 @@
 import { afterAll, describe, expect, test } from 'vitest';
-import { createVerify, createPublicKey } from 'node:crypto';
+import { createHash, createPublicKey, createVerify } from 'node:crypto';
 import {
   auth, closeApp, getApp, getBranchId, getCustomerId, getTableId, loginAdmin,
   loginEmployee,
+  authAtTill,
 } from './helpers.js';
 import { many, one } from '../src/core/db.js';
 import { decodeQr, encodeQr, halalasToRiyalString } from '../src/core/zatca/tlv.js';
@@ -20,8 +21,14 @@ async function ownerAuth(): Promise<Record<string, string>> {
   return { ...auth(session), 'x-branch-id': await getBranchId() };
 }
 
-/** ZATCA's mandated first PIH: base64 of the SHA-256 hex of "0". */
-const GENESIS = 'NWZlY2ViNjZmZmM4NmYzOGQ5NTI3ODZjNmQ2OTZjNzljMmRiYzIzOWRkNGU5MWI0NjcyOWQ3M2EyN2ZiNTdlOQ==';
+/**
+ * ZATCA's mandated first PIH: base64 of the SHA-256 hex of the string "0".
+ * Derived here rather than copied from the source, so the test would catch the
+ * value being changed rather than agree with whatever it was changed to.
+ */
+const GENESIS = Buffer.from(
+  createHash('sha256').update('0').digest('hex'), 'utf8',
+).toString('base64');
 
 afterAll(async () => { await closeApp(); });
 
@@ -68,7 +75,7 @@ async function sellAndSettle(tableNumber: string): Promise<{
   );
 
   const paid = await app.inject({
-    method: 'POST', url: `/api/orders/${orderId}/pay`, headers: auth(cashier),
+    method: 'POST', url: `/api/orders/${orderId}/pay`, headers: await authAtTill(cashier),
     payload: {
       parts: [{ method: 'cash', amount: Number(order!.grand_total),
                 tendered: Number(order!.grand_total) }],
@@ -231,7 +238,7 @@ describe('one invoice per sale', () => {
     );
     // A second settlement attempt on a paid order.
     await app.inject({
-      method: 'POST', url: `/api/orders/${orderId}/pay`, headers: auth(cashier),
+      method: 'POST', url: `/api/orders/${orderId}/pay`, headers: await authAtTill(cashier),
       payload: { parts: [{ method: 'cash', amount: 100 }] },
     });
     const after = await one<{ n: string }>(
@@ -292,12 +299,15 @@ describe('credit notes', () => {
 });
 
 describe('who may touch the stamping identity', () => {
-  test('a cashier cannot provision credentials', async () => {
+  test('a cashier cannot start ZATCA onboarding for a till', async () => {
     const app = await getApp();
     const cashier = await loginEmployee('2001', '4826');
+    const device = await one<{ id: string }>(
+      `SELECT id FROM devices WHERE kind = 'cashier' AND is_active LIMIT 1`,
+    );
     const res = await app.inject({
-      method: 'POST', url: '/api/invoices/credentials', headers: auth(cashier),
-      payload: { environment: 'sandbox' },
+      method: 'POST', url: `/api/devices/${device!.id}/zatca/csr`,
+      headers: auth(cashier), payload: { environment: 'sandbox' },
     });
     expect(res.statusCode).toBe(403);
   });
@@ -381,7 +391,7 @@ describe('an order with a named customer', () => {
       'SELECT grand_total FROM orders WHERE id = $1', [orderId],
     );
     const paid = await app.inject({
-      method: 'POST', url: `/api/orders/${orderId}/pay`, headers: auth(cashier),
+      method: 'POST', url: `/api/orders/${orderId}/pay`, headers: await authAtTill(cashier),
       payload: { parts: [{ method: 'cash', amount: Number(order!.grand_total) }] },
     });
     expect(paid.statusCode, paid.body).toBe(200);

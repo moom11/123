@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import {
   auth, getApp, getBranchId, getCustomerId, getItemId, getProductId,
   getQrValue, getTableId, loginAdmin, loginEmployee, otpCapture,
+  authAtTill,
 } from './helpers.js';
 import { one, pool } from '../src/core/db.js';
 
@@ -139,7 +140,7 @@ export async function runCustomerJourney(): Promise<CustomerJourneyResult> {
     'SELECT grand_total FROM orders WHERE id = $1', [orderId],
   );
   await app.inject({
-    method: 'POST', url: `/api/orders/${orderId}/pay`, headers: auth(cashier),
+    method: 'POST', url: `/api/orders/${orderId}/pay`, headers: await authAtTill(cashier),
     payload: {
       parts: [{ method: 'mada', amount: Number(current!.grand_total), reference: 'APPR-1' }],
       idempotencyKey: `journey-pay-${Date.now()}`,

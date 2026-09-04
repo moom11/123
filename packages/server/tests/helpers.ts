@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.js';
 import { closePool, one, pool } from '../src/core/db.js';
+import { hashToken } from '../src/core/crypto.js';
 import { setMessageProvider, type MessageProvider } from '../src/modules/customers/whatsapp.provider.js';
 
 /**
@@ -93,6 +94,48 @@ export async function loginEmployee(code: string, pin: string): Promise<Session>
 
 export function auth(session: Session): Record<string, string> {
   return { authorization: `Bearer ${session.accessToken}` };
+}
+
+/**
+ * A bill can only be closed from a registered till, so tests that settle have
+ * to say which terminal they are standing at — exactly as the POS does.
+ *
+ * The seeded till's token is printed once and not recoverable, so this pins a
+ * known one onto it instead of trying to read it back.
+ */
+const TILL_TOKEN = 'test-till-token-do-not-use-in-production';
+let tillPinned = false;
+
+export async function till(): Promise<Record<string, string>> {
+  if (!tillPinned) {
+    await pool.query(
+      `UPDATE devices SET token_hash = $1
+        WHERE id = (SELECT id FROM devices
+                     WHERE kind = 'cashier' AND is_active AND deleted_at IS NULL
+                     ORDER BY registered_at LIMIT 1)`,
+      [hashToken(TILL_TOKEN)],
+    );
+    tillPinned = true;
+  }
+  return { 'x-device-token': TILL_TOKEN };
+}
+
+/** A waiter's tablet: takes orders, must never be able to settle one. */
+export async function waiterDevice(): Promise<Record<string, string>> {
+  const token = 'test-waiter-token-do-not-use-in-production';
+  await pool.query(
+    `UPDATE devices SET token_hash = $1
+      WHERE id = (SELECT id FROM devices
+                   WHERE kind = 'waiter' AND is_active AND deleted_at IS NULL
+                   ORDER BY registered_at LIMIT 1)`,
+    [hashToken(token)],
+  );
+  return { 'x-device-token': token };
+}
+
+/** Session headers plus the till, for any request that closes a bill. */
+export async function authAtTill(session: Session): Promise<Record<string, string>> {
+  return { ...auth(session), ...(await till()) };
 }
 
 export async function getBranchId(): Promise<string> {

@@ -11,18 +11,24 @@
  * and a background job drains the queue afterwards.
  */
 import type { PoolClient } from 'pg';
-import { randomUUID } from 'node:crypto';
-import { many, one, withTransaction } from '../../core/db.js';
+import { createHash, randomUUID } from 'node:crypto';
+import { many, one, pool, withTransaction } from '../../core/db.js';
 import { decryptSecret, encryptSecret } from '../../core/crypto.js';
 import { badRequest, conflict, notFound } from '../../core/errors.js';
 import { AUDIT, audit } from '../../core/audit.js';
 import type { Principal } from '../../core/principal.js';
 import { assertBranchAccess } from '../../core/principal.js';
+import type { Device } from '../devices/devices.service.js';
 import { canonicalInvoiceXml, signedInvoiceXml } from '../../core/zatca/xml.js';
 import type { InvoiceInput, InvoiceLineInput } from '../../core/zatca/xml.js';
 import {
   certificateSignature, generateStampKeyPair, invoiceHash, publicKeyDerFromPrivate, stamp,
 } from '../../core/zatca/sign.js';
+import { buildCsr, egsSerial, pemBody, type EgsUnit } from '../../core/zatca/csr.js';
+import {
+  certificateExpiry, requestComplianceCsid, requestProductionCsid,
+  type ZatcaEnvironment,
+} from '../../core/zatca/onboarding.js';
 import { encodeQr, halalasToRiyalString } from '../../core/zatca/tlv.js';
 
 /** UN/ECE 4461 payment means. Card and cash are all a restaurant issues. */
@@ -52,15 +58,16 @@ export interface IssuedInvoice {
  * between a valid chain and a rejected month.
  */
 async function allocateChainLink(
-  branchId: string, client: PoolClient,
+  device: Device, client: PoolClient,
 ): Promise<{ icv: number; pih: string }> {
   await client.query(
-    `INSERT INTO invoice_counters (branch_id) VALUES ($1) ON CONFLICT DO NOTHING`,
-    [branchId],
+    `INSERT INTO invoice_counters (device_id, branch_id) VALUES ($1, $2)
+     ON CONFLICT DO NOTHING`,
+    [device.id, device.branchId],
   );
   const counter = await one<{ last_icv: string; last_hash: string }>(
-    'SELECT last_icv, last_hash FROM invoice_counters WHERE branch_id = $1 FOR UPDATE',
-    [branchId], client,
+    'SELECT last_icv, last_hash FROM invoice_counters WHERE device_id = $1 FOR UPDATE',
+    [device.id], client,
   );
   return { icv: Number(counter!.last_icv) + 1, pih: counter!.last_hash };
 }
@@ -74,14 +81,16 @@ interface CredentialRow {
  * which must fail loudly at payment time rather than silently printing a
  * receipt with no QR — an unstamped sale is a compliance breach, not a warning.
  */
-async function credentials(branchId: string, client: PoolClient): Promise<CredentialRow> {
+async function credentials(device: Device, client: PoolClient): Promise<CredentialRow> {
   const row = await one<CredentialRow>(
-    'SELECT private_key_enc, certificate, is_production FROM zatca_credentials WHERE branch_id = $1',
-    [branchId], client,
+    `SELECT private_key_enc, certificate, is_production
+       FROM zatca_credentials WHERE device_id = $1`,
+    [device.id], client,
   );
   if (!row) {
     throw badRequest(
-      'لم تُهيَّأ الفوترة الإلكترونية لهذا الفرع — أنشئ بيانات الاعتماد من شاشة الإعدادات قبل الافتتاح.',
+      `«${device.label}» غير مهيّأ للفوترة الإلكترونية — `
+      + 'ابدأ تسجيل الجهاز لدى الهيئة من شاشة الأجهزة قبل الافتتاح.',
     );
   }
   return row;
@@ -93,7 +102,7 @@ async function credentials(branchId: string, client: PoolClient): Promise<Creden
  * issued rather than minting a second one and burning a counter value.
  */
 export async function issueInvoiceForOrder(
-  orderId: string, client: PoolClient,
+  orderId: string, device: Device, client: PoolClient,
 ): Promise<IssuedInvoice> {
   const existing = await one<{ id: string }>(
     `SELECT id FROM invoices WHERE order_id = $1 AND document_type = 'invoice'`,
@@ -176,8 +185,8 @@ export async function issueInvoiceForOrder(
       'SELECT full_name FROM customers WHERE id = $1', [order.customer_id], client)
     : null;
 
-  const { icv, pih } = await allocateChainLink(order.branch_id, client);
-  const creds = await credentials(order.branch_id, client);
+  const { icv, pih } = await allocateChainLink(device, client);
+  const creds = await credentials(device, client);
   const privateKeyPem = decryptSecret(creds.private_key_enc);
 
   const issuedAt = new Date();
@@ -230,13 +239,13 @@ export async function issueInvoiceForOrder(
 
   const row = await one<{ id: string }>(
     `INSERT INTO invoices (
-       branch_id, order_id, invoice_uuid, invoice_number, icv, pih, invoice_hash,
-       document_type, subtotal, discount_total, vat_amount, grand_total, vat_percent,
-       xml, qr_tlv, signature, issued_at
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,'invoice',$8,$9,$10,$11,$12,$13,$14,$15,$16)
+       branch_id, device_id, order_id, invoice_uuid, invoice_number, icv, pih,
+       invoice_hash, document_type, subtotal, discount_total, vat_amount,
+       grand_total, vat_percent, xml, qr_tlv, signature, issued_at
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'invoice',$9,$10,$11,$12,$13,$14,$15,$16,$17)
      RETURNING id`,
     [
-      order.branch_id, orderId, uuid, order.order_number, icv, pih, hash,
+      order.branch_id, device.id, orderId, uuid, order.order_number, icv, pih, hash,
       subtotal, discountTotal, vatAmount, Number(order.grand_total), vatPercent,
       xml, qr, signature.toString('base64'), issuedAt,
     ],
@@ -251,8 +260,8 @@ export async function issueInvoiceForOrder(
   // Advance the chain only after the invoice is safely written, so a failure
   // above cannot leave a counter pointing at an invoice that does not exist.
   await client.query(
-    'UPDATE invoice_counters SET last_icv = $2, last_hash = $3, updated_at = now() WHERE branch_id = $1',
-    [order.branch_id, icv, hash],
+    'UPDATE invoice_counters SET last_icv = $2, last_hash = $3, updated_at = now() WHERE device_id = $1',
+    [device.id, icv, hash],
   );
 
   return {
@@ -277,61 +286,201 @@ async function loadInvoice(id: string, client: PoolClient): Promise<IssuedInvoic
 }
 
 /**
- * Set up a branch's stamping identity. Generates the key pair here so the
- * private key never travels; returns the CSR to submit to ZATCA.
+ * Step 0 of onboarding: give the device a key and a certificate request.
+ *
+ * The key is generated here and never leaves — what travels is a CSR, which is
+ * a public description of the device signed by the key it describes. Whoever
+ * holds the private key can stamp invoices in this branch's name, so there is
+ * no endpoint that returns it, by design.
  */
 export async function provisionCredentials(
-  principal: Principal, branchId: string,
+  principal: Principal, deviceId: string,
   input: { environment: 'sandbox' | 'simulation' | 'production' },
-): Promise<{ publicKeyDer: string; environment: string }> {
-  assertBranchAccess(principal, branchId);
-
-  const existing = await one<{ id: string }>(
-    'SELECT id FROM zatca_credentials WHERE branch_id = $1', [branchId],
+): Promise<{ csr: string; egsSerial: string; environment: string }> {
+  const device = await one<{
+    branch_id: string; kind: string; label: string; serial_number: string;
+  }>(
+    'SELECT branch_id, kind, label, serial_number FROM devices WHERE id = $1 AND deleted_at IS NULL',
+    [deviceId],
   );
-  if (existing) {
-    throw conflict('بيانات الاعتماد مهيّأة لهذا الفرع — لا تُستبدل إلا بتدوير مقصود.');
+  if (!device) throw notFound('الجهاز غير موجود');
+  assertBranchAccess(principal, device.branch_id);
+
+  // Only a device that issues invoices is an EGS unit. Registering a waiter's
+  // tablet with ZATCA would be registering a machine that never invoices.
+  if (device.kind !== 'cashier') {
+    throw badRequest(
+      `«${device.label}» ليس جهاز كاشير — الهيئة تُصدر شهادة لأجهزة إصدار الفواتير فقط.`,
+    );
   }
 
-  const pair = generateStampKeyPair();
-  await one(
-    `INSERT INTO zatca_credentials
-       (branch_id, environment, private_key_enc, public_key_der, created_by)
-     VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-    [branchId, input.environment, encryptSecret(pair.privateKeyPem), pair.publicKeyDer,
-     principal.userId],
+  const branch = await one<{
+    name: string; name_ar: string; vat_number: string | null; address: string | null;
+  }>(
+    'SELECT name, name_ar, vat_number, address FROM branches WHERE id = $1',
+    [device.branch_id],
   );
+  if (!branch?.vat_number) {
+    throw badRequest('الفرع بلا رقم ضريبي — أضفه قبل تسجيل الجهاز لدى الهيئة.');
+  }
+
+  const existing = await one<{ id: string; private_key_enc: string; onboarding_step: string }>(
+    'SELECT id, private_key_enc, onboarding_step FROM zatca_credentials WHERE device_id = $1',
+    [deviceId],
+  );
+  // Re-issuing a CSR before onboarding finishes is normal (a mistyped OTP, an
+  // expired one). Re-keying a device that already has a production CSID is not:
+  // it would orphan every invoice already stamped with the old key.
+  if (existing && existing.onboarding_step === 'production') {
+    throw conflict(
+      'هذا الجهاز يحمل شهادة إنتاجية — التجديد يتم بـ renew لا بإنشاء مفتاح جديد.',
+    );
+  }
+
+  const pair = existing
+    ? { privateKeyPem: decryptSecret(existing.private_key_enc),
+        publicKeyDer: publicKeyDerFromPrivate(decryptSecret(existing.private_key_enc)).toString('base64') }
+    : generateStampKeyPair();
+
+  const unit: EgsUnit = {
+    environment: input.environment,
+    commonName: `${branch.name}-${device.serial_number}`,
+    vatNumber: branch.vat_number,
+    organizationName: branch.name,
+    branchName: branch.name_ar,
+    registeredAddress: branch.address ?? 'Riyadh',
+    businessCategory: 'Restaurant',
+    serialNumber: device.serial_number,
+  };
+  const csr = buildCsr(pair.privateKeyPem, unit);
+  const serial = egsSerial(unit);
+
+  if (existing) {
+    await pool.query(
+      `UPDATE zatca_credentials
+          SET environment = $2, csr = $3, egs_serial = $4, onboarding_step = 'csr',
+              updated_at = now()
+        WHERE device_id = $1`,
+      [deviceId, input.environment, csr, serial],
+    );
+  } else {
+    await pool.query(
+      `INSERT INTO zatca_credentials
+         (branch_id, device_id, environment, private_key_enc, public_key_der,
+          csr, egs_serial, onboarding_step, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'csr',$8)`,
+      [device.branch_id, deviceId, input.environment,
+       encryptSecret(pair.privateKeyPem), pair.publicKeyDer, csr, serial,
+       principal.userId],
+    );
+  }
 
   await audit({
     action: AUDIT.ZATCA_PROVISIONED, actorUserId: principal.userId,
     actorEmployeeId: principal.employeeId, actorLabel: principal.displayName,
-    branchId, entityType: 'zatca_credentials', entityId: branchId,
-    newValue: { environment: input.environment },
+    branchId: device.branch_id, entityType: 'device', entityId: deviceId,
+    newValue: { environment: input.environment, egsSerial: serial },
   });
 
-  return { publicKeyDer: pair.publicKeyDer, environment: input.environment };
+  return { csr, egsSerial: serial, environment: input.environment };
 }
 
-/** Store the certificate ZATCA returns for the submitted CSR. */
-export async function storeCertificate(
-  principal: Principal, branchId: string,
-  input: { certificate: string; secret?: string | null; isProduction: boolean },
-): Promise<void> {
-  assertBranchAccess(principal, branchId);
-  const updated = await one<{ id: string }>(
-    `UPDATE zatca_credentials
-        SET certificate = $2, secret = $3, is_production = $4,
-            onboarded_at = now(), updated_at = now()
-      WHERE branch_id = $1 RETURNING id`,
-    [branchId, input.certificate, input.secret ?? null, input.isProduction],
+/**
+ * Steps 1 and 3, driven end to end.
+ *
+ * The OTP comes from the taxpayer's Fatoora portal and lives for minutes — it
+ * is the human's proof that this device is theirs to register, so it is passed
+ * straight through and never stored.
+ */
+export async function onboardDevice(
+  principal: Principal, deviceId: string, otp: string,
+): Promise<{ step: string; isProduction: boolean; expiresAt: Date | null }> {
+  const row = await one<{
+    branch_id: string; label: string; environment: ZatcaEnvironment; csr: string | null;
+  }>(
+    `SELECT d.branch_id, d.label, z.environment, z.csr
+       FROM devices d JOIN zatca_credentials z ON z.device_id = d.id
+      WHERE d.id = $1`,
+    [deviceId],
   );
-  if (!updated) throw notFound('لا توجد بيانات اعتماد لهذا الفرع');
+  if (!row) throw notFound('لم يُنشأ طلب شهادة لهذا الجهاز بعد');
+  assertBranchAccess(principal, row.branch_id);
+  if (!row.csr) throw badRequest('لا يوجد CSR — أنشئه أولاً');
+
+  const compliance = await requestComplianceCsid(row.environment, pemBody(row.csr), otp);
+  await pool.query(
+    `UPDATE zatca_credentials
+        SET compliance_certificate = $2, compliance_secret = $3,
+            compliance_request_id = $4, onboarding_step = 'compliance',
+            updated_at = now()
+      WHERE device_id = $1`,
+    [deviceId, compliance.certificate, compliance.secret, compliance.requestId],
+  );
+
+  // The production CSID is only issued for a request whose compliance checks
+  // passed, so a failure here is ZATCA saying the device is not ready — not a
+  // transport problem to retry blindly.
+  const production = await requestProductionCsid(
+    row.environment,
+    { certificate: compliance.certificate, secret: compliance.secret },
+    compliance.requestId,
+  );
+
+  const expiresAt = certificateExpiry(production.certificate);
+  await pool.query(
+    `UPDATE zatca_credentials
+        SET certificate = $2, secret = $3, is_production = TRUE,
+            onboarding_step = 'production', onboarded_at = now(),
+            expires_at = $4, updated_at = now()
+      WHERE device_id = $1`,
+    [deviceId, production.certificate, production.secret, expiresAt],
+  );
 
   await audit({
     action: AUDIT.ZATCA_CERTIFICATE_STORED, actorUserId: principal.userId,
     actorEmployeeId: principal.employeeId, actorLabel: principal.displayName,
-    branchId, entityType: 'zatca_credentials', entityId: branchId,
-    newValue: { isProduction: input.isProduction },
+    branchId: row.branch_id, entityType: 'device', entityId: deviceId,
+    newValue: {
+      device: row.label, environment: row.environment,
+      expiresAt: expiresAt?.toISOString() ?? null,
+    },
+  });
+
+  return { step: 'production', isProduction: true, expiresAt };
+}
+
+/**
+ * Store a CSID obtained by hand.
+ *
+ * Kept for the case the automated flow cannot cover — a portal that issued the
+ * certificate out of band, or an environment this server cannot reach.
+ */
+export async function storeCertificate(
+  principal: Principal, deviceId: string,
+  input: { certificate: string; secret?: string | null; isProduction: boolean },
+): Promise<void> {
+  const device = await one<{ branch_id: string }>(
+    'SELECT branch_id FROM devices WHERE id = $1', [deviceId],
+  );
+  if (!device) throw notFound('الجهاز غير موجود');
+  assertBranchAccess(principal, device.branch_id);
+
+  const updated = await one<{ id: string }>(
+    `UPDATE zatca_credentials
+        SET certificate = $2, secret = $3, is_production = $4,
+            onboarding_step = CASE WHEN $4 THEN 'production' ELSE 'compliance' END,
+            expires_at = $5, onboarded_at = now(), updated_at = now()
+      WHERE device_id = $1 RETURNING id`,
+    [deviceId, input.certificate, input.secret ?? null, input.isProduction,
+     certificateExpiry(input.certificate)],
+  );
+  if (!updated) throw notFound('لا توجد بيانات اعتماد لهذا الجهاز');
+
+  await audit({
+    action: AUDIT.ZATCA_CERTIFICATE_STORED, actorUserId: principal.userId,
+    actorEmployeeId: principal.employeeId, actorLabel: principal.displayName,
+    branchId: device.branch_id, entityType: 'device', entityId: deviceId,
+    newValue: { isProduction: input.isProduction, manual: true },
   });
 }
 
@@ -369,32 +518,75 @@ export async function getInvoice(principal: Principal, id: string) {
  */
 export async function verifyChain(
   principal: Principal, branchId: string,
-): Promise<{ checked: number; breaks: Array<{ icv: number; problem: string }> }> {
+): Promise<{
+  checked: number;
+  breaks: Array<{ icv: number; device: string; problem: string }>;
+  devices: Array<{ device: string; invoices: number; lastIcv: number }>;
+}> {
   assertBranchAccess(principal, branchId);
-  const rows = await many<{ icv: string; pih: string; invoice_hash: string; invoice_number: string }>(
-    'SELECT icv, pih, invoice_hash, invoice_number FROM invoices WHERE branch_id = $1 ORDER BY icv',
+
+  // Per device, because each EGS unit keeps its own counter. Two tills in one
+  // branch legitimately produce 1,1,2,2 — reading that as a branch-wide
+  // sequence would report breaks that are not there.
+  const rows = await many<{
+    device_id: string; device_label: string; icv: string; pih: string;
+    invoice_hash: string; invoice_number: string;
+  }>(
+    `SELECT i.device_id, d.label AS device_label, i.icv, i.pih,
+            i.invoice_hash, i.invoice_number
+       FROM invoices i JOIN devices d ON d.id = i.device_id
+      WHERE i.branch_id = $1
+      ORDER BY i.device_id, i.icv`,
     [branchId],
   );
 
-  const GENESIS = 'NWZlY2ViNjZmZmM4NmYzOGQ5NTI3ODZjNmQ2OTZjNzljMmRiYzIzOWRkNGU5MWI0NjcyOWQ3M2EyN2ZiNTdlOQ==';
-  const breaks: Array<{ icv: number; problem: string }> = [];
+  const breaks: Array<{ icv: number; device: string; problem: string }> = [];
+  const perDevice = new Map<string, { device: string; invoices: number; lastIcv: number }>();
+
+  let currentDevice: string | null = null;
   let expectedIcv = 1;
-  let expectedPih = GENESIS;
+  let expectedPih = GENESIS_PIH;
 
   for (const row of rows) {
+    if (row.device_id !== currentDevice) {
+      currentDevice = row.device_id;
+      expectedIcv = 1;
+      expectedPih = GENESIS_PIH;
+    }
     const icv = Number(row.icv);
     if (icv !== expectedIcv) {
-      breaks.push({ icv, problem: `العدّاد قفز — المتوقع ${expectedIcv}` });
+      breaks.push({
+        icv, device: row.device_label,
+        problem: `العدّاد قفز — المتوقع ${expectedIcv}`,
+      });
     }
     if (row.pih !== expectedPih) {
-      breaks.push({ icv, problem: `الفاتورة ${row.invoice_number} لا تتسلسل مع سابقتها` });
+      breaks.push({
+        icv, device: row.device_label,
+        problem: `الفاتورة ${row.invoice_number} لا تتسلسل مع سابقتها`,
+      });
     }
     expectedIcv = icv + 1;
     expectedPih = row.invoice_hash;
+
+    const entry = perDevice.get(row.device_id)
+      ?? { device: row.device_label, invoices: 0, lastIcv: 0 };
+    entry.invoices += 1;
+    entry.lastIcv = Math.max(entry.lastIcv, icv);
+    perDevice.set(row.device_id, entry);
   }
 
-  return { checked: rows.length, breaks };
+  return { checked: rows.length, breaks, devices: [...perDevice.values()] };
 }
+
+/**
+ * ZATCA's mandated first PIH. Derived rather than pasted: it is base64 of the
+ * SHA-256 HEX STRING of "0" — not of the raw digest, which is the mistake that
+ * produces a chain every invoice validates against and the authority rejects.
+ */
+export const GENESIS_PIH = Buffer.from(
+  createHash('sha256').update('0').digest('hex'), 'utf8',
+).toString('base64');
 
 /**
  * Report queued invoices to ZATCA. Called by the cron job, and by an operator
@@ -406,29 +598,43 @@ export async function verifyChain(
 export async function reportPending(
   branchId: string, limit = 50,
 ): Promise<{ attempted: number; reported: number; failed: number }> {
-  const pending = await many<{ id: string; xml: string; invoice_hash: string; invoice_uuid: string }>(
-    `SELECT id, xml, invoice_hash, invoice_uuid FROM invoices
+  const pending = await many<{
+    id: string; xml: string; invoice_hash: string; invoice_uuid: string; device_id: string;
+  }>(
+    `SELECT id, xml, invoice_hash, invoice_uuid, device_id FROM invoices
       WHERE branch_id = $1 AND report_status IN ('pending','failed')
         AND report_attempts < 10
-      ORDER BY icv LIMIT $2`,
+      ORDER BY device_id, icv LIMIT $2`,
     [branchId, limit],
   );
 
-  const creds = await one<{ certificate: string | null; secret: string | null; environment: string; is_production: boolean }>(
-    'SELECT certificate, secret, environment, is_production FROM zatca_credentials WHERE branch_id = $1',
+  // Per device: credentials belong to the EGS unit, and one till whose CSID has
+  // lapsed must not stall the other till's queue.
+  const credentialRows = await many<{
+    device_id: string; certificate: string | null; secret: string | null;
+    environment: string; is_production: boolean; label: string;
+  }>(
+    `SELECT z.device_id, z.certificate, z.secret, z.environment, z.is_production,
+            d.label
+       FROM zatca_credentials z JOIN devices d ON d.id = z.device_id
+      WHERE d.branch_id = $1`,
     [branchId],
   );
+  const byDevice = new Map(credentialRows.map((c) => [c.device_id, c]));
 
   let reported = 0;
   let failed = 0;
 
   for (const invoice of pending) {
     try {
+      const creds = byDevice.get(invoice.device_id);
       // Without a CSID there is nobody to report to, and pretending otherwise
       // would mark invoices as reported when they are not — the one outcome an
       // auditor cannot recover from.
       if (!creds?.certificate || !creds.secret) {
-        throw new Error('لم تُستكمل تهيئة ZATCA — لا شهادة CSID لهذا الفرع');
+        throw new Error(
+          `لم تُستكمل تهيئة ZATCA للجهاز ${creds?.label ?? ''} — لا شهادة CSID`,
+        );
       }
       const result = await submitToZatca(creds, invoice);
       await withTransaction(async (client) => {

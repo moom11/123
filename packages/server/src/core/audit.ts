@@ -113,6 +113,10 @@ export const AUDIT = {
   OTP_VERIFIED: 'otp.verified',
   OTP_FAILED: 'otp.failed',
 
+  DEVICE_REGISTERED: 'device.registered',
+  DEVICE_RETIRED: 'device.retired',
+  DEVICE_TOKEN_ROTATED: 'device.token_rotated',
+
   INVOICE_ISSUED: 'invoice.issued',
   INVOICE_REPORTED: 'invoice.reported',
   INVOICE_REPORT_FAILED: 'invoice.report_failed',

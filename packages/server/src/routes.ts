@@ -13,6 +13,7 @@ import { adminRoutes } from './modules/admin/admin.routes.js';
 import { notificationRoutes } from './modules/notifications/notifications.routes.js';
 import { auditRoutes } from './modules/audit/audit.routes.js';
 import { invoicingRoutes } from './modules/invoicing/invoicing.routes.js';
+import { deviceRoutes } from './modules/devices/devices.routes.js';
 
 /**
  * Route registration.
@@ -36,6 +37,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     await api.register(notificationRoutes);
     await api.register(auditRoutes);
     await api.register(invoicingRoutes);
+    await api.register(deviceRoutes);
   }, { prefix: '/api' });
 
   await app.register(publicRoutes, { prefix: '/api/public' });

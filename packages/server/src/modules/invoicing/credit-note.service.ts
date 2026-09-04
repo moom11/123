@@ -29,9 +29,9 @@ export async function issueCreditNote(
 ): Promise<{ id: string; invoiceNumber: string; icv: number; qr: string }> {
   return withTransaction(async (client) => {
     const original = await one<{
-      id: string; branch_id: string; order_id: string; invoice_number: string;
-      subtotal: string; discount_total: string; vat_amount: string;
-      grand_total: string; vat_percent: string;
+      id: string; branch_id: string; device_id: string; order_id: string;
+      invoice_number: string; subtotal: string; discount_total: string;
+      vat_amount: string; grand_total: string; vat_percent: string;
     }>(
       `SELECT * FROM invoices WHERE id = $1 AND document_type = 'invoice'`,
       [invoiceId], client,
@@ -51,21 +51,25 @@ export async function issueCreditNote(
     );
     if (!branch?.vat_number) throw badRequest('الفرع بلا رقم ضريبي');
 
+    // The note is signed by the same unit that signed the invoice it reverses,
+    // and takes the next link in that unit's chain — a reversal stamped by a
+    // different till would not verify against the original.
     const creds = await one<{ private_key_enc: string; certificate: string | null }>(
-      'SELECT private_key_enc, certificate FROM zatca_credentials WHERE branch_id = $1',
-      [original.branch_id], client,
+      'SELECT private_key_enc, certificate FROM zatca_credentials WHERE device_id = $1',
+      [original.device_id], client,
     );
-    if (!creds) throw badRequest('لم تُهيَّأ الفوترة الإلكترونية لهذا الفرع');
+    if (!creds) throw badRequest('الجهاز الذي أصدر الفاتورة غير مهيّأ للفوترة الإلكترونية');
 
     // The note takes the next link in the same chain — it is a document like
     // any other, not an annotation on an existing one.
     await client.query(
-      'INSERT INTO invoice_counters (branch_id) VALUES ($1) ON CONFLICT DO NOTHING',
-      [original.branch_id],
+      `INSERT INTO invoice_counters (device_id, branch_id) VALUES ($1, $2)
+       ON CONFLICT DO NOTHING`,
+      [original.device_id, original.branch_id],
     );
     const counter = await one<{ last_icv: string; last_hash: string }>(
-      'SELECT last_icv, last_hash FROM invoice_counters WHERE branch_id = $1 FOR UPDATE',
-      [original.branch_id], client,
+      'SELECT last_icv, last_hash FROM invoice_counters WHERE device_id = $1 FOR UPDATE',
+      [original.device_id], client,
     );
     const icv = Number(counter!.last_icv) + 1;
     const pih = counter!.last_hash;
@@ -135,13 +139,14 @@ export async function issueCreditNote(
 
     const row = await one<{ id: string }>(
       `INSERT INTO invoices (
-         branch_id, order_id, invoice_uuid, invoice_number, icv, pih, invoice_hash,
-         document_type, reversed_invoice_id, subtotal, discount_total, vat_amount,
-         grand_total, vat_percent, xml, qr_tlv, signature, issued_at
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,'credit_note',$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+         branch_id, device_id, order_id, invoice_uuid, invoice_number, icv, pih,
+         invoice_hash, document_type, reversed_invoice_id, subtotal, discount_total,
+         vat_amount, grand_total, vat_percent, xml, qr_tlv, signature, issued_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'credit_note',$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
        RETURNING id`,
       [
-        original.branch_id, original.order_id, uuid, noteNumber, icv, pih, hash,
+        original.branch_id, original.device_id, original.order_id, uuid, noteNumber,
+        icv, pih, hash,
         original.id, input.subtotal, input.discountTotal, input.vatAmount,
         input.grandTotal, Number(original.vat_percent), xml, qr,
         signature.toString('base64'), issuedAt,
@@ -150,8 +155,8 @@ export async function issueCreditNote(
     );
 
     await client.query(
-      'UPDATE invoice_counters SET last_icv = $2, last_hash = $3, updated_at = now() WHERE branch_id = $1',
-      [original.branch_id, icv, hash],
+      'UPDATE invoice_counters SET last_icv = $2, last_hash = $3, updated_at = now() WHERE device_id = $1',
+      [original.device_id, icv, hash],
     );
 
     await audit({

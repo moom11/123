@@ -78,6 +78,7 @@ const EXECUTIVE: Permission[] = [
   'purchases.read', 'suppliers.read', 'suppliers.manage',
   'reports.sales', 'reports.products', 'reports.employees', 'reports.customers',
   'reports.inventory', 'reports.purchasing', 'reports.financial', 'reports.all_branches',
+  'devices.read', 'devices.manage',
   'invoices.read', 'invoices.report', 'invoices.credit_note',
   'invoices.manage_credentials',
   'audit.read', 'notifications.read',
@@ -113,6 +114,8 @@ const BRANCH_MANAGER: Permission[] = [
   'purchases.read', 'purchases.receive', 'suppliers.read', 'suppliers.manage',
   'reports.sales', 'reports.products', 'reports.employees', 'reports.customers',
   'reports.inventory', 'reports.purchasing',
+  // Registering a till is day-to-day work; obtaining its certificate is not.
+  'devices.read', 'devices.manage',
   // Not invoices.manage_credentials: the stamping key is the branch's legal
   // identity, and a branch manager may not mint one for themselves.
   'invoices.read', 'invoices.report', 'invoices.credit_note',
@@ -133,6 +136,7 @@ const ACCOUNTANT: Permission[] = [
   'purchase_requests.read.branch', 'purchases.read', 'suppliers.read',
   'reports.sales', 'reports.products', 'reports.employees', 'reports.customers',
   'reports.inventory', 'reports.purchasing', 'reports.financial',
+  'devices.read',
   'invoices.read', 'invoices.report',
   'audit.read', 'notifications.read',
 ];

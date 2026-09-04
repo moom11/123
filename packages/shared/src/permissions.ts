@@ -129,6 +129,12 @@ export const PERMISSIONS = [
   'reports.financial',
   'reports.all_branches',
 
+  // --- Devices ---------------------------------------------------------------
+  // Which terminal is which is an operating decision (the till closes bills,
+  // the tablet does not) and a compliance one (a till is a ZATCA EGS unit).
+  'devices.read',
+  'devices.manage',
+
   // --- E-invoicing (ZATCA) ---------------------------------------------------
   // Reading an invoice is an everyday cashier need (reprint a receipt).
   // Managing credentials is not: whoever holds them can stamp invoices in the

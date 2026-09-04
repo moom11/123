@@ -51,6 +51,12 @@ declare module 'fastify' {
     principal?: Principal;
     customer?: CustomerPrincipal;
     printAgentId?: string;
+    /**
+     * The terminal this request came from, resolved from X-Device-Token.
+     * Absent for anything not sent from a registered device — which is fine
+     * for reading, and refused for closing a bill.
+     */
+    device?: import('../modules/devices/devices.service.js').Device;
   }
 }
 

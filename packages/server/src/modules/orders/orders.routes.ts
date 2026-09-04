@@ -208,8 +208,13 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
         })).min(1),
         idempotencyKey: z.string().max(100).nullish(),
       }), req.body);
+      // Closing a bill is the till's job. A waiter's tablet takes orders and
+      // stops there — both because a waiter should not be handling money, and
+      // because the tax invoice has to be attributable to the EGS unit that
+      // issued it, which is this device.
       return takePayment(p, {
         orderId: id, parts: body.parts,
+        device: req.device ?? null,
         idempotencyKey: body.idempotencyKey
           ?? (req.headers['x-idempotency-key'] as string | undefined) ?? null,
       });

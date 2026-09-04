@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import {
   auth, closeApp, getApp, getCustomerId, getProductId, getTableId,
   loginAdmin, loginEmployee, otpCapture,
+  authAtTill,
 } from './helpers.js';
 import { many, one, pool } from '../src/core/db.js';
 
@@ -375,7 +376,7 @@ describe('payments', () => {
     );
 
     const res = await app.inject({
-      method: 'POST', url: `/api/orders/${orderId}/pay`, headers: auth(cashier),
+      method: 'POST', url: `/api/orders/${orderId}/pay`, headers: await authAtTill(cashier),
       payload: {
         parts: [{ method: 'cash', amount: total, tendered: total + 1000 }],
         idempotencyKey: `pay-${Date.now()}`,
@@ -410,10 +411,10 @@ describe('payments', () => {
     };
 
     const first = await app.inject({
-      method: 'POST', url: `/api/orders/${orderId}/pay`, headers: auth(cashier), payload,
+      method: 'POST', url: `/api/orders/${orderId}/pay`, headers: await authAtTill(cashier), payload,
     });
     const second = await app.inject({
-      method: 'POST', url: `/api/orders/${orderId}/pay`, headers: auth(cashier), payload,
+      method: 'POST', url: `/api/orders/${orderId}/pay`, headers: await authAtTill(cashier), payload,
     });
 
     expect(first.statusCode).toBe(200);
@@ -430,7 +431,7 @@ describe('payments', () => {
     const { orderId, total } = await createShishaOrder();
 
     const res = await app.inject({
-      method: 'POST', url: `/api/orders/${orderId}/pay`, headers: auth(cashier),
+      method: 'POST', url: `/api/orders/${orderId}/pay`, headers: await authAtTill(cashier),
       payload: {
         parts: [
           { method: 'cash', amount: 2000 },
@@ -453,7 +454,7 @@ describe('payments', () => {
     const { orderId, total } = await createShishaOrder();
 
     const res = await app.inject({
-      method: 'POST', url: `/api/orders/${orderId}/pay`, headers: auth(cashier),
+      method: 'POST', url: `/api/orders/${orderId}/pay`, headers: await authAtTill(cashier),
       payload: {
         parts: [{ method: 'cash', amount: 2000 }],
         idempotencyKey: `partial-${Date.now()}`,
@@ -469,7 +470,7 @@ describe('payments', () => {
     const cashier = await loginEmployee('2001', '4826');
     const { orderId, total } = await createShishaOrder();
     const res = await app.inject({
-      method: 'POST', url: `/api/orders/${orderId}/pay`, headers: auth(cashier),
+      method: 'POST', url: `/api/orders/${orderId}/pay`, headers: await authAtTill(cashier),
       payload: { parts: [{ method: 'cash', amount: total + 5000 }] },
     });
     expect(res.statusCode).toBe(400);

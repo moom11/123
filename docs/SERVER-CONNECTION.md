@@ -45,9 +45,10 @@ fetch(`${apiBase()}/api${path}`, { ... })
 | `Authorization: Bearer <accessToken>` | حين توجد جلسة | التحقق من الهوية |
 | `X-Idempotency-Key: <uuid>` | مع العمليات المالية | ضغطتان على «ادفع» لا تُنتجان دفعتين |
 | `X-Branch-Id: <uuid>` | حين يكون فرع محفوظاً | مدير متعدد الفروع لا فرع أساسي له؛ بدونها ترجع كل الشاشات فارغة |
+| `X-Device-Token` | من كل طرفية مسجَّلة | يقول أي جهاز يطلب — والكاشير وحده يُقفل الفواتير |
 | `X-Device-Label` | من الأجهزة الموسومة | يُسجَّل في سجل التدقيق |
 
-هذه الخمسة مسموحة صراحةً في CORS على الخادم (`app.ts` و`worker.ts`). حذف `X-Branch-Id`
+هذه الستة مسموحة صراحةً في CORS على الخادم (`app.ts` و`worker.ts`). حذف `X-Branch-Id`
 من تلك القائمة كان عطلاً حقيقياً: التطبيق يفتح، الفروع تُقرأ، ولا أحد يستطيع الدخول.
 
 ## 3. الجلسة
@@ -84,7 +85,7 @@ const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
 > تحاول فتح `ws://` — المتصفح يمنعها بصمت. البناء النسبي يحل هذا لأنه يشتق `wss://` من الصفحة.
 > السبب الثاني: الاستضافة لا تمرر WebSocket أصلاً (ProFreeHost لا تمررها). بقية التطبيق يعمل؛ التحديث يصير يدوياً.
 
-## 5. سطح المسارات — 139 مساراً
+## 5. سطح المسارات — 153 مساراً
 
 كلها تحت `/api`، عدا `/health`. المسارات المطلوب فحصها:
 
@@ -122,7 +123,21 @@ const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
 `POST /auth/request-otp` · `POST /auth/verify-otp` · `GET /me/wallet` · `GET /me/orders` ·
 `POST /orders` · `POST /service-request`. كل معالج فيها مكتوب على أن مُناديه مجهول.
 
+**الأجهزة والفوترة** — `GET /devices` · `POST /devices` · `GET /devices/me` ·
+`POST /devices/:id/rotate-token` · `POST /devices/:id/retire` ·
+`POST /devices/:id/zatca/csr` · `POST /devices/:id/zatca/onboard` ·
+`GET /invoices` · `GET /invoices/:id` · `GET /invoices/chain/verify` ·
+`POST /invoices/report` · `POST /invoices/:id/credit-note`
+
 **الفحص** — `GET /health` يرجع حالة قاعدة البيانات وزمنها وعدد المتصلين. لا يحتاج جلسة.
+
+### الجهاز مقابل الجلسة
+
+الجلسة تقول **مَن**؛ رمز الجهاز يقول **أين**. وهما مستقلان عمداً: الرمز يُدخل مرة عند
+تركيب الجهاز ويبقى عبر كل وردية وكل تسجيل دخول، والجلسة تتغير مع كل موظف.
+
+ولهذا يُقرأ رمز الجهاز **قبل** التحقق من الجلسة — الطرفية تسأل `GET /api/devices/me`
+عمّا هي عند الإقلاع، قبل أن يسجّل أحد دخوله.
 
 ## 6. من يتصل غير المتصفح
 

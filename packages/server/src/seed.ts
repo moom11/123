@@ -507,21 +507,51 @@ async function main(): Promise<void> {
     );
   }
 
-  // --- E-invoicing stamping identity ----------------------------------------
-  // Generated so a fresh install can take payment immediately; SANDBOX, and
-  // with no CSID, which is exactly what preflight refuses to open with. Real
-  // credentials come from ZATCA after onboarding — this is a working key, not
-  // a legal one, and the distinction is enforced rather than documented.
-  const hasZatca = await one('SELECT 1 FROM zatca_credentials WHERE branch_id = $1', [branchId]);
+  // --- Terminals, and their stamping identities -----------------------------
+  // The floor has one till and several waiter tablets. Only the till closes
+  // bills, and only the till is an EGS unit with a ZATCA certificate.
+  const tills = [
+    { kind: 'cashier' as const, label: 'الكاشير الرئيسي', serial: 'TILL-01' },
+    { kind: 'waiter' as const, label: 'جهاز نادل 1', serial: 'WAITER-01' },
+    { kind: 'waiter' as const, label: 'جهاز نادل 2', serial: 'WAITER-02' },
+  ];
+  const deviceTokens: Array<{ label: string; token: string }> = [];
+  for (const spec of tills) {
+    const existing = await one<{ id: string }>(
+      'SELECT id FROM devices WHERE branch_id = $1 AND serial_number = $2',
+      [branchId, spec.serial],
+    );
+    if (existing) continue;
+    const token = generateToken(32);
+    await pool.query(
+      `INSERT INTO devices (branch_id, kind, label, serial_number, token_hash, registered_by)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [branchId, spec.kind, spec.label, spec.serial, hashToken(token), owner!.id],
+    );
+    deviceTokens.push({ label: `${spec.label} (${spec.serial})`, token });
+  }
+
+  // A stamping key so a fresh install can take payment on the spot. SANDBOX,
+  // with no CSID — which is exactly what preflight refuses to open with. This
+  // is a working key, not a legal one, and the difference is enforced.
+  const till = await one<{ id: string }>(
+    `SELECT id FROM devices WHERE branch_id = $1 AND kind = 'cashier'
+      ORDER BY registered_at LIMIT 1`,
+    [branchId],
+  );
+  const hasZatca = await one('SELECT 1 FROM zatca_credentials WHERE device_id = $1',
+    [till!.id]);
   if (!hasZatca) {
     const { generateStampKeyPair } = await import('./core/zatca/sign.js');
     const { encryptSecret } = await import('./core/crypto.js');
     const pair = generateStampKeyPair();
     await pool.query(
       `INSERT INTO zatca_credentials
-         (branch_id, environment, private_key_enc, public_key_der, created_by)
-       VALUES ($1,'sandbox',$2,$3,$4)`,
-      [branchId, encryptSecret(pair.privateKeyPem), pair.publicKeyDer, owner!.id],
+         (branch_id, device_id, environment, private_key_enc, public_key_der,
+          onboarding_step, created_by)
+       VALUES ($1,$2,'sandbox',$3,$4,'keys',$5)`,
+      [branchId, till!.id, encryptSecret(pair.privateKeyPem), pair.publicKeyDer,
+       owner!.id],
     );
     log('ZATCA sandbox stamping key generated (no CSID — not valid for live sales)');
   }
@@ -538,6 +568,12 @@ async function main(): Promise<void> {
   console.log('Staff PINs    : 1042/2580 (waiter) 2001/4826 (cashier) 4001/3648 (buyer)');
   console.log('                3001/7192 (bar) 3002/6473 (kitchen) 3003/9265 (shisha)');
   if (agentToken) console.log(`Print agent token: ${agentToken}`);
+  for (const d of deviceTokens) {
+    console.log(`Device token  : ${d.label} — ${d.token}`);
+  }
+  if (deviceTokens.length > 0) {
+    console.log('                (stored hashed — this is the only time they are shown)');
+  }
   if (qrSample) console.log(`Table 12 QR   : /menu/${buildQrValue(qrSample.qr_token)}`);
   console.log('Demo customer : خالد +966551234567 — 320 points, shisha 65 → 45 SAR (OTP required)');
 }
