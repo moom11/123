@@ -130,13 +130,19 @@ export async function printOrderItems(
   const order = await one<{
     order_number: string; table_number: string | null; order_type: string;
     waiter_name: string | null; customer_name: string | null; notes: string | null;
+    delivery_partner: string | null; delivery_reference: string | null;
+    delivery_customer: string | null;
   }>(
     `SELECT o.order_number, o.order_type, o.notes,
-            t.table_number, e.full_name AS waiter_name, c.full_name AS customer_name
+            t.table_number, e.full_name AS waiter_name, c.full_name AS customer_name,
+            dp.name_ar AS delivery_partner, d.external_reference AS delivery_reference,
+            d.customer_name AS delivery_customer
        FROM orders o
        LEFT JOIN restaurant_tables t ON t.id = o.table_id
        LEFT JOIN employees e ON e.id = o.waiter_employee_id
        LEFT JOIN customers c ON c.id = o.customer_id
+       LEFT JOIN delivery_orders d ON d.order_id = o.id
+       LEFT JOIN delivery_partners dp ON dp.id = d.partner_id
       WHERE o.id = $1`,
     [args.orderId], client,
   );
@@ -194,13 +200,20 @@ export async function printOrderItems(
     const payload: TicketPayload = {
       header: 'MARA LOUNGE',
       kind: args.mode,
-      banner: args.mode === 'add_item' ? 'ADD ITEM' : null,
+      // The kitchen has to see at a glance that this one leaves the building.
+      banner: args.mode === 'add_item' ? 'ADD ITEM'
+        : order.delivery_partner ? 'DELIVERY' : null,
       orderNumber: order.order_number,
-      tableNumber: order.table_number,
+      // A delivery ticket has no table. What the pass needs in its place is the
+      // platform's own reference, because that is the number the rider quotes
+      // — printing our order number there would have them reading past each
+      // other at the counter.
+      tableNumber: order.delivery_reference ?? order.table_number,
       waiterName: order.waiter_name,
       department,
-      orderType: order.order_type,
-      customerName: order.customer_name,
+      orderType: order.delivery_partner
+        ? `delivery / ${order.delivery_partner}` : order.order_type,
+      customerName: order.delivery_customer ?? order.customer_name,
       time: new Date().toISOString(),
       items: deptItems.map((i) => ({
         name: i.product_name_ar,

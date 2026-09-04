@@ -78,6 +78,7 @@ const EXECUTIVE: Permission[] = [
   'purchases.read', 'suppliers.read', 'suppliers.manage',
   'reports.sales', 'reports.products', 'reports.employees', 'reports.customers',
   'reports.inventory', 'reports.purchasing', 'reports.financial', 'reports.all_branches',
+  'delivery.read', 'delivery.accept', 'delivery.manage',
   'devices.read', 'devices.manage',
   'invoices.read', 'invoices.report', 'invoices.credit_note',
   'invoices.manage_credentials',
@@ -114,6 +115,7 @@ const BRANCH_MANAGER: Permission[] = [
   'purchases.read', 'purchases.receive', 'suppliers.read', 'suppliers.manage',
   'reports.sales', 'reports.products', 'reports.employees', 'reports.customers',
   'reports.inventory', 'reports.purchasing',
+  'delivery.read', 'delivery.accept', 'delivery.manage',
   // Registering a till is day-to-day work; obtaining its certificate is not.
   'devices.read', 'devices.manage',
   // Not invoices.manage_credentials: the stamping key is the branch's legal
@@ -136,6 +138,7 @@ const ACCOUNTANT: Permission[] = [
   'purchase_requests.read.branch', 'purchases.read', 'suppliers.read',
   'reports.sales', 'reports.products', 'reports.employees', 'reports.customers',
   'reports.inventory', 'reports.purchasing', 'reports.financial',
+  'delivery.read',
   'devices.read',
   'invoices.read', 'invoices.report',
   'audit.read', 'notifications.read',
@@ -153,6 +156,9 @@ const CASHIER: Permission[] = [
   'customers.read', 'customers.create', 'customers.wallet.read',
   'customers.points.redeem', 'customers.special_prices.read',
   'print_jobs.read', 'print_jobs.retry', 'printers.read',
+  // The cashier is who decides, mid-shift, that the kitchen can cook a
+  // platform order — but never who holds the platform's keys.
+  'delivery.read', 'delivery.accept',
   // A cashier reprints receipts, and a reprint must carry the same QR.
   'invoices.read',
   'notifications.read',

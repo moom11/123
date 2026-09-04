@@ -273,8 +273,8 @@ export interface CreateOrderInput {
   tableId?: string | null;
   sessionId?: string | null;
   customerId?: string | null;
-  orderType?: 'dine_in' | 'takeaway';
-  source: 'pos' | 'customer_qr' | 'waiter';
+  orderType?: 'dine_in' | 'takeaway' | 'delivery';
+  source: 'pos' | 'customer_qr' | 'waiter' | 'delivery';
   lines: CartLine[];
   notes?: string | null;
   guestCount?: number;
@@ -293,23 +293,52 @@ export async function createOrder(
   principal: Principal | null,
   input: CreateOrderInput,
 ): Promise<{ orderId: string; orderNumber: string; status: OrderStatus; grandTotal: number }> {
+  try {
+    return await attemptCreateOrder(principal, input);
+  } catch (err) {
+    // The check below is check-then-insert, so two submits racing past it both
+    // reach the insert and one loses on the unique index. Losing that race is
+    // precisely what an idempotency key promises to absorb, so it must not
+    // surface as a database error: return what the winner created.
+    if ((err as { code?: string }).code === '23505' && input.idempotencyKey) {
+      const winner = await existingByIdempotencyKey(input.branchId, input.idempotencyKey);
+      if (winner) return winner;
+    }
+    throw err;
+  }
+}
+
+async function existingByIdempotencyKey(
+  branchId: string, key: string, client?: PoolClient,
+): Promise<{ orderId: string; orderNumber: string; status: OrderStatus;
+             grandTotal: number } | null> {
+  const row = await one<{
+    id: string; order_number: string; status: OrderStatus; grand_total: number;
+  }>(
+    `SELECT id, order_number, status, grand_total FROM orders
+      WHERE branch_id = $1 AND idempotency_key = $2`,
+    [branchId, key], client,
+  );
+  return row
+    ? {
+        orderId: row.id, orderNumber: row.order_number,
+        status: row.status, grandTotal: row.grand_total,
+      }
+    : null;
+}
+
+async function attemptCreateOrder(
+  principal: Principal | null,
+  input: CreateOrderInput,
+): Promise<{ orderId: string; orderNumber: string; status: OrderStatus; grandTotal: number }> {
   return withTransaction(async (client) => {
     // Idempotency: a retried submit (flaky wifi, double tap) returns the
     // original order rather than creating a second one.
     if (input.idempotencyKey) {
-      const existing = await one<{
-        id: string; order_number: string; status: OrderStatus; grand_total: number;
-      }>(
-        `SELECT id, order_number, status, grand_total FROM orders
-          WHERE branch_id = $1 AND idempotency_key = $2`,
-        [input.branchId, input.idempotencyKey], client,
+      const existing = await existingByIdempotencyKey(
+        input.branchId, input.idempotencyKey, client,
       );
-      if (existing) {
-        return {
-          orderId: existing.id, orderNumber: existing.order_number,
-          status: existing.status, grandTotal: existing.grand_total,
-        };
-      }
+      if (existing) return existing;
     }
 
     const priced = await priceCart(input.branchId, input.lines, client);
@@ -371,9 +400,14 @@ export async function createOrder(
       [input.branchId], client,
     );
 
-    // A customer's own order must be reviewed by the waiter before it prints.
+    // An order nobody at the branch has agreed to yet does not print. A
+    // customer's QR order waits for the waiter; a platform's order waits for
+    // whoever is accepting deliveries. Only POS and waiter orders — placed by
+    // someone standing in the restaurant — go straight through.
     const initialStatus: OrderStatus =
-      input.source === 'customer_qr' ? 'pending_waiter_approval' : 'confirmed';
+      input.source === 'customer_qr' ? 'pending_waiter_approval'
+        : input.source === 'delivery' ? 'pending_delivery_acceptance'
+          : 'confirmed';
 
     const order = await one<{ id: string }>(
       `INSERT INTO orders (

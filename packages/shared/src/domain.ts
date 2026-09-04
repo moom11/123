@@ -32,6 +32,10 @@ export const TABLE_STATUS_LABELS_AR: Record<TableStatus, string> = {
 export const ORDER_STATUSES = [
   'draft',
   'pending_waiter_approval',
+  // A platform order nobody at the branch has agreed to cook yet. It reaches
+  // no printer until someone accepts it — the kitchen may be out of an item,
+  // and a rider should not be dispatched for food nobody can make.
+  'pending_delivery_acceptance',
   'confirmed',
   'printed',
   'partially_updated',
@@ -45,6 +49,7 @@ export type OrderStatus = (typeof ORDER_STATUSES)[number];
 export const ORDER_STATUS_LABELS_AR: Record<OrderStatus, string> = {
   draft: 'مسودة',
   pending_waiter_approval: 'بانتظار موافقة الويتر',
+  pending_delivery_acceptance: 'بانتظار قبول التوصيل',
   confirmed: 'مؤكد',
   printed: 'مطبوع',
   partially_updated: 'محدّث جزئياً',
@@ -59,8 +64,9 @@ export const ORDER_STATUS_LABELS_AR: Record<OrderStatus, string> = {
  * into order_status_history with actor and timestamp.
  */
 export const ORDER_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
-  draft: ['pending_waiter_approval', 'confirmed', 'cancelled'],
+  draft: ['pending_waiter_approval', 'pending_delivery_acceptance', 'confirmed', 'cancelled'],
   pending_waiter_approval: ['confirmed', 'cancelled'],
+  pending_delivery_acceptance: ['confirmed', 'cancelled'],
   confirmed: ['printed', 'cancelled'],
   printed: ['partially_updated', 'ready_for_billing', 'bill_requested', 'paid', 'cancelled'],
   partially_updated: ['printed', 'ready_for_billing', 'bill_requested', 'paid', 'cancelled'],
@@ -74,11 +80,14 @@ export function canTransitionOrder(from: OrderStatus, to: OrderStatus): boolean 
   return ORDER_TRANSITIONS[from]?.includes(to) ?? false;
 }
 
-/** Where an order came from. Customer orders must pass waiter approval. */
-export const ORDER_SOURCES = ['pos', 'customer_qr', 'waiter'] as const;
+/**
+ * Where an order came from. Anything not placed by someone standing in the
+ * restaurant has to be accepted before it prints.
+ */
+export const ORDER_SOURCES = ['pos', 'customer_qr', 'waiter', 'delivery'] as const;
 export type OrderSource = (typeof ORDER_SOURCES)[number];
 
-export const ORDER_TYPES = ['dine_in', 'takeaway'] as const;
+export const ORDER_TYPES = ['dine_in', 'takeaway', 'delivery'] as const;
 export type OrderType = (typeof ORDER_TYPES)[number];
 
 export const PAYMENT_METHODS = [

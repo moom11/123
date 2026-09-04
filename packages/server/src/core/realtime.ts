@@ -93,6 +93,9 @@ export function publishLocal(event: RealtimeEvent): void {
 }
 
 export const EVENTS = {
+  DELIVERY_ORDER_RECEIVED: 'delivery.order.received',
+  DELIVERY_ORDER_CANCELLED: 'delivery.order.cancelled',
+  DELIVERY_ORDER_STATUS: 'delivery.order.status',
   TABLE_STATUS: 'table.status',
   ORDER_PENDING_APPROVAL: 'order.pending_approval',
   ORDER_UPDATED: 'order.updated',

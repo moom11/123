@@ -83,6 +83,28 @@ export async function buildApp(): Promise<FastifyInstance> {
     await attachPrincipal(req);
   });
 
+  /**
+   * Keep the raw JSON body alongside the parsed one.
+   *
+   * Aggregator webhooks are signed over the exact bytes sent. Re-serialising a
+   * parsed object changes key order, whitespace and number formatting, so a
+   * signature computed over that never matches — and the failure looks like a
+   * wrong secret rather than a wrong input. Only the delivery webhook reads it.
+   */
+  app.addContentTypeParser(
+    'application/json', { parseAs: 'string' },
+    (req, body: string, done) => {
+      (req as { rawBody?: string }).rawBody = body;
+      if (body.length === 0) { done(null, undefined); return; }
+      try {
+        done(null, JSON.parse(body));
+      } catch (err) {
+        (err as { statusCode?: number }).statusCode = 400;
+        done(err as Error, undefined);
+      }
+    },
+  );
+
   app.setErrorHandler((err, req, reply) => {
     if (err instanceof AppError) {
       if (err.statusCode >= 500) req.log.error({ err }, 'app error');

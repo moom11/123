@@ -454,3 +454,42 @@ table.data td.num { direction: ltr; text-align: left; font-variant-numeric: tabu
   .grid.cols-3, .grid.cols-2 { grid-template-columns: 1fr; }
   .content { padding: 10px; }
 }
+
+/* --- Delivery board ---------------------------------------------------------
+   Cards rather than rows: each order is a decision (accept, reject, ready) and
+   a decision wants its own surface. Sized so a busy Friday still fits on an
+   iPad without the accept button moving as the list reflows. */
+.cards {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+.card.delivery { display: flex; flex-direction: column; gap: 10px; }
+.card.delivery + .card.delivery { margin-top: 0; }
+.delivery__head {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 13px;
+}
+.delivery__head .muted { margin-inline-start: auto; }
+.delivery__body { display: flex; flex-direction: column; gap: 4px; }
+.delivery__money {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 18px; font-weight: 700; direction: ltr; justify-content: flex-end;
+}
+.delivery__actions {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border);
+}
+.delivery__actions .btn { margin-inline-start: 0; }
+.note {
+  background: var(--warn-bg, rgba(255, 196, 0, .12));
+  border-radius: var(--radius-sm, 6px);
+  padding: 4px 8px;
+}
+.delivery__items { list-style: none; margin: 0; padding: 0; font-size: 14px; }
+.delivery__items li { padding: 2px 0; }
+.delivery__items .qty { font-weight: 700; direction: ltr; unicode-bidi: isolate; }
+/* An item the menu says is off is the single most likely reason to reject, so
+   it is marked on the card rather than found at the pass. */
+.delivery__items li.out { color: var(--danger, #c0392b); }
+.delivery__items .flag { font-size: 12px; font-weight: 600; }

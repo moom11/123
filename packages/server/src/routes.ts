@@ -14,6 +14,7 @@ import { notificationRoutes } from './modules/notifications/notifications.routes
 import { auditRoutes } from './modules/audit/audit.routes.js';
 import { invoicingRoutes } from './modules/invoicing/invoicing.routes.js';
 import { deviceRoutes } from './modules/devices/devices.routes.js';
+import { deliveryRoutes, deliveryWebhookRoutes } from './modules/delivery/delivery.routes.js';
 
 /**
  * Route registration.
@@ -38,7 +39,12 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     await api.register(auditRoutes);
     await api.register(invoicingRoutes);
     await api.register(deviceRoutes);
+    await api.register(deliveryRoutes);
   }, { prefix: '/api' });
 
   await app.register(publicRoutes, { prefix: '/api/public' });
+
+  // Aggregator webhooks. Public because a platform cannot hold a session; the
+  // HMAC signature is what authenticates them, checked inside the handler.
+  await app.register(deliveryWebhookRoutes, { prefix: '/api/delivery/webhook' });
 }

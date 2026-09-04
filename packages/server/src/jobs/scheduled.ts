@@ -26,6 +26,11 @@ export async function runScheduledMaintenance(cron: string): Promise<void> {
     await purgeExpiredOtps(30);
   }
 
+  // Every five minutes: retell the platforms what they missed. A stale status
+  // on an aggregator means a rider sent too early or too late, so this runs
+  // more often than the ZATCA queue even though it matters less legally.
+  await retryDeliveryPushes();
+
   // Every quarter hour: push invoices to ZATCA. The deadline is 24 hours, so
   // this is deliberately unhurried — but it must run often enough that a
   // transient outage does not eat the whole window before anyone notices.
@@ -152,5 +157,29 @@ async function checkPrintHealth(): Promise<void> {
       body: `${row.n} أمر طباعة معلّق منذ أكثر من 5 دقائق.`,
       targetPermissions: ['print_jobs.read', 'printers.manage', 'pos.use'],
     });
+  }
+}
+
+/**
+ * Retell the aggregators anything they did not hear.
+ *
+ * A push failure is not an emergency — the food cooks either way — but a
+ * platform left on a stale status dispatches a rider at the wrong moment, so
+ * the queue is drained often and quietly.
+ */
+async function retryDeliveryPushes(): Promise<void> {
+  const { many } = await import('../core/db.js');
+  const { retryFailedPushes } = await import('../modules/delivery/delivery.service.js');
+
+  const branches = await many<{ branch_id: string }>(
+    `SELECT DISTINCT branch_id FROM delivery_orders
+      WHERE last_push_error IS NOT NULL AND push_attempts < 8`,
+  );
+  for (const { branch_id: branchId } of branches) {
+    try {
+      await retryFailedPushes(branchId, 50);
+    } catch (err) {
+      console.error(`[delivery] push retry failed for branch ${branchId}`, err);
+    }
   }
 }

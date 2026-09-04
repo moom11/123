@@ -129,6 +129,13 @@ export const PERMISSIONS = [
   'reports.financial',
   'reports.all_branches',
 
+  // --- Delivery platforms ----------------------------------------------------
+  // Accepting is a shift job (a cashier decides the kitchen can cook it);
+  // configuring a platform and holding its keys is not.
+  'delivery.read',
+  'delivery.accept',
+  'delivery.manage',
+
   // --- Devices ---------------------------------------------------------------
   // Which terminal is which is an operating decision (the till closes bills,
   // the tablet does not) and a compliance one (a till is a ZATCA EGS unit).
