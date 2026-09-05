@@ -11,7 +11,9 @@
  * terminal: waiters take orders, the till closes them. One till, one CSR, one
  * CSID, one invoice chain.
  */
-import { createSign, createPublicKey, createPrivateKey } from 'node:crypto';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { encodeSpki, fromPem, scalarFromPkcs8 } from './keys.js';
 import {
   bitString, context, oid, octetString, printableString, rdn, sequence, set,
   utf8String, integer,
@@ -116,8 +118,8 @@ function subject(unit: EgsUnit): Buffer {
  * takes (base64 of the PEM body, in fact — see onboarding.ts).
  */
 export function buildCsr(privateKeyPem: string, unit: EgsUnit): string {
-  const key = createPrivateKey(privateKeyPem);
-  const spki = createPublicKey(key).export({ type: 'spki', format: 'der' }) as Buffer;
+  const scalar = scalarFromPkcs8(fromPem(privateKeyPem));
+  const spki = encodeSpki(scalar);
 
   const attributes = context(0, sequence(
     oid(OID.extensionRequest),
@@ -133,10 +135,9 @@ export function buildCsr(privateKeyPem: string, unit: EgsUnit): string {
 
   // Sign the encoded info, not a reconstruction of it: the bytes that are
   // signed must be byte-identical to the bytes that are sent.
-  const signer = createSign('sha256');
-  signer.update(info);
-  signer.end();
-  const signature = signer.sign(key);
+  const signature = Buffer.from(
+    secp256k1.sign(sha256(info), scalar, { format: 'der', prehash: false }),
+  );
 
   const csr = sequence(
     info,
