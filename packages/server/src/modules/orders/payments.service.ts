@@ -196,6 +196,9 @@ export async function takePayment(
       // unpaid order. If stamping fails the payment rolls back — which is the
       // correct outcome, because handing a customer an unstamped receipt is a
       // compliance breach, not an inconvenience.
+      const { commitRedemptions } = await import('../promotions/promotions.service.js');
+      await commitRedemptions(input.orderId, client);
+
       const invoice = await issueInvoiceForOrder(input.orderId, till, client);
       issuedInvoice = invoice;
 

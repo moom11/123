@@ -406,7 +406,10 @@ export async function claimJobs(
     );
 
     return many(
-      `SELECT pj.id, pj.kind, pj.payload, pj.copies, pj.attempt_count,
+      // order_id travels with the job so the agent can name the order in a
+      // failure report — "ticket for ORD-2026-000041 did not print" is
+      // actionable at the pass; a job UUID is not.
+      `SELECT pj.id, pj.kind, pj.payload, pj.copies, pj.attempt_count, pj.order_id,
               p.ip_address, p.port, p.protocol, p.codepage, p.chars_per_line,
               p.name AS printer_name, p.id AS printer_id
          FROM print_jobs pj JOIN printers p ON p.id = pj.printer_id

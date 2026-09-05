@@ -129,6 +129,12 @@ export const PERMISSIONS = [
   'reports.financial',
   'reports.all_branches',
 
+  // --- Promotions ------------------------------------------------------------
+  // The legitimate way to sell something cheaper. Staff never type a price;
+  // an owner or manager writes a rule and the server applies it.
+  'promotions.read',
+  'promotions.manage',
+
   // --- Delivery platforms ----------------------------------------------------
   // Accepting is a shift job (a cashier decides the kitchen can cook it);
   // configuring a platform and holding its keys is not.

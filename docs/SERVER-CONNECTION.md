@@ -85,7 +85,7 @@ const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
 > تحاول فتح `ws://` — المتصفح يمنعها بصمت. البناء النسبي يحل هذا لأنه يشتق `wss://` من الصفحة.
 > السبب الثاني: الاستضافة لا تمرر WebSocket أصلاً (ProFreeHost لا تمررها). بقية التطبيق يعمل؛ التحديث يصير يدوياً.
 
-## 5. سطح المسارات — 164 مساراً
+## 5. سطح المسارات — 170 مساراً
 
 كلها تحت `/api`، عدا `/health`. المسارات المطلوب فحصها:
 
@@ -138,6 +138,9 @@ const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
 **استقبال المنصات — بلا جلسة** — `POST /api/delivery/webhook/:partner/:branchCode?`
 هو السطح العام الثاني بعد `/api/public`. لا يحمل جلسة لأن منصة توصيل لا تملك واحدة؛
 ما يصادقه توقيع HMAC-SHA256 على البايتات الخام.
+
+**العروض** — `GET /promotions` · `POST /promotions` · `PUT /promotions/:id` ·
+`POST /promotions/:id/retire` · `GET /reports/promotions` · `GET /orders/:id/promotions`
 
 **الفحص** — `GET /health` يرجع حالة قاعدة البيانات وزمنها وعدد المتصلين. لا يحتاج جلسة.
 

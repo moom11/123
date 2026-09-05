@@ -113,6 +113,11 @@ export const AUDIT = {
   OTP_VERIFIED: 'otp.verified',
   OTP_FAILED: 'otp.failed',
 
+  PROMOTION_CREATED: 'promotion.created',
+  PROMOTION_UPDATED: 'promotion.updated',
+  PROMOTION_RETIRED: 'promotion.retired',
+  PROMOTION_APPLIED: 'promotion.applied',
+
   DELIVERY_RECEIVED: 'delivery.received',
   DELIVERY_ACCEPTED: 'delivery.accepted',
   DELIVERY_REJECTED: 'delivery.rejected',

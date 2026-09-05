@@ -50,6 +50,8 @@ function loadConfig(): Config {
 
 interface Job {
   id: string;
+  /** The order this ticket belongs to, so a failure can name it. */
+  order_id: string | null;
   kind: string;
   payload: TicketPayload | ReceiptPayload;
   copies: number;
@@ -143,7 +145,8 @@ class Agent {
       log(`printed ${job.kind} -> ${job.printer_name}`);
     } catch (err) {
       const message = (err as Error).message;
-      log(`FAILED ${job.kind} -> ${job.printer_name}: ${message}`);
+      log(`FAILED ${job.kind} -> ${job.printer_name}`
+        + `${job.order_id ? ` (order ${job.order_id})` : ''}: ${message}`);
       // Report the failure so the cloud can retry and, once retries are spent,
       // raise it to the cashier.
       await this.call('/api/print-agent/result', {

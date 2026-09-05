@@ -206,6 +206,13 @@ async function insertLines(
  * exactly the bug this split avoids.
  */
 export async function recalculateOrder(orderId: string, client: PoolClient): Promise<void> {
+  // Promotions first, because they change the discounts the totals below sum.
+  // Re-derived from the current basket every time rather than carried forward:
+  // adding an item can earn one and voiding an item can lose one, and a stale
+  // promotion is how a bill ends up cheaper than any rule allows.
+  const { applyPromotions } = await import('../promotions/promotions.service.js');
+  await applyPromotions(orderId, client);
+
   const totals = await one<{ subtotal: number; discounts: number }>(
     `SELECT
        COALESCE((SELECT SUM((unit_price + modifiers_total) * quantity)

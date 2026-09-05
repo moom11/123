@@ -15,6 +15,7 @@ import { auditRoutes } from './modules/audit/audit.routes.js';
 import { invoicingRoutes } from './modules/invoicing/invoicing.routes.js';
 import { deviceRoutes } from './modules/devices/devices.routes.js';
 import { deliveryRoutes, deliveryWebhookRoutes } from './modules/delivery/delivery.routes.js';
+import { promotionRoutes } from './modules/promotions/promotions.routes.js';
 
 /**
  * Route registration.
@@ -40,6 +41,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     await api.register(invoicingRoutes);
     await api.register(deviceRoutes);
     await api.register(deliveryRoutes);
+    await api.register(promotionRoutes);
   }, { prefix: '/api' });
 
   await app.register(publicRoutes, { prefix: '/api/public' });

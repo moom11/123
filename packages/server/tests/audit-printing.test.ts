@@ -218,13 +218,22 @@ describe('print queue and agent protocol', () => {
     });
     const { orderId } = order.json();
 
-    const claimed = await app.inject({
-      method: 'POST', url: '/api/print-agent/claim',
-      headers: { authorization: `Bearer ${token}` }, payload: { limit: 10 },
-    });
-    expect(claimed.statusCode).toBe(200);
-    const job = claimed.json().jobs.find((j: any) => j.printer_name === 'Bar Printer');
-    expect(job).toBeTruthy();
+    // Drain until this order's ticket appears, exactly as a real agent does.
+    // The queue is FIFO and branch-wide, so a single claim of ten reaches this
+    // job only when the suite happens to have queued little before it — which
+    // stopped being true as the suite grew.
+    let job: any;
+    for (let round = 0; round < 20 && !job; round += 1) {
+      const claimed = await app.inject({
+        method: 'POST', url: '/api/print-agent/claim',
+        headers: { authorization: `Bearer ${token}` }, payload: { limit: 25 },
+      });
+      expect(claimed.statusCode).toBe(200);
+      const jobs = claimed.json().jobs as any[];
+      if (jobs.length === 0) break;
+      job = jobs.find((j) => j.order_id === orderId && j.printer_name === 'Bar Printer');
+    }
+    expect(job, 'the bar ticket for this order was never claimed').toBeTruthy();
     // The agent receives everything it needs to drive the printer itself.
     expect(job.ip_address).toBe('192.168.10.102');
     expect(job.port).toBe(9100);

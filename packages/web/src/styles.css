@@ -493,3 +493,22 @@ table.data td.num { direction: ltr; text-align: left; font-variant-numeric: tabu
    it is marked on the card rather than found at the pass. */
 .delivery__items li.out { color: var(--danger, #c0392b); }
 .delivery__items .flag { font-size: 12px; font-weight: 600; }
+
+/* --- Promotion form ---------------------------------------------------------
+   Day and category pickers as chips: a promotion's targeting is a small set
+   chosen from a short list, and a multi-select hides what is picked. */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px;
+  font-size: 13px; cursor: pointer; background: var(--surface);
+}
+.chip input { margin: 0; }
+.chip:has(input:checked) { border-color: var(--accent, #b8892a); font-weight: 600; }
+label.check { display: block; margin: 10px 0; }
+label.check small { display: block; margin-top: 2px; }
+fieldset {
+  border: 1px solid var(--border); border-radius: var(--radius-sm, 6px);
+  padding: 10px 12px; margin: 12px 0;
+}
+fieldset legend { font-size: 13px; font-weight: 600; padding: 0 4px; }

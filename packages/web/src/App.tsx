@@ -18,6 +18,7 @@ import { Printers } from './pages/Printers.js';
 import { Invoices } from './pages/Invoices.js';
 import { Devices } from './pages/Devices.js';
 import { Delivery } from './pages/Delivery.js';
+import { Promotions } from './pages/Promotions.js';
 import { Menu } from './pages/Menu.js';
 import { Admin } from './pages/Admin.js';
 import { CustomerMenu } from './pages/CustomerMenu.js';
@@ -102,6 +103,7 @@ const NAV: Array<{ section: string; items: NavEntry[] }> = [
         badge: 'purchasing',
       },
       { to: '/reports', label: 'التقارير', icon: '📈', permissions: ['reports.products', 'reports.employees'] },
+      { to: '/promotions', label: 'العروض', icon: '🏷️', permissions: ['promotions.read'] },
       { to: '/invoices', label: 'الفواتير', icon: '🧾', permissions: ['invoices.read'] },
     ],
   },
@@ -277,6 +279,7 @@ function Shell() {
             <Route path="/invoices" element={<Guard perm={['invoices.read']}><Invoices /></Guard>} />
             <Route path="/devices" element={<Guard perm={['devices.read']}><Devices /></Guard>} />
             <Route path="/delivery" element={<Guard perm={['delivery.read']}><Delivery /></Guard>} />
+            <Route path="/promotions" element={<Guard perm={['promotions.read']}><Promotions /></Guard>} />
             <Route
               path="/admin"
               element={<Guard perm={['admin.users.read', 'employees.read']}><Admin /></Guard>}
