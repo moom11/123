@@ -3,6 +3,7 @@
  * workerd runtime, to prove the port preserved behaviour.
  */
 import { execSync } from 'node:child_process';
+import { createHmac } from 'node:crypto';
 
 const BASE = 'http://127.0.0.1:8787';
 const psql = (q) => execSync(
@@ -29,6 +30,23 @@ const api = async (path, opts = {}) => {
   return { status: res.status, json };
 };
 
+/** RFC 6238, six digits, SHA-1, 30s — the same code an authenticator shows. */
+function totp(base32Secret, at = Date.now()) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = '';
+  for (const ch of base32Secret.replace(/=+$/, '').toUpperCase()) {
+    bits += alphabet.indexOf(ch).toString(2).padStart(5, '0');
+  }
+  const key = Buffer.from(
+    (bits.match(/.{8}/g) ?? []).map((b) => parseInt(b, 2)));
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(at / 1000 / 30)));
+  const mac = createHmac('sha1', key).update(counter).digest();
+  const offset = mac[mac.length - 1] & 0x0f;
+  const code = mac.readUInt32BE(offset) & 0x7fffffff;
+  return String(code % 1_000_000).padStart(6, '0');
+}
+
 const branchId = psql("select id from branches where code='MARA-01'");
 
 // Repeated runs deliberately submit a wrong PIN, which trips the lockout. Clear
@@ -36,6 +54,18 @@ const branchId = psql("select id from branches where code='MARA-01'");
 // test in the server suite.
 psql("UPDATE employees SET failed_pin_count = 0, locked_until = NULL");
 psql("UPDATE users SET failed_login_count = 0, locked_until = NULL");
+// The OTP cap is per phone per hour, so a few runs in a row would meet the
+// real limiter rather than the code under test. Age the fixture's previous
+// requests out of the window instead of deleting them — other rows point at
+// them, and the limiter is the thing being kept honest, not disabled.
+psql("UPDATE otp_requests SET created_at = created_at - interval '2 hours'"
+   + " WHERE phone = '+966551234567' AND created_at > now() - interval '2 hours'");
+
+// Completing the enrolment below turns MFA on for this account, so the next run
+// would meet a different login shape. Reset it, and only it, to keep the run
+// idempotent — the enrolment path is the one worth exercising each time.
+psql("UPDATE users SET mfa_enabled = FALSE, mfa_secret = NULL, mfa_confirmed_at = NULL"
+   + " WHERE email = 'manager@maralounge.sa'");
 
 // --- 1. Argon2 under workerd: the CPU-heavy path -----------------------------
 const t0 = Date.now();
@@ -60,13 +90,35 @@ const adminPin = await api('/auth/employee/login', {
 check('an administrative account is refused a PIN login',
   adminPin.status === 403 || adminPin.status === 401, `HTTP ${adminPin.status}`);
 
-// --- 4. Admin login + the /auth/me permission set ------------------------------
+// --- 4. Admin login demands the second factor, then completes it ---------------
+// The rule is that no administrative account reaches a session on a password
+// alone, so the pass condition here is the refusal: a `status: 'ok'` with tokens
+// would be the failure, not the success.
 const adminLogin = await api('/auth/login', {
   method: 'POST', body: { email: 'manager@maralounge.sa', password: 'MaraManager#2026Xy' },
 });
-check('admin email+password login works', adminLogin.json?.status === 'ok',
+check('an administrative password alone does not open a session',
+  ['mfa_required', 'mfa_enrollment_required'].includes(adminLogin.json?.status)
+  && !adminLogin.json?.tokens,
   `status=${adminLogin.json?.status}`);
-const manager = adminLogin.json?.tokens?.accessToken;
+
+// And the factor itself is real: a live RFC 6238 code, computed here and
+// verified inside workerd, against the secret the Worker just issued.
+const adminSecret = adminLogin.json?.enrollment?.secret;
+const mfaDone = adminSecret
+  ? await api('/auth/mfa/verify', {
+      method: 'POST',
+      body: { mfaToken: adminLogin.json.mfaToken, code: totp(adminSecret) },
+    })
+  : { status: 0, json: null };
+check('a correct TOTP code completes the login on workerd',
+  Boolean(mfaDone.json?.tokens?.accessToken), `HTTP ${mfaDone.status}`);
+const manager = mfaDone.json?.tokens?.accessToken;
+
+const managerMe = await api('/auth/me', { token: manager });
+check('the manager session carries an administrative permission set',
+  (managerMe.json?.permissions?.length ?? 0) > 20,
+  `${managerMe.json?.permissions?.length} permissions`);
 
 const me = await api('/auth/me', { token: cashier });
 check('/auth/me returns the caller permission set',
@@ -107,22 +159,30 @@ const cross = await api(`/orders/${foreignOrder}`, { token: waiter });
 check("another branch's order is refused", cross.status === 403, `HTTP ${cross.status}`);
 
 // --- 8. The guest QR surface ---------------------------------------------------
-const qrToken = psql("select qr_token from restaurant_tables where table_number='12'");
-const { createHmac } = await import('node:crypto');
-const sig = createHmac('sha256', 'dev-cookie-secret-at-least-32-characters-long!!')
-  .update('table:' + qrToken).digest('base64url').slice(0, 16);
+// The signed value is asked of the Worker rather than recomputed here: the
+// signing secret is generated per process, so a value hardcoded in this script
+// would be wrong even when the code is right. This is also the exact value that
+// gets printed onto the table sticker.
+const tableId = psql("select id from restaurant_tables where table_number='12' limit 1");
+const qr = await api(`/tables/${tableId}/qr`, { token: manager });
+const qrValue = String(qr.json?.menuUrl ?? '').split('/menu/')[1] ?? '';
+check('the Worker mints a signed QR value for a table', qrValue.includes('.'),
+  `HTTP ${qr.status}`);
 
-const menu = await fetch(`${BASE}/api/public/menu/${qrToken}.${sig}`).then((r) => r.json());
+const menu = await fetch(`${BASE}/api/public/menu/${qrValue}`).then((r) => r.json());
 check('QR resolves the table without a session', menu?.table?.number === '12',
   `table ${menu?.table?.number}`);
 check('the guest menu carries products', (menu?.menu?.products?.length ?? 0) > 0);
 
-const tampered = await fetch(`${BASE}/api/public/menu/${qrToken}.0000000000000000`);
+const tampered = await fetch(
+  `${BASE}/api/public/menu/${qrValue.split('.')[0]}.0000000000000000`);
 check('a tampered QR is refused', tampered.status === 404);
 
 // --- 9. An order routes to its department printers -----------------------------
-const flatWhite = psql("select id from products where name_ar='فلات وايت'");
-const dessert = psql("select id from products where name_ar='كيك الشوكولاتة'");
+const flatWhite = psql(
+  "select id from products where name_ar='فلات وايت' and deleted_at is null limit 1");
+const dessert = psql(
+  "select id from products where name_ar='كيك الشوكولاتة' and deleted_at is null limit 1");
 const before = Number(psql('select count(*) from orders'));
 const order = await api('/orders', {
   method: 'POST', token: cashier,
@@ -166,7 +226,8 @@ check('a retried submit returns the original order',
 
 // --- 12. The discount OTP gate -------------------------------------------------
 const customerId = psql("select id from customers where phone='+966551234567'");
-const shisha = psql("select id from products where name_ar='معسل تفاحتين'");
+const shisha = psql(
+  "select id from products where name_ar='معسل تفاحتين' and deleted_at is null limit 1");
 const discOrder = await api('/orders', {
   method: 'POST', token: cashier,
   body: {

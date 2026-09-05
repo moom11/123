@@ -68,11 +68,25 @@ export function generateNumericCode(length = 6): string {
 // TOTP secrets must be recoverable (unlike passwords), so they are encrypted
 // with AES-256-GCM under a key derived from MFA_SECRET_KEY rather than hashed.
 
-const MFA_KEY = scryptSync(config.auth.mfaSecretKey, 'mara-mfa-secret-v1', 32);
+/**
+ * Derived on first use, never at module scope.
+ *
+ * A Worker forbids randomness and I/O while the module graph loads, and
+ * config.auth.mfaSecretKey generates a development fallback when the variable
+ * is absent — so reading it here crashed the isolate before a single request
+ * arrived, with an error that names the runtime rather than the cause.
+ *
+ * Cached after the first call: scrypt is deliberately expensive, and deriving
+ * it per request would put ~100ms in front of every MFA check.
+ */
+let mfaKey: Buffer | undefined;
+function mfaSecretKey(): Buffer {
+  return (mfaKey ??= scryptSync(config.auth.mfaSecretKey, 'mara-mfa-secret-v1', 32));
+}
 
 export function encryptSecret(plain: string): string {
   const iv = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', MFA_KEY, iv);
+  const cipher = createCipheriv('aes-256-gcm', mfaSecretKey(), iv);
   const enc = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
   const tag = cipher.getAuthTag();
   return `v1.${iv.toString('base64url')}.${enc.toString('base64url')}.${tag.toString('base64url')}`;
@@ -84,7 +98,7 @@ export function decryptSecret(packed: string): string {
     throw new Error('Malformed encrypted secret');
   }
   const decipher = createDecipheriv(
-    'aes-256-gcm', MFA_KEY, Buffer.from(ivB64, 'base64url'),
+    'aes-256-gcm', mfaSecretKey(), Buffer.from(ivB64, 'base64url'),
   );
   decipher.setAuthTag(Buffer.from(tagB64, 'base64url'));
   return Buffer.concat([
