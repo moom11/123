@@ -1,0 +1,17 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "mara-buyer",
+  "compatibility_date": "2026-08-25",
+
+  // Assets only — the buyer app has no server code of its own. It talks to the
+  // API Worker over HTTPS, so it needs no bindings and no secrets.
+  //
+  // Build it first:  npm --workspace @mara/buyer run build
+  // Then:            npx wrangler deploy   (from this directory)
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  },
+
+  "observability": { "enabled": true }
+}
