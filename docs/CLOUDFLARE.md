@@ -1,6 +1,51 @@
 # تشغيل النظام على Cloudflare Workers
 # Running MARA on Cloudflare Workers
 
+## الرفع على Cloudflare — المسار كاملاً
+
+النظام جاهز للتشغيل على Cloudflare، والشيفرة كلها تعمل على `workerd` الحقيقي
+(٢٦ فحصاً أمنياً من ٢٦). ما يلي هو كل ما تبقّى، وكله **يحتاج حسابك أنت**: لا
+أستطيع تسجيل الدخول إلى حسابك ولا إنشاء رمز API نيابةً عنك.
+
+```bash
+# ١) الدخول إلى حسابك (§1.5)
+npx wrangler login
+
+# ٢) قاعدة بيانات PostgreSQL خارجية — Cloudflare لا توفّر واحدة (§1.2)
+export DATABASE_URL='postgres://user:pass@host/mara?sslmode=require'
+npm --workspace @mara/server run migrate
+npm --workspace @mara/server run seed
+
+# ٣) Hyperdrive بلا تخزين مؤقت — لأن رصيد المخزون لا يحتمل جواباً قديماً (§1.3)
+npx wrangler hyperdrive create mara-db \
+  --connection-string="$DATABASE_URL" --caching-disabled
+#    ضع المعرّف الناتج في packages/server/wrangler.jsonc
+
+# ٤) التخزين والأسرار (§4، §5)
+npx wrangler r2 bucket create mara-attachments
+cd packages/server
+for k in JWT_ACCESS_SECRET JWT_REFRESH_SECRET COOKIE_SECRET MFA_SECRET_KEY; do
+  openssl rand -base64 48 | npx wrangler secret put "$k"
+done
+cd ../..
+
+# ٥) غيّر كلمات المرور والرموز المنشورة، ثم:
+npm --workspace @mara/server run preflight
+
+# ٦) الرفع
+MARA_API_HOST=mara-api.<حسابك>.workers.dev ./scripts/deploy-cloudflare.sh
+```
+
+**شرطان لا مفرّ منهما:** خطة Workers **المدفوعة** — لأن التحقق من كلمة المرور
+بخوارزمية Argon2id قيس عليه ١٤٣٧ مللي ثانية من المعالج والسقف المجاني ١٠ فقط،
+فكل تسجيل دخول سيُقتل في منتصفه (§1.1) — و**قاعدة بيانات PostgreSQL من مزوّد
+آخر**، لأن Cloudflare لا تستضيف PostgreSQL (§1.2).
+
+وشيء واحد لا يذهب إلى السحابة أبداً: **وكيل الطباعة** يعمل داخل المحل، لأن
+الطابعات تتكلم ESC/POS على شبكة المحل ولا عنوان عام لها (§11).
+
+---
+
 The API runs unchanged on two runtimes: Node (Fastify, `src/index.ts`) and the
 Cloudflare Workers runtime (`src/worker.ts`). Only the infrastructure adapters
 differ — router, database handle, realtime transport and attachment storage.
@@ -96,6 +141,7 @@ match; `scripts/deploy-cloudflare.sh` will not deploy until it does.
 
 | | what | who |
 | --- | --- | --- |
+| 0 | `wrangler login`, or an API token (§1.5) | you |
 | 1 | Cloudflare account on the **paid** Workers plan (§1.1), R2 enabled (§4) | you |
 | 2 | A Postgres database at a provider, migrated and seeded (§2) | you |
 | 3 | Hyperdrive, created `--caching-disabled` (§3) | one command |
@@ -159,15 +205,52 @@ benefit without the cache.
 Attachments (purchase invoices photographed by the buyer, waste evidence) go to
 R2. Enable R2 once in the dashboard — Workers alone does not enable it.
 
+### 1.5 Wrangler has to be signed in as you — and only you can do that
+
+Every command below reaches Cloudflare's API as an authenticated account. On
+your own machine:
+
+```bash
+npx wrangler login          # opens a browser, one click, done
+npx wrangler whoami         # should print your account and its id
+```
+
+On a machine with no browser — a CI runner, a container, a server over SSH —
+use an API token instead. Create it at
+**dash.cloudflare.com → My Profile → API Tokens → Create Token**, starting from
+the *Edit Cloudflare Workers* template, and add these permissions if the
+template does not already carry them:
+
+| resource | permission |
+| --- | --- |
+| Account → Workers Scripts | Edit |
+| Account → Workers R2 Storage | Edit |
+| Account → Hyperdrive | Edit |
+| Account → Account Settings | Read |
+
+Then:
+
+```bash
+export CLOUDFLARE_API_TOKEN=<the token>
+export CLOUDFLARE_ACCOUNT_ID=<from the dashboard sidebar>
+```
+
+This is the one step nobody can do on your behalf. A token is a key to your
+account and to the bill attached to it; treat it as a password, keep it out of
+the repository, and revoke it from the same page when it is no longer needed.
+
 ## 2. Database
 
 ```bash
 # Against your Postgres provider's connection string:
 export DATABASE_URL='postgres://user:pass@host/mara?sslmode=require'
 
-npm --workspace @mara/server run migrate   # applies migrations 001–008
+npm --workspace @mara/server run migrate   # applies migrations 001–012
 npm --workspace @mara/server run seed      # branches, roles, menu, printers
 ```
+
+That is 12 migrations and 79 tables, including ZATCA invoicing (009), the
+device registry (010), delivery partners (011) and promotions (012).
 
 Migrations are applied from your machine, not from the Worker: `AUTO_MIGRATE`
 is `false` in `wrangler.jsonc` so that a cold start never races a schema change.
@@ -187,9 +270,13 @@ For `wrangler dev` against a local Postgres, set the local override instead of
 editing the file:
 
 ```bash
-export WRANGLER_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE=\
-'postgres://postgres:postgres@127.0.0.1:5432/mara'
+export CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE=\
+'postgres://postgres:localdev@127.0.0.1:5432/mara'
 ```
+
+The password is not optional even locally — wrangler validates the string and
+refuses to start without one, so a `trust`-authenticated local Postgres needs
+`ALTER ROLE postgres PASSWORD 'localdev'` once before `wrangler dev` will run.
 
 ## 4. R2
 
@@ -297,11 +384,11 @@ transport installed per request forwards the event to the DO through
 ## 10. Verifying the deployment
 
 `packages/server/worker-smoke.mjs` runs the security-critical flows against a
-running Worker. It was used to validate this port on `workerd` and passes 23/23:
+running Worker. It was used to validate this port on `workerd` and passes 26/26:
 
 ```bash
-npx wrangler dev --port 8787          # in one shell
-node packages/server/worker-smoke.mjs # in another
+npx wrangler dev --port 8787                     # in one shell
+npm --workspace @mara/server run worker:smoke    # in another
 ```
 
 It covers employee PIN login, the refusal of PIN login for administrative
@@ -310,6 +397,13 @@ financial reports, static-vs-parameter route precedence, cross-branch refusal
 (403), QR table resolution and tamper rejection, department printer routing,
 server-side pricing, idempotent re-submission, OTP rejection, and recipe stock
 consumption inside a transaction.
+
+It also completes a **full MFA login inside workerd**: an administrative
+password alone is required to be refused, and a live RFC 6238 code computed by
+the script is then verified by the Worker. The run is idempotent — it resets
+the lockout counters, the enrolment it just performed, and the OTP fixture's
+place in the per-phone hourly window, so it can be run repeatedly without
+measuring the previous run instead of the code.
 
 ## 11. What runs where, and on which device
 
@@ -347,6 +441,7 @@ offline.
 | Attachments | `uploads/` on disk | R2 |
 | Background jobs | `setInterval` | Cron Triggers |
 | Argon2 | pure JS (`core/argon2.ts`) | same code — runtime WASM compilation is forbidden on Workers, so there is no native or WASM path on either runtime |
+| ZATCA signing | `@noble/curves` secp256k1 | same code — `node:crypto`'s EC keys do not exist here, so key encoding is hand-built DER (`core/zatca/keys.ts`) and verified against openssl |
 
 ### Module scope is not a place to do work
 
@@ -357,6 +452,13 @@ body doing it at import time. Keep this in mind when adding configuration — a
 `randomBytes()` or `fetch()` at the top level of any imported module takes the
 whole Worker down at startup, on every request, with a message that points at
 the module rather than at your change.
+
+This has now bitten twice, and the second one is the instructive one:
+`core/crypto.ts` derived the MFA encryption key with `scryptSync` at module
+scope. Legal under Node, fatal here — not because `scryptSync` is forbidden,
+but because the config value it reads *generates a random development
+fallback* when the variable is absent. The randomness was two calls away from
+the line that died. Derive on first use, not at import.
 
 Note the last row: `WebAssembly.compile()` is blocked by the Workers embedder,
 which is why Argon2id is implemented in plain TypeScript rather than pulled from
