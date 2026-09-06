@@ -157,6 +157,13 @@ export const PERMISSIONS = [
   'invoices.credit_note',        // issue a correction against a settled invoice
   'invoices.manage_credentials',
 
+  // --- Anomaly findings ------------------------------------------------------
+  // Reading a finding means reading a claim about a named employee, so this is
+  // not a floor permission. Answering one is a management act and is recorded
+  // with the answerer's name.
+  'anomalies.read',
+  'anomalies.review',
+
   // --- Audit / notifications -------------------------------------------------
   'audit.read',
   'notifications.read',

@@ -512,3 +512,27 @@ fieldset {
   padding: 10px 12px; margin: 12px 0;
 }
 fieldset legend { font-size: 13px; font-weight: 600; padding: 0 4px; }
+
+/* Findings.
+
+   One card per question, sized like the delivery cards so a manager reads them
+   the same way they read anything else that needs an answer. The evidence sits
+   behind a button rather than on the card: what matters at a glance is the
+   claim and how far past the line it went. */
+.card.anomaly { display: flex; flex-direction: column; gap: 8px; }
+.anomaly__head {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 14px;
+}
+.anomaly__head .muted { margin-inline-start: auto; }
+.anomaly__meta { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.anomaly__actions {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border);
+}
+.anomaly__actions .btn { margin-inline-start: 0; }
+
+/* Evidence rows carry free text somebody typed at the till — a void reason, a
+   note. Wrapping it is the point: a reason clipped at "الع" is the one column
+   that would have answered the question. */
+table.data.evidence td { white-space: normal; word-break: break-word; }
+table.data.evidence { table-layout: fixed; }

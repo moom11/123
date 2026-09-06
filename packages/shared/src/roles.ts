@@ -83,6 +83,7 @@ const EXECUTIVE: Permission[] = [
   'devices.read', 'devices.manage',
   'invoices.read', 'invoices.report', 'invoices.credit_note',
   'invoices.manage_credentials',
+  'anomalies.read', 'anomalies.review',
   'audit.read', 'notifications.read',
 ];
 
@@ -123,6 +124,10 @@ const BRANCH_MANAGER: Permission[] = [
   // Not invoices.manage_credentials: the stamping key is the branch's legal
   // identity, and a branch manager may not mint one for themselves.
   'invoices.read', 'invoices.report', 'invoices.credit_note',
+  // A branch manager sees findings about their own floor and answers them.
+  // They are also a subject of some of them, which is why dismissal is
+  // audited and visible to the owner.
+  'anomalies.read', 'anomalies.review',
   'audit.read', 'notifications.read',
 ];
 
@@ -144,6 +149,8 @@ const ACCOUNTANT: Permission[] = [
   'delivery.read',
   'devices.read',
   'invoices.read', 'invoices.report',
+  // Read, not review: an accountant's job is to notice, not to close.
+  'anomalies.read',
   'audit.read', 'notifications.read',
 ];
 

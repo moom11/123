@@ -17,6 +17,7 @@
     "worker:types": "wrangler types",
     "worker:tail": "wrangler tail",
     "worker:check": "tsc -p tsconfig.worker.json --noEmit",
+    "sync-permissions": "tsx src/core/permissions-sync.ts",
     "worker:smoke": "node worker-smoke.mjs"
   },
   "dependencies": {

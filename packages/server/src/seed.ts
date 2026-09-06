@@ -9,51 +9,19 @@
  *
  * Idempotent — running it twice does not duplicate anything.
  */
-import { ROLE_LABELS_AR, ROLE_PERMISSIONS, ROLES, PERMISSIONS, isAdminRole } from '@mara/shared';
 import { closePool, one, pool, withTransaction } from './core/db.js';
 import { hashSecret, generateToken, hashToken } from './core/crypto.js';
 import { runMigrations } from './core/migrate.js';
+import { syncRolesAndPermissions } from './core/permissions-sync.js';
 import { buildQrValue } from './modules/tables/tables.service.js';
 
 const log = (m: string) => console.log(`  ${m}`);
-
-async function seedRolesAndPermissions(): Promise<Map<string, string>> {
-  for (const code of PERMISSIONS) {
-    await pool.query(
-      'INSERT INTO permissions (code) VALUES ($1) ON CONFLICT (code) DO NOTHING',
-      [code],
-    );
-  }
-
-  const roleIds = new Map<string, string>();
-  for (const code of ROLES) {
-    const row = await one<{ id: string }>(
-      `INSERT INTO roles (code, name_ar, is_admin)
-       VALUES ($1,$2,$3)
-       ON CONFLICT (code) DO UPDATE SET name_ar = EXCLUDED.name_ar, is_admin = EXCLUDED.is_admin
-       RETURNING id`,
-      [code, ROLE_LABELS_AR[code], isAdminRole(code)],
-    );
-    roleIds.set(code, row!.id);
-
-    // Re-sync the role's grants so a code change to the matrix takes effect.
-    await pool.query('DELETE FROM role_permissions WHERE role_id = $1', [row!.id]);
-    for (const perm of ROLE_PERMISSIONS[code]) {
-      await pool.query(
-        'INSERT INTO role_permissions (role_id, permission_code) VALUES ($1,$2) ON CONFLICT DO NOTHING',
-        [row!.id, perm],
-      );
-    }
-  }
-  log(`roles: ${roleIds.size}, permissions: ${PERMISSIONS.length}`);
-  return roleIds;
-}
 
 async function main(): Promise<void> {
   console.log('MARA seed');
   await runMigrations(log);
 
-  const roleIds = await seedRolesAndPermissions();
+  const roleIds = await syncRolesAndPermissions(log);
 
   // --- Branch ---------------------------------------------------------------
   const branch = await one<{ id: string }>(
@@ -510,24 +478,43 @@ async function main(): Promise<void> {
   // --- Terminals, and their stamping identities -----------------------------
   // The floor has one till and several waiter tablets. Only the till closes
   // bills, and only the till is an EGS unit with a ZATCA certificate.
+  // Migration 010 already gives every existing branch a till, so that an
+  // upgrade does not leave a running venue unable to close a bill. Its token
+  // is a hash of a random value nobody ever saw, which is deliberate — it
+  // registers the terminal, it does not authorise one. Use the same serial
+  // here so the seed ADOPTS that row and hands over a usable token, rather
+  // than standing a second identical till beside it that no one can log into
+  // and that preflight then reports as a second unregistered EGS unit.
   const tills = [
-    { kind: 'cashier' as const, label: 'الكاشير الرئيسي', serial: 'TILL-01' },
+    { kind: 'cashier' as const, label: 'الكاشير الرئيسي', serial: 'TILL-MARA-01' },
     { kind: 'waiter' as const, label: 'جهاز نادل 1', serial: 'WAITER-01' },
     { kind: 'waiter' as const, label: 'جهاز نادل 2', serial: 'WAITER-02' },
   ];
   const deviceTokens: Array<{ label: string; token: string }> = [];
   for (const spec of tills) {
-    const existing = await one<{ id: string }>(
-      'SELECT id FROM devices WHERE branch_id = $1 AND serial_number = $2',
+    const existing = await one<{ id: string; registered_by: string | null }>(
+      'SELECT id, registered_by FROM devices WHERE branch_id = $1 AND serial_number = $2',
       [branchId, spec.serial],
     );
-    if (existing) continue;
+    // registered_by is null only on the migration's row: a device somebody
+    // issued a token for has the issuer on it. Re-seeding a real install must
+    // not rotate a token that is already pasted into a terminal.
+    if (existing && existing.registered_by) continue;
+
     const token = generateToken(32);
-    await pool.query(
-      `INSERT INTO devices (branch_id, kind, label, serial_number, token_hash, registered_by)
-       VALUES ($1,$2,$3,$4,$5,$6)`,
-      [branchId, spec.kind, spec.label, spec.serial, hashToken(token), owner!.id],
-    );
+    if (existing) {
+      await pool.query(
+        `UPDATE devices SET label = $2, kind = $3, token_hash = $4, registered_by = $5
+          WHERE id = $1`,
+        [existing.id, spec.label, spec.kind, hashToken(token), owner!.id],
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO devices (branch_id, kind, label, serial_number, token_hash, registered_by)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [branchId, spec.kind, spec.label, spec.serial, hashToken(token), owner!.id],
+      );
+    }
     deviceTokens.push({ label: `${spec.label} (${spec.serial})`, token });
   }
 

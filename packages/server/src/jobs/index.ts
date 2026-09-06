@@ -39,6 +39,13 @@ export function startBackgroundJobs(log: Logger): void {
     ).catch((err) => log.error({ err }, 'session sweep failed'));
   }, 15 * 60_000));
 
+  // Hourly: the pattern detectors. A shift is the unit these findings are
+  // about, so nothing is gained by looking more often, and a manager who wants
+  // to look now has a button that runs the same sweep.
+  timers.push(setInterval(() => {
+    void runAnomalySweep(log);
+  }, 60 * 60_000));
+
   log.info({ jobs: timers.length }, 'background jobs started');
 }
 
@@ -124,5 +131,16 @@ async function checkPrintHealth(log: Logger): Promise<void> {
     }
   } catch (err) {
     log.error({ err }, 'print health check failed');
+  }
+}
+
+async function runAnomalySweep(log: Logger): Promise<void> {
+  try {
+    const { sweepAllBranches } = await import('../modules/anomalies/anomalies.service.js');
+    const results = await sweepAllBranches();
+    const opened = results.reduce((n, r) => n + r.opened, 0);
+    if (opened > 0) log.info({ opened }, 'anomaly sweep opened new findings');
+  } catch (err) {
+    log.error({ err }, 'anomaly sweep failed');
   }
 }

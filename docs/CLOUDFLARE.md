@@ -245,12 +245,18 @@ the repository, and revoke it from the same page when it is no longer needed.
 # Against your Postgres provider's connection string:
 export DATABASE_URL='postgres://user:pass@host/mara?sslmode=require'
 
-npm --workspace @mara/server run migrate   # applies migrations 001–012
-npm --workspace @mara/server run seed      # branches, roles, menu, printers
+npm --workspace @mara/server run migrate           # applies migrations 001–013
+npm --workspace @mara/server run sync-permissions # the role matrix, every deploy
+npm --workspace @mara/server run seed             # branches, roles, menu, printers
 ```
 
-That is 12 migrations and 79 tables, including ZATCA invoicing (009), the
-device registry (010), delivery partners (011) and promotions (012).
+That is 13 migrations and 80 tables, including ZATCA invoicing (009), the
+device registry (010), delivery partners (011), promotions (012) and anomaly
+findings (013).
+
+`sync-permissions` is the one to remember on an **upgrade**: the seed only
+fills an empty database, so without it a release that adds a permission leaves
+the screen it guards unopenable, with no error that says why.
 
 Migrations are applied from your machine, not from the Worker: `AUTO_MIGRATE`
 is `false` in `wrangler.jsonc` so that a cold start never races a schema change.

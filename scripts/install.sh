@@ -133,6 +133,11 @@ log "تطبيق الهجرات"
 set -a; . "$ENV_FILE"; set +a
 npm --workspace @mara/server run migrate
 
+# Always, not only on a fresh install: the role/permission matrix lives in code
+# and an upgrade that adds a permission ships a screen nobody can open until
+# the database has heard of it.
+npm --workspace @mara/server run sync-permissions
+
 # The seed is idempotent and only fills an empty database.
 if [ "$(sudo -u postgres psql -tAd "$DB_NAME" -c 'SELECT count(*) FROM branches' 2>/dev/null || echo 0)" = "0" ]; then
   log "تهيئة البيانات الأولية"

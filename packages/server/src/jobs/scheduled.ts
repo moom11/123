@@ -26,6 +26,14 @@ export async function runScheduledMaintenance(cron: string): Promise<void> {
     await purgeExpiredOtps(30);
   }
 
+  // Hourly: look for patterns nobody can see from a single event. Deliberately
+  // not every minute — these are claims about days and weeks, and re-deriving
+  // them sixty times an hour would cost real query time to reach the same
+  // answer.
+  if (cron.startsWith('15 ') || cron === '*/15 * * * *' || cron.startsWith('0 ')) {
+    await runAnomalySweep();
+  }
+
   // Every five minutes: retell the platforms what they missed. A stale status
   // on an aggregator means a rider sent too early or too late, so this runs
   // more often than the ZATCA queue even though it matters less legally.
@@ -181,5 +189,23 @@ async function retryDeliveryPushes(): Promise<void> {
     } catch (err) {
       console.error(`[delivery] push retry failed for branch ${branchId}`, err);
     }
+  }
+}
+
+/**
+ * The anomaly sweep, per branch.
+ *
+ * Wrapped so that one branch with a bad threshold or a locked table cannot
+ * stop the others being examined — the same reason the ZATCA queue is drained
+ * branch by branch.
+ */
+async function runAnomalySweep(): Promise<void> {
+  const { sweepAllBranches } = await import('../modules/anomalies/anomalies.service.js');
+  try {
+    const results = await sweepAllBranches();
+    const opened = results.reduce((n, r) => n + r.opened, 0);
+    if (opened > 0) console.log(`[anomalies] ${opened} new finding(s)`);
+  } catch (err) {
+    console.error('[anomalies] sweep failed', err);
   }
 }

@@ -19,6 +19,7 @@ import { Invoices } from './pages/Invoices.js';
 import { Devices } from './pages/Devices.js';
 import { Delivery } from './pages/Delivery.js';
 import { Promotions } from './pages/Promotions.js';
+import { Anomalies } from './pages/Anomalies.js';
 import { Menu } from './pages/Menu.js';
 import { Admin } from './pages/Admin.js';
 import { CustomerMenu } from './pages/CustomerMenu.js';
@@ -73,7 +74,7 @@ interface NavEntry {
   icon: string;
   /** Any one of these permissions reveals the entry. */
   permissions: string[];
-  badge?: 'approvals' | 'purchasing';
+  badge?: 'approvals' | 'purchasing' | 'anomalies';
 }
 
 const NAV: Array<{ section: string; items: NavEntry[] }> = [
@@ -105,6 +106,10 @@ const NAV: Array<{ section: string; items: NavEntry[] }> = [
       { to: '/reports', label: 'التقارير', icon: '📈', permissions: ['reports.products', 'reports.employees'] },
       { to: '/promotions', label: 'العروض', icon: '🏷️', permissions: ['promotions.read'] },
       { to: '/invoices', label: 'الفواتير', icon: '🧾', permissions: ['invoices.read'] },
+      {
+        to: '/anomalies', label: 'الملاحظات', icon: '🚩', permissions: ['anomalies.read'],
+        badge: 'anomalies',
+      },
     ],
   },
   {
@@ -159,6 +164,7 @@ function Shell() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [pendingApprovals, setPendingApprovals] = useState(0);
   const [pendingPurchases, setPendingPurchases] = useState(0);
+  const [openFindings, setOpenFindings] = useState(0);
   const location = useLocation();
 
   useEffect(() => { setMenuOpen(false); }, [location.pathname]);
@@ -178,10 +184,27 @@ function Shell() {
     setPendingPurchases((n) => n + 1);
     push('طلب شراء بانتظار الاعتماد', 'warn');
   });
+  useRealtimeEvent(['notification'], (e) => {
+    if (!String(e.payload?.kind ?? '').startsWith('anomaly_')) return;
+    setOpenFindings((n) => n + 1);
+    // Only the critical ones interrupt. A warning waits on its badge, which is
+    // the difference between a screen people read and one they turn off.
+    if (e.payload?.severity === 'critical') push(String(e.payload?.title ?? 'ملاحظة حرجة'), 'error');
+  });
 
-  const badge = (kind?: 'approvals' | 'purchasing'): number => {
+  // The badge starts from the truth rather than from zero: findings raised
+  // overnight are the ones a manager most needs to see when they open the app.
+  useEffect(() => {
+    if (!can('anomalies.read')) return;
+    api<{ open: number }>('/anomalies/summary')
+      .then((s) => setOpenFindings(s.open))
+      .catch(() => { /* the badge is not worth an error toast */ });
+  }, [can]);
+
+  const badge = (kind?: 'approvals' | 'purchasing' | 'anomalies'): number => {
     if (kind === 'approvals') return pendingApprovals;
     if (kind === 'purchasing') return pendingPurchases;
+    if (kind === 'anomalies') return openFindings;
     return 0;
   };
 
@@ -280,6 +303,7 @@ function Shell() {
             <Route path="/devices" element={<Guard perm={['devices.read']}><Devices /></Guard>} />
             <Route path="/delivery" element={<Guard perm={['delivery.read']}><Delivery /></Guard>} />
             <Route path="/promotions" element={<Guard perm={['promotions.read']}><Promotions /></Guard>} />
+            <Route path="/anomalies" element={<Guard perm={['anomalies.read']}><Anomalies /></Guard>} />
             <Route
               path="/admin"
               element={<Guard perm={['admin.users.read', 'employees.read']}><Admin /></Guard>}

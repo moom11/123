@@ -118,6 +118,10 @@ export const AUDIT = {
   PROMOTION_RETIRED: 'promotion.retired',
   PROMOTION_APPLIED: 'promotion.applied',
 
+  ANOMALY_SWEEP: 'anomaly.sweep',
+  ANOMALY_ACKNOWLEDGED: 'anomaly.acknowledged',
+  ANOMALY_DISMISSED: 'anomaly.dismissed',
+
   DELIVERY_RECEIVED: 'delivery.received',
   DELIVERY_ACCEPTED: 'delivery.accepted',
   DELIVERY_REJECTED: 'delivery.rejected',
