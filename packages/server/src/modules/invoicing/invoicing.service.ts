@@ -148,7 +148,17 @@ export async function issueInvoiceForOrder(
   const vatPercent = Number(branch.vat_percent);
   const vatAmount = Number(order.vat_amount);
   const subtotal = Number(order.subtotal);
-  const discountTotal = Number(order.discount_total) + Number(order.points_discount_total);
+  // The allowance on a signed invoice is derived from the two figures it must
+  // agree with, never summed from columns.
+  //
+  // It used to be `discount_total + points_discount_total`, which double-counts
+  // a points redemption: recalculateOrder already folds every bill-level
+  // discount — points included — into discount_total. The result was a legal
+  // document declaring subtotal 111.00, allowance 40.00 and total 81.00, three
+  // numbers that do not add up, stamped and chained. Taking the difference
+  // makes the document arithmetically true by construction, whatever the
+  // columns say.
+  const discountTotal = subtotal - Number(order.grand_total);
 
   // Spread the invoice-level VAT across lines so the parts sum to the whole.
   // Rounding each line independently drifts by a halala or two on a long bill,

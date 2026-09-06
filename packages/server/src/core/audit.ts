@@ -118,6 +118,10 @@ export const AUDIT = {
   PROMOTION_RETIRED: 'promotion.retired',
   PROMOTION_APPLIED: 'promotion.applied',
 
+  // The export leaves the building with customer names and a period's whole
+  // sales history in it, so who pulled it is part of the record.
+  ACCOUNTING_EXPORTED: 'accounting.exported',
+
   ANOMALY_SWEEP: 'anomaly.sweep',
   ANOMALY_ACKNOWLEDGED: 'anomaly.acknowledged',
   ANOMALY_DISMISSED: 'anomaly.dismissed',

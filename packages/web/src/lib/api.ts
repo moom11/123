@@ -112,7 +112,14 @@ export interface RequestOptions {
   signal?: AbortSignal;
 }
 
-export async function api<T = any>(path: string, opts: RequestOptions = {}): Promise<T> {
+/**
+ * One request, with the session attached and one retry after a refresh.
+ *
+ * Kept separate from `api` so that a response which is not JSON — the
+ * accounting exports are CSV — travels the same authenticated path instead of
+ * growing a second copy of the header and refresh logic that would drift.
+ */
+export async function request(path: string, opts: RequestOptions = {}): Promise<Response> {
   const send = async (): Promise<Response> => fetch(`${apiBase()}/api${path}`, {
     method: opts.method ?? 'GET',
     headers: {
@@ -149,8 +156,37 @@ export async function api<T = any>(path: string, opts: RequestOptions = {}): Pro
     throw new ApiError(res.status, code, message, details);
   }
 
+  return res;
+}
+
+export async function api<T = any>(path: string, opts: RequestOptions = {}): Promise<T> {
+  const res = await request(path, opts);
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
+}
+
+/**
+ * Fetch a file and hand it to the browser to save.
+ *
+ * A plain link cannot be used: these endpoints need the session header, and a
+ * download URL carrying a token would end up in browser history and in the
+ * server logs of anything it passed through.
+ */
+export async function download(path: string, filename: string): Promise<void> {
+  const res = await request(path);
+  const url = URL.createObjectURL(await res.blob());
+  try {
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } finally {
+    // Revoked on the next tick: Safari has not finished reading the blob when
+    // click() returns, and a revoked URL there saves an empty file.
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  }
 }
 
 /** Live updates. Reconnects with backoff so a flaky shop wifi self-heals. */

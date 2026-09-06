@@ -20,6 +20,7 @@ import { Devices } from './pages/Devices.js';
 import { Delivery } from './pages/Delivery.js';
 import { Promotions } from './pages/Promotions.js';
 import { Anomalies } from './pages/Anomalies.js';
+import { Accounting } from './pages/Accounting.js';
 import { Menu } from './pages/Menu.js';
 import { Admin } from './pages/Admin.js';
 import { CustomerMenu } from './pages/CustomerMenu.js';
@@ -110,6 +111,7 @@ const NAV: Array<{ section: string; items: NavEntry[] }> = [
         to: '/anomalies', label: 'الملاحظات', icon: '🚩', permissions: ['anomalies.read'],
         badge: 'anomalies',
       },
+      { to: '/accounting', label: 'المحاسبة', icon: '📚', permissions: ['accounting.export'] },
     ],
   },
   {
@@ -304,6 +306,7 @@ function Shell() {
             <Route path="/delivery" element={<Guard perm={['delivery.read']}><Delivery /></Guard>} />
             <Route path="/promotions" element={<Guard perm={['promotions.read']}><Promotions /></Guard>} />
             <Route path="/anomalies" element={<Guard perm={['anomalies.read']}><Anomalies /></Guard>} />
+            <Route path="/accounting" element={<Guard perm={['accounting.export']}><Accounting /></Guard>} />
             <Route
               path="/admin"
               element={<Guard perm={['admin.users.read', 'employees.read']}><Admin /></Guard>}

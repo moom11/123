@@ -406,3 +406,37 @@ describe('an order with a named customer', () => {
     expect(invoice!.xml).toContain(customer!.full_name);
   });
 });
+
+/**
+ * The arithmetic on the signed document.
+ *
+ * A tax invoice is read by a machine at the Authority and by an auditor years
+ * later. If its subtotal, allowance and total do not agree, neither of them can
+ * be told which figure is the real one.
+ */
+describe('the invoice adds up', () => {
+  test('a bill settled with points declares an allowance its own total supports',
+    async () => {
+      const rows = await many<{
+        invoice_number: string; subtotal: string; discount_total: string;
+        grand_total: string; vat_amount: string;
+      }>(
+        `SELECT invoice_number, subtotal::text, discount_total::text,
+                grand_total::text, vat_amount::text
+           FROM invoices WHERE document_type = 'invoice'`,
+      );
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) {
+        // The identity every tax authority checks first. It was broken for any
+        // order paid partly in loyalty points: the redemption was counted once
+        // by the order recalculation and again by the invoice builder.
+        expect(
+          Number(row.subtotal) - Number(row.discount_total),
+          `invoice ${row.invoice_number} does not add up`,
+        ).toBe(Number(row.grand_total));
+        // And the VAT declared is the tax contained in the total, since menu
+        // prices include it.
+        expect(Number(row.vat_amount)).toBeLessThan(Number(row.grand_total));
+      }
+    });
+});

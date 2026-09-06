@@ -157,6 +157,12 @@ export const PERMISSIONS = [
   'invoices.credit_note',        // issue a correction against a settled invoice
   'invoices.manage_credentials',
 
+  // --- Accounting ------------------------------------------------------------
+  // The export carries a period's whole sales history and its customer names
+  // out of the system, so it is its own permission rather than a corner of
+  // reports.financial.
+  'accounting.export',
+
   // --- Anomaly findings ------------------------------------------------------
   // Reading a finding means reading a claim about a named employee, so this is
   // not a floor permission. Answering one is a management act and is recorded

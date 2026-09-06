@@ -84,6 +84,7 @@ const EXECUTIVE: Permission[] = [
   'invoices.read', 'invoices.report', 'invoices.credit_note',
   'invoices.manage_credentials',
   'anomalies.read', 'anomalies.review',
+  'accounting.export',
   'audit.read', 'notifications.read',
 ];
 
@@ -151,6 +152,8 @@ const ACCOUNTANT: Permission[] = [
   'invoices.read', 'invoices.report',
   // Read, not review: an accountant's job is to notice, not to close.
   'anomalies.read',
+  // The role the export exists for.
+  'accounting.export',
   'audit.read', 'notifications.read',
 ];
 
