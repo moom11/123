@@ -875,7 +875,16 @@ def test_sheets_retries_after_network_failure(client, auth):
             time.sleep(0.2)
 
         assert any(r[1] == "9701" for r in stub.rows_of("punches")), "لم يصل الصف بعد إعادة المحاولة"
-        assert client.get("/api/sheets/status", headers=auth).json()["pending"] == 0
+
+        # الانتظار حتى يفرغ صندوق الإرسال (قد يكون خيط الإرسال الخلفي ما زال يعمل)
+        pending = None
+        for _ in range(10):
+            pending = client.get("/api/sheets/status", headers=auth).json()["pending"]
+            if pending == 0:
+                break
+            client.post("/api/sheets/flush", headers=auth)
+            time.sleep(0.2)
+        assert pending == 0
 
         # إثبات حدوث فشل ثم إعادة محاولة فعلية
         with SessionLocal() as db:
@@ -971,3 +980,60 @@ def test_sheets_settings_persist_and_disable(client, auth):
     # لا إرسال بعد التعطيل
     res = client.post("/api/sheets/flush", headers=auth).json()
     assert res["sent"] == 0
+
+
+def test_sheets_follows_apps_script_redirect():
+    """Apps Script يردّ على POST بإعادة توجيه 302 إلى رابط محتوى — يجب أن يُعالَج
+    بنجاح ودون تكرار الكتابة (أشهر سبب لفشل التكاملات مع Apps Script)."""
+    import json as _json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from app.services.sheets import post_payload
+
+    writes: list[dict] = []
+    results: dict[str, str] = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            length = int(self.headers.get("Content-Length", 0))
+            data = _json.loads(self.rfile.read(length).decode())
+            if data.get("secret") != "s3cret":
+                body = _json.dumps({"ok": False, "error": "unauthorized"})
+            else:
+                writes.append(data)
+                body = _json.dumps({"ok": True, "written": len(data.get("rows", []))})
+            token = str(len(results) + 1)
+            results[token] = body
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{self.server.server_port}/content/{token}")
+            self.end_headers()
+
+        def do_GET(self):  # noqa: N802
+            body = results.get(self.path.rsplit("/", 1)[-1], '{"ok":false}')
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body.encode())
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_port}/exec"
+    try:
+        payload = {
+            "dataset": "punches", "sheet": "البصمات",
+            "headers": ["الوقت", "رقم الموظف"], "mode": "append",
+            "rows": [["2026-09-07 08:01", "1001"]],
+        }
+        ok, message = post_payload(url, "s3cret", payload)
+        assert ok, message
+        assert len(writes) == 1, "تكررت الكتابة بعد إعادة التوجيه"
+
+        rejected, message = post_payload(url, "wrong", payload)
+        assert not rejected and "unauthorized" in message
+        assert len(writes) == 1
+    finally:
+        server.shutdown()
