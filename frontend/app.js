@@ -75,7 +75,11 @@ async function api(path, options = {}) {
     opts.body = new URLSearchParams(options.form).toString();
   }
   const res = await fetch(path, opts);
-  if (res.status === 401) { logout(); throw new Error('انتهت الجلسة، سجّل الدخول من جديد'); }
+  // 401 على طلب مصادَق عليه = انتهاء الجلسة، أما على شاشة الدخول فهو خطأ في البيانات
+  if (res.status === 401 && state.token && !path.startsWith('/api/auth/login')) {
+    logout();
+    throw new Error('انتهت الجلسة، سجّل الدخول من جديد');
+  }
   const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
