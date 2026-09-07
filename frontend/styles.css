@@ -17,6 +17,8 @@ a{color:var(--primary);text-decoration:none}
 .login-card{background:var(--surface);width:min(420px,100%);padding:32px;border-radius:20px;
   box-shadow:0 20px 45px rgba(0,0,0,.25)}
 .login-card h1{margin:0 0 6px;font-size:24px}
+.brand-logo{display:block;max-width:220px;max-height:110px;margin:0 auto 18px;object-fit:contain}
+.side-logo{display:block;max-width:150px;max-height:56px;margin:0 auto 10px;object-fit:contain}
 .login-card p.sub{margin:0 0 22px;color:var(--muted);font-size:14px}
 .login-card .quote{margin:0 0 22px;padding:12px 14px;border-radius:10px;
   background:linear-gradient(135deg,#f2f8f7,#eef4f6);border-right:3px solid var(--primary);

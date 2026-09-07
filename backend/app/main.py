@@ -15,6 +15,7 @@ from .database import SessionLocal
 from .routers import (
     attendance,
     auth,
+    branding,
     devices,
     employees,
     hr_extra,
@@ -28,6 +29,7 @@ from .routers import (
     violations,
 )
 from .seed import bootstrap
+from .services import daily as daily_service
 from .services import sheets as sheets_service
 from .services import zk_service
 
@@ -49,24 +51,26 @@ async def _auto_sync_loop() -> None:
             logger.warning("فشل المزامنة التلقائية: %s", exc)
 
 
-async def _sheets_loop() -> None:
-    """إرسال دفعات جوجل شيت المعلّقة وملخص الحضور اليومي."""
+async def _background_loop() -> None:
+    """مهام دورية: العبارة التحفيزية اليومية، ودفعات جوجل شيت وملخص الحضور."""
     while True:
         await asyncio.sleep(300)   # كل خمس دقائق
         try:
             with SessionLocal() as db:
-                if not sheets_service.is_enabled(db):
-                    continue
-                await asyncio.to_thread(sheets_service.flush, db)
-                await asyncio.to_thread(sheets_service.daily_attendance_job, db)
+                sent = await asyncio.to_thread(daily_service.send_daily_quote, db)
+                if sent:
+                    logger.info("أُرسلت العبارة اليومية إلى %s مستخدم", sent)
+                if sheets_service.is_enabled(db):
+                    await asyncio.to_thread(sheets_service.flush, db)
+                    await asyncio.to_thread(sheets_service.daily_attendance_job, db)
         except Exception as exc:  # pragma: no cover - حماية الحلقة
-            logger.warning("فشل إرسال دفعات جوجل شيت: %s", exc)
+            logger.warning("فشل تنفيذ المهام الدورية: %s", exc)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     bootstrap()
-    tasks = [asyncio.create_task(_sheets_loop())]
+    tasks = [asyncio.create_task(_background_loop())]
     if AUTO_SYNC_MINUTES > 0:
         tasks.append(asyncio.create_task(_auto_sync_loop()))
         logger.info("المزامنة التلقائية مفعّلة كل %s دقيقة", AUTO_SYNC_MINUTES)
@@ -100,6 +104,7 @@ for router in (
     sites.router,
     violations.router,
     payroll.router,
+    branding.router,
     hr_extra.router,
     sheets.router,
     reports.router,

@@ -1319,6 +1319,7 @@ views.settings = async () => {
       <button data-tab="sites">مواقع العمل والبصم الذاتي</button>
       <button data-tab="violationTypes">المخالفات والجزاءات</button>
       <button data-tab="payrollRules">قواعد الرواتب</button>
+      <button data-tab="branding">هوية المنشأة</button>
       <button data-tab="sheets">ربط جوجل شيت</button>
       <button data-tab="audit">سجل التدقيق</button>
       ${can('admin') ? '<button data-tab="users">المستخدمون</button>' : ''}
@@ -1678,6 +1679,86 @@ settingsTabs.payrollRules = async () => {
   };
 };
 
+settingsTabs.branding = async () => {
+  const b = await api('/api/branding');
+  el('setBody').innerHTML = `
+    <div class="card"><div class="card-head"><h3>شعار المنشأة واسمها</h3></div>
+      <div class="card-body">
+        <div class="grid cols-2">
+          <div>
+            <div class="field"><label>اسم المنشأة (يظهر في شاشة الدخول والقائمة)</label>
+              <input id="brName" value="${esc(b.company_name)}" placeholder="مثال: مارا لاونج" /></div>
+            <div class="field"><label>الشعار</label>
+              <input type="file" id="brFile" accept=".png,.jpg,.jpeg,.webp,.svg" /></div>
+            <div class="inline">
+              <button class="btn" id="brSave">حفظ</button>
+              ${b.logo_url ? '<button class="btn danger" id="brDel">حذف الشعار</button>' : ''}
+            </div>
+            <div class="help" style="margin-top:10px">يُفضّل ملف PNG بخلفية شفافة، عرضه 400–800 بكسل.</div>
+          </div>
+          <div style="text-align:center;padding:14px;background:var(--surface-2);border-radius:10px">
+            <div class="muted" style="font-size:12.5px;margin-bottom:10px">الشعار الحالي</div>
+            ${b.logo_url
+              ? `<img src="${esc(b.logo_url)}" alt="الشعار" style="max-width:100%;max-height:130px;object-fit:contain" />`
+              : '<div class="muted">لا يوجد شعار — سيظهر اسم النظام فقط</div>'}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card"><div class="card-head"><h3>العبارة التحفيزية اليومية</h3></div>
+      <div class="card-body">
+        <div class="help" style="margin-bottom:14px">تظهر في شاشة الدخول، وتُرسل إشعاراً لكل الموظفين
+          مرة واحدة كل صباح. عبارة اليوم: <b>${esc(b.quote)}</b></div>
+        <div class="inline">
+          <div class="field"><label>الإشعار اليومي</label><select id="brQuote">
+            <option value="true" ${b.daily_quote_enabled ? 'selected' : ''}>مفعّل</option>
+            <option value="false" ${!b.daily_quote_enabled ? 'selected' : ''}>معطّل</option></select></div>
+          <div class="field"><label>ساعة الإرسال</label><select id="brHour">
+            ${Array.from({ length: 24 }, (_, h) =>
+              `<option value="${h}" ${h === b.daily_quote_hour ? 'selected' : ''}>${String(h).padStart(2, '0')}:00</option>`).join('')}
+          </select></div>
+          <button class="btn" id="brQuoteSave">حفظ</button>
+          <button class="btn ghost" id="brSendNow">إرسال عبارة اليوم الآن</button>
+        </div>
+      </div>
+    </div>`;
+
+  el('brSave').onclick = async () => {
+    try {
+      let updated = await api('/api/branding', { method: 'PUT', body: { company_name: el('brName').value.trim() } });
+      const input = el('brFile');
+      if (input.files.length) {
+        const fd = new FormData();
+        fd.append('file', input.files[0]);
+        updated = await api('/api/branding/logo', { method: 'POST', body: fd });
+      }
+      applyBranding(updated);
+      toast('تم حفظ هوية المنشأة', 'ok');
+      settingsTabs.branding();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  if (el('brDel')) el('brDel').onclick = async () => {
+    if (!confirm('حذف الشعار؟')) return;
+    try { applyBranding(await api('/api/branding/logo', { method: 'DELETE' }));
+      toast('تم حذف الشعار', 'ok'); settingsTabs.branding(); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+  el('brQuoteSave').onclick = async () => {
+    try {
+      applyBranding(await api('/api/branding', { method: 'PUT', body: {
+        daily_quote_enabled: el('brQuote').value === 'true',
+        daily_quote_hour: Number(el('brHour').value) } }));
+      toast('تم حفظ إعدادات العبارة اليومية', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  el('brSendNow').onclick = async () => {
+    try { const r = await api('/api/branding/send-quote', { method: 'POST' });
+      toast(`أُرسلت العبارة إلى ${r.sent} مستخدم`, 'ok'); refreshBell(); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+};
+
 settingsTabs.sheets = async () => {
   const st = await api('/api/sheets/status');
   const sets = [
@@ -1888,30 +1969,28 @@ if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('/app/sw.js').catch(() => {}));
 }
 
-// عبارة تحفيزية تتغيّر يومياً على شاشة الدخول
-const QUOTES = [
-  'الانضباط جسرٌ بين الهدف والإنجاز.',
-  'النجاح مجموعُ جهودٍ صغيرة تتكرر كل يوم.',
-  'إتقان العمل أمانة، وحُسن الأداء عنوان صاحبه.',
-  'الوقت الذي تحترمه يحترمك.',
-  'كل صباحٍ فرصة جديدة لتكون أفضل من أمس.',
-  'من جدّ وجد، ومن زرع حصد.',
-  'ما يصنعه الفريق معاً لا يصنعه الجهد وحده.',
-  'التزام اليوم راحةُ الغد.',
-  'ابدأ يومك بنيّةٍ طيبة وهمّةٍ عالية.',
-  'الجودة ليست تصرفاً عابراً، بل عادةٌ يومية.',
-  'خير العمل أدومه وإن قلّ.',
-  'حضورك في وقتك رسالة احترامٍ لنفسك ولزملائك.',
-  'الطموح يبدأ بخطوة، والخطوة تبدأ اليوم.',
-  'أتقن ما بين يديك، فالفرص تأتي لمن يستحقها.',
-];
-(() => {
-  const node = el('loginQuote');
-  if (!node) return;
-  const start = new Date(new Date().getFullYear(), 0, 0);
-  const dayOfYear = Math.floor((new Date() - start) / 86400000);
-  node.textContent = QUOTES[dayOfYear % QUOTES.length];
-})();
+// هوية المنشأة (الشعار والاسم) وعبارة اليوم — تُجلب من الخادم
+function applyBranding(b) {
+  state.cache.branding = b;
+  const quote = el('loginQuote');
+  if (quote && b.quote) quote.textContent = b.quote;
+
+  const title = b.company_name ? b.company_name : 'نظام الموارد البشرية';
+  const loginTitle = el('loginTitle');
+  if (loginTitle) loginTitle.textContent = title;
+  const sideTitle = el('sideTitle');
+  if (sideTitle) sideTitle.textContent = b.company_name || 'الموارد البشرية';
+  document.title = b.company_name ? `${b.company_name} — الحضور والإجازات` : document.title;
+
+  [['loginLogo', b.logo_url], ['sideLogo', b.logo_url]].forEach(([id, url]) => {
+    const img = el(id);
+    if (!img) return;
+    if (url) { img.src = url; img.classList.remove('hidden'); }
+    else img.classList.add('hidden');
+  });
+}
+
+fetch('/api/branding').then((r) => r.json()).then(applyBranding).catch(() => {});
 
 // إظهار تنبيه كلمة المرور الافتراضية فقط إن لم تُغيَّر بعد
 fetch('/api/health')

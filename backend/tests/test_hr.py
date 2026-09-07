@@ -1063,3 +1063,99 @@ def test_health_reports_setup_pending_until_password_changed(client):
         headers={"Authorization": f"Bearer {token}"},
         json={"current_password": "Str0ng-Pass-2026", "new_password": "admin123"},
     )
+
+
+# ------------------------------ هوية المنشأة والعبارة اليومية ------------------------------
+def test_branding_is_public_and_has_daily_quote(client):
+    """شاشة الدخول تحتاج الهوية قبل المصادقة."""
+    res = client.get("/api/branding")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["quote"]
+    assert body["logo_url"] is None
+    assert body["daily_quote_enabled"] is True
+
+
+def test_daily_quote_is_stable_within_day_and_changes_across_days():
+    from datetime import date as _date
+
+    from app.services.quotes import QUOTES, quote_for
+
+    day = _date(2026, 9, 8)
+    assert quote_for(day) == quote_for(day)
+    seen = {quote_for(_date(2026, 9, d)) for d in range(1, 15)}
+    assert len(seen) > 1
+    assert all(q in QUOTES for q in seen)
+
+
+def test_upload_and_delete_logo(client, auth):
+    png = bytes.fromhex(
+        "89504e470d0a1a0a0000000d494844520000000100000001080600000"
+        "01f15c4890000000a49444154789c6360000002000100ffff03000006000557bfabd40000000049454e44ae426082"
+    )
+    res = client.post(
+        "/api/branding/logo", headers=auth,
+        files={"file": ("mara-logo.png", png, "image/png")},
+    )
+    assert res.status_code == 200, res.text
+    logo_url = res.json()["logo_url"]
+    assert logo_url and logo_url.startswith("/uploads/logo_")
+
+    # الشعار متاح للجميع (شاشة الدخول)
+    assert client.get("/api/branding").json()["logo_url"] == logo_url
+    assert client.get(logo_url).status_code == 200
+
+    # نوع ملف غير مدعوم
+    bad = client.post("/api/branding/logo", headers=auth,
+                      files={"file": ("logo.exe", b"MZ", "application/octet-stream")})
+    assert bad.status_code == 400
+
+    assert client.delete("/api/branding/logo", headers=auth).json()["logo_url"] is None
+
+
+def test_company_name_and_quote_settings(client, auth):
+    updated = client.put("/api/branding", headers=auth, json={
+        "company_name": "مارا لاونج", "daily_quote_hour": 6}).json()
+    assert updated["company_name"] == "مارا لاونج"
+    assert updated["daily_quote_hour"] == 6
+    assert client.get("/api/branding").json()["company_name"] == "مارا لاونج"
+
+    # الموظف لا يعدّل الهوية
+    token = client.post("/api/auth/login", data={
+        "username": "viol_emp", "password": "Aa123456"}).json()["access_token"]
+    denied = client.put("/api/branding", headers={"Authorization": f"Bearer {token}"},
+                        json={"company_name": "اختراق"})
+    assert denied.status_code == 403
+
+
+def test_daily_quote_notification_sent_once_per_day(client, auth):
+    from app.database import SessionLocal
+    from app.services import settings_store
+    from app.services.daily import send_daily_quote
+
+    with SessionLocal() as db:
+        settings_store.set_many(db, {
+            "daily_quote_enabled": True, "daily_quote_hour": 0, "daily_quote_last_sent": ""})
+        first = send_daily_quote(db)
+        assert first > 0, "لم تُرسل العبارة لأي مستخدم"
+        assert send_daily_quote(db) == 0, "أُرسلت مرتين في اليوم نفسه"
+
+    notes = client.get("/api/notifications", headers=auth).json()
+    quote_note = next((n for n in notes if n["category"] == "quote"), None)
+    assert quote_note and "عبارة اليوم" in quote_note["title"]
+    assert "مارا لاونج" in quote_note["body"]
+
+    # الإرسال اليدوي يتجاوز قيد المرة الواحدة
+    res = client.post("/api/branding/send-quote", headers=auth).json()
+    assert res["sent"] > 0 and res["quote"]
+
+
+def test_daily_quote_respects_disable_switch(client, auth):
+    from app.database import SessionLocal
+    from app.services import settings_store
+    from app.services.daily import send_daily_quote
+
+    with SessionLocal() as db:
+        settings_store.set_many(db, {"daily_quote_enabled": False, "daily_quote_last_sent": ""})
+        assert send_daily_quote(db) == 0
+        settings_store.set_many(db, {"daily_quote_enabled": True})
