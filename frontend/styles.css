@@ -18,6 +18,10 @@ a{color:var(--primary);text-decoration:none}
   box-shadow:0 20px 45px rgba(0,0,0,.25)}
 .login-card h1{margin:0 0 6px;font-size:24px}
 .login-card p.sub{margin:0 0 22px;color:var(--muted);font-size:14px}
+.login-card .quote{margin:0 0 22px;padding:12px 14px;border-radius:10px;
+  background:linear-gradient(135deg,#f2f8f7,#eef4f6);border-right:3px solid var(--primary);
+  color:var(--primary-2);font-size:13.5px;line-height:1.9;font-weight:500}
+.login-card .quote::before{content:"✦ ";opacity:.6}
 .demo-note{margin-top:18px;padding:12px;background:var(--surface-2);border:1px dashed var(--border);
   border-radius:10px;font-size:12.5px;color:var(--muted);line-height:1.9}
 
