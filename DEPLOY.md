@@ -115,10 +115,14 @@ cloudflared tunnel run --url http://127.0.0.1:8000 hr
    - الشبكة: VCN ← Security List ← Ingress للمنفذين 80 و443 من `0.0.0.0/0`.
    - داخل الخادم، لأن صور Ubuntu على Oracle تأتي بقواعد iptables تحجب كل شيء عدا SSH:
      ```bash
-     sudo iptables -I INPUT 6 -p tcp --dport 80 -j ACCEPT
-     sudo iptables -I INPUT 6 -p tcp --dport 443 -j ACCEPT
+     sudo iptables -I INPUT -p tcp --dport 80 -j ACCEPT
+     sudo iptables -I INPUT -p tcp --dport 443 -j ACCEPT
      sudo netfilter-persistent save
      ```
+     > **لا تستخدم رقم موضع** مثل `-I INPUT 6`: إن كانت قاعدة الرفض (REJECT) في موضع أسبق
+     > فستُدرج قاعدتك بعدها ولن تعمل. الإدراج بلا رقم يضعها في المقدمة دائماً.
+     > للتأكد: `sudo iptables -L INPUT -n --line-numbers` — يجب أن يظهر المنفذان 80 و443
+     > **قبل** أي سطر فيه REJECT.
 4. **احجز IP ثابتاً** (Reserved Public IP) حتى لا يتغير بعد إعادة التشغيل.
 5. **ثبّت النظام:** `sudo bash deploy/install-ubuntu.sh hr.example.com` — معمارية ARM لا تُشكّل
    مشكلة لأن كل الحزم بايثون خالص ولها حزم جاهزة لـ aarch64.
