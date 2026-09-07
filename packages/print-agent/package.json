@@ -1,0 +1,20 @@
+{
+  "name": "@mara/print-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MARA local print agent — bridges the cloud print queue to the branch's IP printers",
+  "bin": { "mara-print-agent": "./dist/index.js" },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "test": "tsx src/escpos.test.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}
