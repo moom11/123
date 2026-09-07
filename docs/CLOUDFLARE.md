@@ -1,48 +1,44 @@
 # تشغيل النظام على Cloudflare Workers
 # Running MARA on Cloudflare Workers
 
-## الرفع على Cloudflare — المسار كاملاً
+## الرفع على Cloudflare — أمر واحد
 
-النظام جاهز للتشغيل على Cloudflare، والشيفرة كلها تعمل على `workerd` الحقيقي
-(٢٦ فحصاً أمنياً من ٢٦). ما يلي هو كل ما تبقّى، وكله **يحتاج حسابك أنت**: لا
-أستطيع تسجيل الدخول إلى حسابك ولا إنشاء رمز API نيابةً عنك.
+النظام جاهز، وشيفرته كلها تعمل على `workerd` الحقيقي (٢٦ فحصاً أمنياً من ٢٦).
+الرفع كله في سطرين:
 
 ```bash
-# ١) الدخول إلى حسابك (§1.5)
-npx wrangler login
-
-# ٢) قاعدة بيانات PostgreSQL خارجية — Cloudflare لا توفّر واحدة (§1.2)
 export DATABASE_URL='postgres://user:pass@host/mara?sslmode=require'
-npm --workspace @mara/server run migrate
-npm --workspace @mara/server run seed
-
-# ٣) Hyperdrive بلا تخزين مؤقت — لأن رصيد المخزون لا يحتمل جواباً قديماً (§1.3)
-npx wrangler hyperdrive create mara-db \
-  --connection-string="$DATABASE_URL" --caching-disabled
-#    ضع المعرّف الناتج في packages/server/wrangler.jsonc
-
-# ٤) التخزين والأسرار (§4، §5)
-npx wrangler r2 bucket create mara-attachments
-cd packages/server
-for k in JWT_ACCESS_SECRET JWT_REFRESH_SECRET COOKIE_SECRET MFA_SECRET_KEY; do
-  openssl rand -base64 48 | npx wrangler secret put "$k"
-done
-cd ../..
-
-# ٥) غيّر كلمات المرور والرموز المنشورة، ثم:
-npm --workspace @mara/server run preflight
-
-# ٦) الرفع
-MARA_API_HOST=mara-api.<حسابك>.workers.dev ./scripts/deploy-cloudflare.sh
+./scripts/deploy-cloudflare.sh
 ```
 
-**شرطان لا مفرّ منهما:** خطة Workers **المدفوعة** — لأن التحقق من كلمة المرور
-بخوارزمية Argon2id قيس عليه ١٤٣٧ مللي ثانية من المعالج والسقف المجاني ١٠ فقط،
-فكل تسجيل دخول سيُقتل في منتصفه (§1.1) — و**قاعدة بيانات PostgreSQL من مزوّد
-آخر**، لأن Cloudflare لا تستضيف PostgreSQL (§1.2).
+يتولّى السكربت كل ما تبقّى: يطبّق الهجرات، يزامن مصفوفة الصلاحيات، يزرع البيانات
+إن كانت القاعدة فارغة، **ينشئ Hyperdrive بلا تخزين مؤقت ويكتب معرّفه في الإعداد**،
+ينشئ حاوية R2، **يولّد الأسرار الأربعة** ويضعها، يشغّل فحص ما قبل الافتتاح، ثم
+يبني ويرفع التطبيقين.
 
-وشيء واحد لا يذهب إلى السحابة أبداً: **وكيل الطباعة** يعمل داخل المحل، لأن
-الطابعات تتكلم ESC/POS على شبكة المحل ولا عنوان عام لها (§11).
+وهو **آمن لإعادة التشغيل**: لا يبدّل سرّاً موجوداً — تبديل `MFA_SECRET_KEY` يجعل
+كل تحقق ثنائي مسجّل غير قابل للفكّ، وتبديل سرّ الجلسات يُخرج كل جهاز في منتصف
+الوردية — ولا يعيد زرع قاعدة فيها بيانات. التشغيل الثاني تحديث لا إعادة بناء.
+
+### ثلاثة أشياء يقف عندها السكربت ولا يستطيع تجاوزها
+
+| ما يوقفه | لماذا هو قرارك أنت |
+|---|---|
+| `npx wrangler login` | الرمز مفتاح لحسابك وللفاتورة المرتبطة به |
+| **خطة Workers المدفوعة** | التحقق من كلمة المرور بـ Argon2id قيس عليه ١٤٣٧ مللي ثانية من المعالج على `workerd` نفسه، والسقف المجاني ١٠ — فكل تسجيل دخول يُقتل في منتصفه. وخفض كلفة Argon2 ليس حلاً: هي ما يجعل التجزئة المسروقة باهظة على المهاجم |
+| **تفعيل R2 مرة واحدة من اللوحة** | Workers وحدها لا تفعّله: dash.cloudflare.com ← R2 ← Enable |
+
+وقاعدة **PostgreSQL من مزوّد آخر** (Neon أو Supabase أو RDS) لأن Cloudflare لا
+تستضيف PostgreSQL أصلاً.
+
+كل واحدة من هذه يقف عندها السكربت برسالة تقول ما ينقص وأين يُفعَّل بالضبط، لا
+بخطأ غامض بعد نصف عملية رفع.
+
+### وشيء واحد لا يذهب إلى السحابة أبداً
+
+**وكيل الطباعة** يعمل داخل المحل، لأن الطابعات تتكلم ESC/POS على منفذ 9100 في
+شبكة المحل ولا عنوان عام لها. الوكيل **يسحب ولا يُدفَع إليه**، فلا يحتاج فتح
+منفذ ولا تعريض طابعة للإنترنت (§11).
 
 ---
 
@@ -142,25 +138,23 @@ match; `scripts/deploy-cloudflare.sh` will not deploy until it does.
 | | what | who |
 | --- | --- | --- |
 | 0 | `wrangler login`, or an API token (§1.5) | you |
-| 1 | Cloudflare account on the **paid** Workers plan (§1.1), R2 enabled (§4) | you |
-| 2 | A Postgres database at a provider, migrated and seeded (§2) | you |
-| 3 | Hyperdrive, created `--caching-disabled` (§3) | one command |
-| 4 | Four secrets generated and set (§5) | one command each |
-| 5 | **Change the owner password and every staff PIN** | you, in the app |
-| 6 | Real printer addresses, real tables, your menu | you, in the app |
-| 7 | `npm run preflight -w @mara/server` until it says جاهز للافتتاح | one command |
-| 8 | `./scripts/deploy-cloudflare.sh` | one command |
-| 9 | Print agent on a machine inside the venue (§11) | you |
-| 10 | Enrol MFA on first admin login, print the QR labels | you |
+| 1 | Cloudflare account on the **paid** Workers plan (§1.1), R2 enabled (§1.4) | you |
+| 2 | A Postgres database at a provider (§1.2), its URL in `DATABASE_URL` | you |
+| 3 | `./scripts/deploy-cloudflare.sh` — migrations, permissions, seed, Hyperdrive, R2, secrets, preflight, deploy | one command |
+| 4 | **Change the owner password and every staff PIN** | you, in the app |
+| 5 | Real printer addresses, real tables, your menu | you, in the app |
+| 6 | Re-run the script once preflight passes | one command |
+| 7 | Print agent on a machine inside the venue (§11) | you |
+| 8 | Enrol MFA on first admin login, print the QR labels | you |
 
-Generate each secret with something you did not choose yourself:
+Steps 0 to 2 are the ones nobody can do for you, and the script stops at each
+with a message naming exactly what is missing. Steps 4 and 5 are what preflight
+refuses to open without.
 
-```bash
-openssl rand -base64 48
-```
-
-Steps 5 and 6 are the ones with no shortcut, and the ones the preflight check
-exists to stop you skipping.
+Secrets are generated by the script with `openssl rand -base64 48` and never by
+anyone choosing one, and an existing secret is never replaced: a new
+`MFA_SECRET_KEY` makes every enrolled second factor undecryptable, and a new
+session secret signs out every terminal mid-shift.
 
 ## 1. Prerequisites — read these before you start
 
@@ -263,6 +257,9 @@ is `false` in `wrangler.jsonc` so that a cold start never races a schema change.
 
 ## 3. Hyperdrive
 
+`scripts/deploy-cloudflare.sh` creates this and writes the id into the config
+for you, skipping it if a config named `mara-db` already exists. By hand:
+
 ```bash
 npx wrangler hyperdrive create mara-db \
   --connection-string="$DATABASE_URL" \
@@ -270,7 +267,9 @@ npx wrangler hyperdrive create mara-db \
 ```
 
 Put the returned id into the `hyperdrive[0].id` field of
-`packages/server/wrangler.jsonc`.
+`packages/server/wrangler.jsonc`. The id names a configuration and is not a
+credential — the connection string stays on Cloudflare's side — so it is safe
+to commit.
 
 For `wrangler dev` against a local Postgres, set the local override instead of
 editing the file:
@@ -298,6 +297,10 @@ store used under Node.
 
 Never put these in `wrangler.jsonc` — that file is committed.
 
+`scripts/deploy-cloudflare.sh` generates and sets the first four, and skips any
+that already exist. The two WhatsApp values need your business account, so they
+stay manual. To do the whole thing by hand:
+
 ```bash
 cd packages/server
 npx wrangler secret put JWT_ACCESS_SECRET        # 32+ random bytes, base64
@@ -315,11 +318,21 @@ administrator has to re-enrol MFA; rotating it requires re-encrypting the
 ## 6. Deploy
 
 ```bash
-MARA_API_HOST=mara-api.<your-account>.workers.dev ./scripts/deploy-cloudflare.sh
+export DATABASE_URL='postgres://user:pass@host/mara?sslmode=require'
+./scripts/deploy-cloudflare.sh
 ```
 
-That builds the POS app, deploys it together with the API as one Worker, then
-builds and deploys the buyer app. To do it by hand instead:
+Sections 2 to 5 above describe what this script does and why; it performs all
+of them, skipping whatever already exists. It is worth reading them before the
+first run, because two of the steps — the paid plan and enabling R2 — are
+decisions about your account that the script can only stop at.
+
+It refuses to deploy while preflight refuses to open: the seed's passwords and
+staff PINs are printed in this public repository, and preflight verifies the
+stored hashes against them rather than taking anyone's word.
+`SKIP_PREFLIGHT=true` for a staging environment.
+
+To do it by hand instead:
 
 ```bash
 npm --workspace @mara/web run build
