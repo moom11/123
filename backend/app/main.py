@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import AUTO_SYNC_MINUTES, FRONTEND_DIR, TIMEZONE_NAME, UPLOAD_DIR
+from .config import ADMIN_PASSWORD, AUTO_SYNC_MINUTES, FRONTEND_DIR, TIMEZONE_NAME, UPLOAD_DIR
 from .database import SessionLocal
 from .routers import (
     attendance,
@@ -110,7 +110,24 @@ for router in (
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "timezone": TIMEZONE_NAME}
+    """فحص الحالة. يكشف فقط ما إذا كان الإعداد الأولي لم يكتمل بعد
+    (مدير النظام ما زال على كلمة المرور الافتراضية) لتعرض الواجهة تذكيراً."""
+    setup_pending = False
+    try:
+        from sqlalchemy import select
+
+        from .models import Role, User
+        from .security import verify_password
+
+        with SessionLocal() as db:
+            admin = db.scalar(
+                select(User).where(User.role == Role.admin).order_by(User.id).limit(1)
+            )
+            if admin:
+                setup_pending = verify_password(ADMIN_PASSWORD, admin.password_hash)
+    except Exception:  # pragma: no cover - لا يعطّل فحص الحالة أبداً
+        setup_pending = False
+    return {"status": "ok", "timezone": TIMEZONE_NAME, "setup_pending": setup_pending}
 
 
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")

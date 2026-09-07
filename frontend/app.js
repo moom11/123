@@ -1884,6 +1884,12 @@ if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('/app/sw.js').catch(() => {}));
 }
 
+// إظهار تنبيه كلمة المرور الافتراضية فقط إن لم تُغيَّر بعد
+fetch('/api/health')
+  .then((r) => r.json())
+  .then((d) => { if (d.setup_pending) el('loginHint').classList.remove('hidden'); })
+  .catch(() => {});
+
 (async () => {
   if (!state.token) return;
   try {

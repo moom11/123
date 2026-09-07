@@ -1037,3 +1037,29 @@ def test_sheets_follows_apps_script_redirect():
         assert len(writes) == 1
     finally:
         server.shutdown()
+
+
+def test_health_reports_setup_pending_until_password_changed(client):
+    """تنبيه كلمة المرور الافتراضية يظهر قبل تغييرها ويختفي بعده."""
+    assert client.get("/api/health").json()["setup_pending"] is True
+
+    token = client.post(
+        "/api/auth/login", data={"username": "admin", "password": "admin123"}
+    ).json()["access_token"]
+    res = client.post(
+        "/api/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_password": "admin123", "new_password": "Str0ng-Pass-2026"},
+    )
+    assert res.status_code == 200
+    assert client.get("/api/health").json()["setup_pending"] is False
+
+    # إرجاع كلمة المرور حتى لا تتأثر بقية الاختبارات
+    token = client.post(
+        "/api/auth/login", data={"username": "admin", "password": "Str0ng-Pass-2026"}
+    ).json()["access_token"]
+    client.post(
+        "/api/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_password": "Str0ng-Pass-2026", "new_password": "admin123"},
+    )
