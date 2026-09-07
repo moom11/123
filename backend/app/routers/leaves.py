@@ -35,12 +35,19 @@ from ..schemas import (
 )
 from ..security import can_view_employee, get_current_user, require_hr, require_manager
 from ..services import attendance as attendance_service
-from ..services import audit, notifications
+from ..services import audit, notifications, sheets
 from ..services import leave as leave_service
 
 router = APIRouter(prefix="/api", tags=["leaves"])
 
 ALLOWED_ATTACHMENTS = {".pdf", ".png", ".jpg", ".jpeg", ".webp"}
+
+LEAVE_STATUS_LABELS = {
+    LeaveStatus.pending: "قيد الاعتماد",
+    LeaveStatus.approved: "معتمدة",
+    LeaveStatus.rejected: "مرفوضة",
+    LeaveStatus.cancelled: "ملغاة",
+}
 
 
 def request_out(r: LeaveRequest) -> LeaveRequestOut:
@@ -252,6 +259,7 @@ def approve_request(
         raise HTTPException(status_code=400, detail="هذا النوع يتطلب إرفاق مستند قبل الاعتماد")
     req = leave_service.approve(db, req, user.id, payload.decision_note if payload else None)
     audit.log(db, user, "approve", "leave_request", req.id, f"{req.days} يوم")
+    sheets.push(db, "leaves", sheets.leave_rows([req], LEAVE_STATUS_LABELS))
     notifications.notify_employee(
         db, req.employee_id, "تم اعتماد طلب إجازتك",
         body=f"{req.leave_type.name} من {req.start_date} إلى {req.end_date} ({req.days} يوم)",
@@ -274,6 +282,7 @@ def reject_request(
         raise HTTPException(status_code=403, detail="لا تملك صلاحية رفض هذا الطلب")
     req = leave_service.reject(db, req, user.id, payload.decision_note if payload else None)
     audit.log(db, user, "reject", "leave_request", req.id, payload.decision_note if payload else None)
+    sheets.push(db, "leaves", sheets.leave_rows([req], LEAVE_STATUS_LABELS))
     notifications.notify_employee(
         db, req.employee_id, "تم رفض طلب إجازتك",
         body=(payload.decision_note if payload and payload.decision_note else "راجع الموارد البشرية للتفاصيل"),

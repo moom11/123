@@ -746,3 +746,228 @@ def test_future_workdays_not_counted_as_absence(client, auth):
     assert slip["absent_days"] == 0
     assert slip["absence_deduction"] == 0
     assert slip["net_pay"] == slip["basic_salary"]
+
+
+# ------------------------------ ربط جوجل شيت ------------------------------
+class _SheetsStub:
+    """خادم محلي يحاكي تطبيق ويب Google Apps Script."""
+
+    def __init__(self, secret="s3cret", fail_times=0):
+        import json as _json
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        self.received: list[dict] = []
+        self.secret = secret
+        self.remaining_failures = fail_times
+        stub = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                length = int(self.headers.get("Content-Length", 0))
+                data = _json.loads(self.rfile.read(length).decode("utf-8"))
+                if stub.remaining_failures > 0:
+                    stub.remaining_failures -= 1
+                    self.send_response(500)
+                    self.end_headers()
+                    self.wfile.write(b'{"ok":false,"error":"temporary"}')
+                    return
+                if data.get("secret") != stub.secret:
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b'{"ok":false,"error":"unauthorized"}')
+                    return
+                stub.received.append(data)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(
+                    _json.dumps({"ok": True, "written": len(data.get("rows", []))}).encode()
+                )
+
+            def log_message(self, *args):  # كتم سجلات الخادم
+                pass
+
+        self.server = HTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_port}/exec"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def rows_of(self, dataset):
+        return [r for item in self.received if item["dataset"] == dataset for r in item["rows"]]
+
+    def stop(self):
+        self.server.shutdown()
+
+
+def _enable_sheets(client, auth, stub, datasets="punches,attendance,leaves,violations,payroll"):
+    """يفعّل الربط متجاوزاً التحقق من نطاق جوجل (خادم وهمي للاختبار)."""
+    from app.database import SessionLocal
+    from app.services import settings_store
+
+    with SessionLocal() as db:
+        settings_store.set_many(db, {
+            "sheets_enabled": True,
+            "sheets_webhook_url": stub.url,
+            "sheets_secret": stub.secret,
+            "sheets_datasets": datasets,
+        })
+
+
+def test_sheets_rejects_non_google_url(client, auth):
+    res = client.put("/api/sheets/settings", headers=auth, json={
+        "sheets_webhook_url": "https://evil.example.com/hook"})
+    assert res.status_code == 400
+    assert "Apps Script" in res.json()["detail"]
+
+
+def test_sheets_disabled_by_default(client, auth):
+    st = client.get("/api/sheets/status", headers=auth).json()
+    assert st["enabled"] is False
+
+
+def test_sheets_test_connection_and_punch_flow(client, auth):
+    stub = _SheetsStub()
+    try:
+        _enable_sheets(client, auth, stub)
+
+        # اختبار الاتصال
+        res = client.post("/api/sheets/test", headers=auth)
+        assert res.status_code == 200, res.text
+        assert stub.received[-1]["sheet"] == "اختبار الاتصال"
+
+        # بصمة يدوية تُرسل تلقائياً
+        emp = client.post("/api/employees", headers=auth, json={
+            "code": "9700", "full_name": "موظف الشيت"}).json()
+        client.post("/api/attendance/punches", headers=auth, json={
+            "employee_id": emp["id"], "punch_time": f"{date.today()}T08:03:00"})
+        client.post("/api/sheets/flush", headers=auth)
+
+        rows = stub.rows_of("punches")
+        assert any(r[1] == "9700" and "موظف الشيت" in r[2] for r in rows)
+        headers_sent = [i["headers"] for i in stub.received if i["dataset"] == "punches"][0]
+        assert headers_sent[0] == "التاريخ والوقت" and "رقم الموظف" in headers_sent
+    finally:
+        stub.stop()
+
+
+def test_sheets_retries_after_network_failure(client, auth):
+    """انقطاع الشبكة لا يُضيع صفاً: يبقى في صندوق الإرسال ويُعاد إرساله لاحقاً."""
+    import time
+
+    from sqlalchemy import select as _select
+
+    from app.database import SessionLocal
+    from app.models import SheetsOutbox
+
+    stub = _SheetsStub(fail_times=1)
+    try:
+        _enable_sheets(client, auth, stub, datasets="punches")
+        emp = client.post("/api/employees", headers=auth, json={
+            "code": "9701", "full_name": "موظف الإعادة"}).json()
+        client.post("/api/attendance/punches", headers=auth, json={
+            "employee_id": emp["id"], "punch_time": f"{date.today()}T08:07:00"})
+
+        # المحاولة الأولى تفشل (الخادم يرد بخطأ)، ثم تنجح إعادة المحاولة
+        for _ in range(5):
+            client.post("/api/sheets/flush", headers=auth)
+            if any(r[1] == "9701" for r in stub.rows_of("punches")):
+                break
+            time.sleep(0.2)
+
+        assert any(r[1] == "9701" for r in stub.rows_of("punches")), "لم يصل الصف بعد إعادة المحاولة"
+        assert client.get("/api/sheets/status", headers=auth).json()["pending"] == 0
+
+        # إثبات حدوث فشل ثم إعادة محاولة فعلية
+        with SessionLocal() as db:
+            attempts = [
+                row.attempts
+                for row in db.scalars(
+                    _select(SheetsOutbox).where(SheetsOutbox.dataset == "punches")
+                ).all()
+            ]
+        assert max(attempts) >= 2, "كان يُفترض تسجيل محاولة فاشلة ثم ناجحة"
+    finally:
+        stub.stop()
+
+
+def test_sheets_wrong_secret_is_reported(client, auth):
+    stub = _SheetsStub(secret="right")
+    try:
+        _enable_sheets(client, auth, stub)
+        from app.database import SessionLocal
+        from app.services import settings_store
+
+        with SessionLocal() as db:
+            settings_store.set_many(db, {"sheets_secret": "wrong"})
+        res = client.post("/api/sheets/test", headers=auth)
+        assert res.status_code == 502
+        assert "unauthorized" in res.json()["detail"]
+    finally:
+        stub.stop()
+
+
+def test_sheets_dataset_filter(client, auth):
+    """الأنواع غير المختارة لا تُرسل."""
+    stub = _SheetsStub()
+    try:
+        _enable_sheets(client, auth, stub, datasets="leaves")
+        emp = client.post("/api/employees", headers=auth, json={
+            "code": "9702", "full_name": "موظف بلا شيت"}).json()
+        client.post("/api/attendance/punches", headers=auth, json={
+            "employee_id": emp["id"], "punch_time": f"{date.today()}T08:11:00"})
+        client.post("/api/sheets/flush", headers=auth)
+        assert not any(r[1] == "9702" for r in stub.rows_of("punches"))
+    finally:
+        stub.stop()
+
+
+def test_sheets_backfill_replaces_sheet(client, auth):
+    stub = _SheetsStub()
+    try:
+        _enable_sheets(client, auth, stub)
+        res = client.post(
+            f"/api/sheets/sync?dataset=attendance&date_from={date.today() - timedelta(days=7)}"
+            f"&date_to={date.today()}&replace=true",
+            headers=auth,
+        )
+        assert res.status_code == 200, res.text
+        assert res.json()["rows"] > 0
+        batch = [i for i in stub.received if i["dataset"] == "attendance"][-1]
+        assert batch["mode"] == "replace"
+        assert batch["sheet"] == "الحضور اليومي"
+        assert len(batch["rows"][0]) == len(batch["headers"])
+    finally:
+        stub.stop()
+
+
+def test_sheets_violation_and_payroll_rows(client, auth):
+    stub = _SheetsStub()
+    try:
+        _enable_sheets(client, auth, stub)
+        emp = client.post("/api/employees", headers=auth, json={
+            "code": "9703", "full_name": "موظف الجزاء", "basic_salary": 6000}).json()
+        types = client.get("/api/violation-types", headers=auth).json()
+        smoking = next(t for t in types if t["code"] == "smoking")
+        v = client.post("/api/violations", headers=auth, json={
+            "employee_id": emp["id"], "violation_type_id": smoking["id"],
+            "occurred_on": str(date.today())}).json()
+        client.post(f"/api/violations/{v['id']}/approve", headers=auth, json={"note": "معتمدة"})
+        client.post("/api/sheets/flush", headers=auth)
+
+        rows = stub.rows_of("violations")
+        assert any(r[1] == "9703" and r[7] == "معتمدة" for r in rows)
+    finally:
+        stub.stop()
+
+
+def test_sheets_settings_persist_and_disable(client, auth):
+    from app.database import SessionLocal
+    from app.services import settings_store
+
+    with SessionLocal() as db:
+        settings_store.set_many(db, {"sheets_enabled": False})
+    st = client.get("/api/sheets/status", headers=auth).json()
+    assert st["enabled"] is False
+    # لا إرسال بعد التعطيل
+    res = client.post("/api/sheets/flush", headers=auth).json()
+    assert res["sent"] == 0

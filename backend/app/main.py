@@ -22,11 +22,13 @@ from .routers import (
     leaves,
     payroll,
     reports,
+    sheets,
     sites,
     users,
     violations,
 )
 from .seed import bootstrap
+from .services import sheets as sheets_service
 from .services import zk_service
 
 logger = logging.getLogger("hr")
@@ -47,15 +49,29 @@ async def _auto_sync_loop() -> None:
             logger.warning("فشل المزامنة التلقائية: %s", exc)
 
 
+async def _sheets_loop() -> None:
+    """إرسال دفعات جوجل شيت المعلّقة وملخص الحضور اليومي."""
+    while True:
+        await asyncio.sleep(300)   # كل خمس دقائق
+        try:
+            with SessionLocal() as db:
+                if not sheets_service.is_enabled(db):
+                    continue
+                await asyncio.to_thread(sheets_service.flush, db)
+                await asyncio.to_thread(sheets_service.daily_attendance_job, db)
+        except Exception as exc:  # pragma: no cover - حماية الحلقة
+            logger.warning("فشل إرسال دفعات جوجل شيت: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     bootstrap()
-    task = None
+    tasks = [asyncio.create_task(_sheets_loop())]
     if AUTO_SYNC_MINUTES > 0:
-        task = asyncio.create_task(_auto_sync_loop())
+        tasks.append(asyncio.create_task(_auto_sync_loop()))
         logger.info("المزامنة التلقائية مفعّلة كل %s دقيقة", AUTO_SYNC_MINUTES)
     yield
-    if task:
+    for task in tasks:
         task.cancel()
 
 
@@ -85,6 +101,7 @@ for router in (
     violations.router,
     payroll.router,
     hr_extra.router,
+    sheets.router,
     reports.router,
     iclock.router,
 ):

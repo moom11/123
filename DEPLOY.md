@@ -194,6 +194,13 @@ sudo systemctl restart hr
 HR_DATABASE_URL="postgresql+psycopg://hr:pass@localhost/hr_test" .venv/bin/python -m pytest backend/tests -q
 ```
 
+### تصدير البيانات إلى جوجل شيت
+
+إن أردت نسخة حيّة من البيانات في Google Sheets (للمشاركة مع الإدارة أو لعمل تقاريرك الخاصة)،
+فالنظام يدعمها عبر Apps Script بلا حساب Google Cloud — التفاصيل في README قسم «ربط جوجل شيت»
+والسكربت الجاهز في `deploy/google_apps_script.gs`. لا تُغني عن النسخ الاحتياطي لمجلد `data/`،
+لكنها ممتازة كنسخة قابلة للقراءة والمشاركة.
+
 ### هل يمكن لكلود الاتصال بقاعدتك مباشرة؟
 
 لا، ولا يُنصح به: هذه الجلسة تعمل في بيئة معزولة لا تصل إلى شبكتك الخاصة، **ولا تشارك بيانات

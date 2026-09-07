@@ -496,3 +496,19 @@ class Payslip(Base):
     note: Mapped[str | None] = mapped_column(String(255))
 
     employee: Mapped[Employee] = relationship()
+
+
+class SheetsOutbox(Base):
+    """صندوق إرسال صفوف جوجل شيت: يضمن عدم ضياع أي صف عند انقطاع الشبكة."""
+
+    __tablename__ = "sheets_outbox"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dataset: Mapped[str] = mapped_column(String(40), index=True)
+    payload: Mapped[str] = mapped_column(Text)          # JSON: العناوين والصفوف
+    rows_count: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime)

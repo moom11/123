@@ -1315,6 +1315,7 @@ views.settings = async () => {
       <button data-tab="sites">مواقع العمل والبصم الذاتي</button>
       <button data-tab="violationTypes">المخالفات والجزاءات</button>
       <button data-tab="payrollRules">قواعد الرواتب</button>
+      <button data-tab="sheets">ربط جوجل شيت</button>
       <button data-tab="audit">سجل التدقيق</button>
       ${can('admin') ? '<button data-tab="users">المستخدمون</button>' : ''}
     </div><div id="setBody"></div>`);
@@ -1670,6 +1671,103 @@ settingsTabs.payrollRules = async () => {
         document_alert_days: Number(el('pyDoc').value) } });
       toast('تم حفظ القواعد', 'ok');
     } catch (e) { toast(e.message, 'err'); }
+  };
+};
+
+settingsTabs.sheets = async () => {
+  const st = await api('/api/sheets/status');
+  const sets = [
+    ['punches', 'البصمات (كل حضور وانصراف فور تسجيله)'],
+    ['attendance', 'ملخص الحضور اليومي'],
+    ['leaves', 'الإجازات المعتمدة والمرفوضة'],
+    ['violations', 'المخالفات المعتمدة'],
+    ['payroll', 'قسائم الرواتب بعد الاعتماد'],
+  ];
+  el('setBody').innerHTML = `
+    <div class="card"><div class="card-head"><h3>ربط جوجل شيت</h3>
+      <span class="tag ${st.enabled ? 'on' : 'off'}">${st.enabled ? 'مفعّل' : 'غير مفعّل'}</span></div>
+      <div class="card-body">
+        <div class="help" style="margin-bottom:14px;line-height:2.1">
+          <b>الإعداد مرة واحدة (٥ خطوات، بدون حساب Google Cloud):</b><br>
+          ١) أنشئ ملف Google Sheets جديداً.<br>
+          ٢) من قائمة <b>الإضافات (Extensions) ← Apps Script</b>.<br>
+          ٣) احذف الكود والصق محتوى الملف <code>deploy/google_apps_script.gs</code> من المستودع.<br>
+          ٤) غيّر <code>SECRET</code> في أول السكربت إلى كلمة سر، ثم
+             <b>Deploy ← New deployment ← Web app</b> مع
+             <b>Execute as: Me</b> و<b>Who has access: Anyone</b>.<br>
+          ٥) انسخ الرابط الناتج (ينتهي بـ <code>/exec</code>) وضعه أدناه مع نفس كلمة السر.
+        </div>
+        <div class="grid cols-2">
+          <div class="field"><label>رابط تطبيق الويب (Apps Script)</label>
+            <input id="shUrl" value="${esc(st.webhook_url)}" placeholder="https://script.google.com/macros/s/AKfy.../exec" /></div>
+          <div class="field"><label>كلمة السر المشتركة</label>
+            <input id="shSecret" type="text" placeholder="${st.has_secret ? '••••••• (محفوظة)' : 'نفس قيمة SECRET في السكربت'}" /></div>
+        </div>
+        <div class="field"><label>البيانات المُرسَلة تلقائياً</label>
+          <div class="grid cols-2">${sets.map(([k, label]) => `
+            <label style="display:flex;gap:7px;align-items:center;font-size:13px">
+              <input type="checkbox" class="shSet" value="${k}" ${st.datasets.includes(k) ? 'checked' : ''} style="width:auto" />
+              ${esc(label)}</label>`).join('')}</div></div>
+        <div class="field"><label>الحالة</label><select id="shEnabled">
+          <option value="true" ${st.enabled ? 'selected' : ''}>مفعّل</option>
+          <option value="false" ${!st.enabled ? 'selected' : ''}>معطّل</option></select></div>
+        <div class="inline">
+          <button class="btn" id="shSave">حفظ</button>
+          <button class="btn ghost" id="shTest">اختبار الاتصال</button>
+          <button class="btn gray" id="shFlush">إرسال المعلّق الآن</button>
+          ${st.failed ? '<button class="btn danger" id="shRetry">إعادة محاولة الفاشل</button>' : ''}
+        </div>
+      </div>
+    </div>
+
+    <div class="grid cols-4">
+      <div class="kpi"><div class="label">دفعات بانتظار الإرسال</div><div class="value ${st.pending ? 'warn' : ''}">${st.pending}</div></div>
+      <div class="kpi"><div class="label">أُرسلت اليوم</div><div class="value ok">${st.sent_today}</div></div>
+      <div class="kpi"><div class="label">فشلت نهائياً</div><div class="value ${st.failed ? 'danger' : ''}">${st.failed}</div></div>
+      <div class="kpi"><div class="label">آخر خطأ</div><div class="value" style="font-size:13px">${esc(st.last_error || '—')}</div></div>
+    </div>
+
+    <div class="card"><div class="card-head"><h3>إعادة مزامنة فترة كاملة</h3></div>
+      <div class="card-body inline">
+        <div class="field"><label>البيانات</label><select id="shDataset">
+          ${sets.map(([k, label]) => `<option value="${k}">${esc(label.split(' (')[0])}</option>`).join('')}</select></div>
+        <div class="field"><label>من</label><input type="date" id="shFrom" value="${monthStart()}" /></div>
+        <div class="field"><label>إلى</label><input type="date" id="shTo" value="${today()}" /></div>
+        <button class="btn" id="shSync">إرسال إلى الشيت</button>
+        <span class="help">يستبدل محتوى الورقة بالكامل حتى لا تتكرر الصفوف.</span>
+      </div></div>`;
+
+  const save = async () => {
+    const body = {
+      sheets_enabled: el('shEnabled').value === 'true',
+      sheets_webhook_url: el('shUrl').value.trim(),
+      sheets_datasets: Array.from(document.querySelectorAll('.shSet:checked')).map((c) => c.value).join(','),
+    };
+    if (el('shSecret').value.trim()) body.sheets_secret = el('shSecret').value.trim();
+    await api('/api/sheets/settings', { method: 'PUT', body });
+  };
+
+  el('shSave').onclick = async () => {
+    try { await save(); toast('تم حفظ إعدادات الربط', 'ok'); settingsTabs.sheets(); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+  el('shTest').onclick = async () => {
+    try { await save(); const r = await api('/api/sheets/test', { method: 'POST' }); toast(r.message, 'ok'); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+  el('shFlush').onclick = async () => {
+    try { const r = await api('/api/sheets/flush', { method: 'POST' }); toast(r.message, 'ok'); settingsTabs.sheets(); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+  if (el('shRetry')) el('shRetry').onclick = async () => {
+    try { const r = await api('/api/sheets/retry-failed', { method: 'POST' }); toast(r.message, 'ok'); settingsTabs.sheets(); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+  el('shSync').onclick = async () => {
+    const q = new URLSearchParams({ dataset: el('shDataset').value, date_from: el('shFrom').value,
+      date_to: el('shTo').value, replace: 'true' });
+    try { const r = await api('/api/sheets/sync?' + q, { method: 'POST' }); toast(r.message, 'ok'); settingsTabs.sheets(); }
+    catch (e) { toast(e.message, 'err'); }
   };
 };
 

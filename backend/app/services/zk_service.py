@@ -10,6 +10,7 @@ from ..models import Device, DeviceMode, Employee, EmployeeStatus, Punch, PunchS
 from ..zk import driver
 from ..zk.driver import AttendanceRecord, DeviceError
 from . import attendance as attendance_service
+from . import sheets
 
 
 def _employee_map(db: Session) -> dict[str, Employee]:
@@ -65,6 +66,8 @@ def import_records(
 
     db.flush()
     recomputed = attendance_service.recompute_for_punches(db, imported)
+    if imported:
+        sheets.push(db, "punches", sheets.punch_rows(imported))
     db.commit()
     return {
         "fetched": len(records),

@@ -22,7 +22,7 @@ from ..schemas import (
     ViolationTypeOut,
 )
 from ..security import can_view_employee, get_current_user, require_hr, require_manager
-from ..services import audit, notifications
+from ..services import audit, notifications, sheets
 from ..services import violations as service
 
 router = APIRouter(prefix="/api", tags=["violations"])
@@ -292,6 +292,8 @@ def approve_violation(
         db, violation, ViolationStatus.approved, user.id, payload.note if payload else None
     )
     audit.log(db, user, "approve", "violation", violation.id, f"جزاء {violation.penalty_amount} ريال")
+    sheets.push(db, "violations",
+                sheets.violation_rows([violation], service.PENALTY_LABELS, service.STATUS_LABELS))
     notifications.notify_employee(
         db,
         violation.employee_id,

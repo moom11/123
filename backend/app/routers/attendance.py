@@ -31,7 +31,7 @@ from ..schemas import (
 )
 from ..security import can_view_employee, get_current_user, require_hr
 from ..services import attendance as attendance_service
-from ..services import audit, geo, settings_store
+from ..services import audit, geo, settings_store, sheets
 
 router = APIRouter(prefix="/api/attendance", tags=["attendance"])
 
@@ -160,6 +160,7 @@ def add_punch(
     audit.log(db, user, "create", "punch", punch.id,
               f"{emp.full_name} {payload.punch_time}", commit=False)
     attendance_service.recompute_for_punches(db, [punch])
+    sheets.push(db, "punches", sheets.punch_rows([punch]))
     db.refresh(punch)
     return punch_out(punch)
 
@@ -229,6 +230,7 @@ def self_punch(
     db.add(punch)
     db.flush()
     attendance_service.recompute_for_punches(db, [punch])
+    sheets.push(db, "punches", sheets.punch_rows([punch]))
     db.refresh(punch)
 
     day = db.scalar(

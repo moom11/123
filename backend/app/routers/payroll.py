@@ -13,7 +13,7 @@ from ..database import get_db
 from ..models import PayrollRun, PayrollStatus, Payslip, Role, User
 from ..schemas import PayrollRunOut, PayslipAdjust, PayslipOut
 from ..security import get_current_user, require_hr
-from ..services import audit, notifications
+from ..services import audit, notifications, sheets
 from ..services import payroll as service
 
 router = APIRouter(prefix="/api/payroll", tags=["payroll"])
@@ -132,7 +132,9 @@ def approve_run(run_id: int, db: Session = Depends(get_db), user: User = Depends
         raise HTTPException(status_code=404, detail="المسير غير موجود")
     run = service.approve_run(db, run)
     audit.log(db, user, "approve", "payroll", run.id, f"اعتماد مسير {run.month}/{run.year}")
-    for slip in db.scalars(select(Payslip).where(Payslip.run_id == run.id)).all():
+    slips_all = db.scalars(select(Payslip).where(Payslip.run_id == run.id)).all()
+    sheets.push(db, "payroll", sheets.payslip_rows(run, slips_all))
+    for slip in slips_all:
         notifications.notify_employee(
             db, slip.employee_id,
             f"قسيمة راتب {run.month}/{run.year} جاهزة",
