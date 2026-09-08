@@ -743,6 +743,12 @@ function leaveModal(employees, leaveTypes, after) {
 /* ------------------------------ إجازاتي (واجهة الموظف) ------------------------------ */
 views.myLeaves = async () => {
   const year = new Date().getFullYear();
+  if (!state.user.employee_id) {
+    render(`<div class="card"><div class="card-body">
+      <div class="empty">حسابك غير مرتبط بملف موظف، لذلك لا يظهر لك رصيد إجازات ولا يمكنك تقديم طلب.
+      راجع الموارد البشرية لربط الحساب باسمك في قائمة الموظفين.</div></div></div>`);
+    return;
+  }
   const leaveTypes = await api('/api/leave-types');
   render(`
     <div class="card"><div class="card-body inline">

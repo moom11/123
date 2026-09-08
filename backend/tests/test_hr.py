@@ -1343,3 +1343,31 @@ def test_employee_dashboard_shows_only_own_data(client, auth):
     for row in client.get("/api/leave-requests", headers=h).json():
         assert row["employee_name"] == "موظف الإشعار"
     assert [e["code"] for e in client.get("/api/employees", headers=h).json()] == ["9301"]
+
+
+def test_unlinked_employee_account_has_no_balances(client, auth):
+    """حساب موظف غير مرتبط بملف: لا يرى أرصدة أحد."""
+    client.post("/api/users", headers=auth, json={
+        "username": "orphan_emp", "password": "Aa123456", "role": "employee"})
+    token = client.post("/api/auth/login", data={
+        "username": "orphan_emp", "password": "Aa123456"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+    assert client.get("/api/leave-balances", headers=h).json() == []
+    assert client.get("/api/employees", headers=h).json() == []
+
+
+def test_linked_employee_sees_own_balances(client, auth):
+    """الموظف المرتبط يرى رصيده هو فقط، ولكل نوع إجازة يخصم من الرصيد."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9760", "full_name": "موظف الرصيد"}).json()
+    client.post("/api/users", headers=auth, json={
+        "username": "bal_emp", "password": "Aa123456", "role": "employee",
+        "employee_id": emp["id"]})
+    token = client.post("/api/auth/login", data={
+        "username": "bal_emp", "password": "Aa123456"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+    rows = client.get("/api/leave-balances", headers=h).json()
+    assert rows, "يجب أن تُنشأ الأرصدة تلقائياً لكل نوع إجازة يخصم من الرصيد"
+    assert {r["employee_id"] for r in rows} == {emp["id"]}
+    annual = next(r for r in rows if r["leave_type_name"] == "إجازة سنوية")
+    assert annual["entitled_days"] == 30 and annual["remaining_days"] == 30

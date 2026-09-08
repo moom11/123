@@ -318,6 +318,9 @@ def list_balances(
 ):
     target = employee_id
     if user.role == Role.employee:
+        # الموظف يرى رصيده وحده، وإن لم يكن حسابه مرتبطاً بملف موظف فلا رصيد له
+        if not user.employee_id:
+            return []
         target = user.employee_id
     if target and not can_view_employee(user, target, db):
         raise HTTPException(status_code=403, detail="لا تملك صلاحية عرض هذا الموظف")
