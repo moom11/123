@@ -12,21 +12,22 @@ const state = {
 const views = {};
 
 const PAGES = [
-  { id: 'dashboard',  title: 'لوحة المؤشرات', icon: '📊', roles: ['admin','hr','manager','employee'] },
-  { id: 'attendance', title: 'الحضور اليومي', icon: '🕒', roles: ['admin','hr','manager','employee'] },
-  { id: 'punches',    title: 'سجل البصمات',   icon: '🖐', roles: ['admin','hr','manager','employee'] },
-  { id: 'leaves',     title: 'الإجازات',       icon: '🌴', roles: ['admin','hr','manager'] },
-  { id: 'myLeaves',   title: 'إجازاتي',        icon: '🌴', roles: ['employee'] },
-  { id: 'balances',   title: 'أرصدة الإجازات', icon: '⚖️', roles: ['admin','hr','manager'] },
-  { id: 'violations', title: 'المخالفات',      icon: '⚠️', roles: ['admin','hr','manager','employee'] },
-  { id: 'payroll',    title: 'الرواتب',        icon: '💰', roles: ['admin','hr','manager','employee'] },
-  { id: 'employees',  title: 'الموظفون',       icon: '👥', roles: ['admin','hr','manager'] },
-  { id: 'documents',  title: 'وثائق الموظفين', icon: '📁', roles: ['admin','hr','manager','employee'] },
-  { id: 'devices',    title: 'أجهزة البصمة',   icon: '📟', roles: ['admin','hr'] },
-  { id: 'reports',    title: 'التقارير',       icon: '📑', roles: ['admin','hr','manager'] },
-  { id: 'settings',   title: 'الإعدادات',      icon: '⚙️', roles: ['admin','hr'] },
-  { id: 'account',    title: 'حسابي',          icon: '🔑', roles: ['admin','hr','manager','employee'] },
+  { id: 'dashboard',  title: 'لوحة المؤشرات', icon: '📊', group: 'عام',      roles: ['admin','hr','manager','employee'] },
+  { id: 'attendance', title: 'الحضور اليومي', icon: '🕒', group: 'الحضور',   roles: ['admin','hr','manager','employee'] },
+  { id: 'punches',    title: 'سجل البصمات',   icon: '🖐', group: 'الحضور',   roles: ['admin','hr','manager','employee'] },
+  { id: 'leaves',     title: 'الإجازات',       icon: '🌴', group: 'الإجازات', roles: ['admin','hr','manager'] },
+  { id: 'myLeaves',   title: 'إجازاتي',        icon: '🌴', group: 'الإجازات', roles: ['employee'] },
+  { id: 'balances',   title: 'أرصدة الإجازات', icon: '⚖️', group: 'الإجازات', roles: ['admin','hr','manager'] },
+  { id: 'violations', title: 'المخالفات',      icon: '⚠️', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
+  { id: 'payroll',    title: 'الرواتب',        icon: '💰', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
+  { id: 'employees',  title: 'الموظفون',       icon: '👥', group: 'شؤون الموظفين', roles: ['admin','hr','manager'] },
+  { id: 'documents',  title: 'الوثائق',        icon: '📁', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
+  { id: 'devices',    title: 'أجهزة البصمة',   icon: '📟', group: 'الإدارة',  roles: ['admin','hr'] },
+  { id: 'reports',    title: 'التقارير',       icon: '📑', group: 'الإدارة',  roles: ['admin','hr','manager'] },
+  { id: 'settings',   title: 'الإعدادات',      icon: '⚙️', group: 'الإدارة',  roles: ['admin','hr'] },
+  { id: 'account',    title: 'حسابي',          icon: '🔑', group: 'الإدارة',  roles: ['admin','hr','manager','employee'] },
 ];
+const NAV_GROUPS = ['عام', 'الحضور', 'الإجازات', 'شؤون الموظفين', 'الإدارة'];
 
 const DAY_STATUS = {
   present: 'حاضر', late: 'متأخر', absent: 'غائب', leave: 'إجازة',
@@ -42,6 +43,91 @@ const PENALTY_ACTIONS = { warning:'إنذار كتابي', deduction_percent_day
   deduction_days:'خصم أجر أيام', suspension:'إيقاف بدون أجر', termination:'الفصل من العمل' };
 const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
 const money = (v) => (Number(v || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const CHART_COLORS = ['#0f766e','#1c6dd0','#5b3fa8','#b8763a','#2e7d32','#0d7d8f','#a8443c','#b26a00'];
+
+/* تقويم شهري لحالات الحضور */
+const CAL_DOW = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+function calendarMonth(rows, year, month) {
+  const byDate = {};
+  rows.forEach((r) => { byDate[r.work_date] = r; });
+  const first = new Date(year, month - 1, 1);
+  const days = new Date(year, month, 0).getDate();
+  const todayStr = today();
+  let cells = '';
+  for (let i = 0; i < first.getDay(); i++) cells += '<div class="day blank"></div>';
+  for (let d = 1; d <= days; d++) {
+    const iso = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const row = byDate[iso];
+    const status = row ? row.status : '';
+    const label = row ? (DAY_STATUS[row.status] || '') : '';
+    const time = row && row.check_in ? fmtTime(row.check_in) : '';
+    cells += `<div class="day ${status} ${iso === todayStr ? 'today' : ''}" title="${esc(iso + ' — ' + label)}">
+      <span class="n">${d}</span><span class="s">${esc(time || label)}</span></div>`;
+  }
+  return `<div class="calendar">${CAL_DOW.map((d) => `<div class="dow">${d}</div>`).join('')}${cells}</div>`;
+}
+
+/* ------------------------------ عناصر عرض مشتركة ------------------------------ */
+const initials = (name) => (String(name || '؟').trim().split(/\s+/).slice(0, 2)
+  .map((w) => w[0]).join('') || '؟');
+function avatarTone(seed) {
+  let h = 0;
+  for (const ch of String(seed || '')) h = (h * 31 + ch.charCodeAt(0)) % 997;
+  return 'c' + ((h % 6) + 1);
+}
+const avatar = (name, size = '') =>
+  `<div class="avatar ${size} ${avatarTone(name)}">${esc(initials(name))}</div>`;
+
+/** مدة الخدمة بصيغة «٣ سنوات و٢ شهر» */
+function serviceLength(hireDate) {
+  if (!hireDate) return '—';
+  const from = new Date(hireDate), now = new Date();
+  if (isNaN(from)) return '—';
+  let months = (now.getFullYear() - from.getFullYear()) * 12 + (now.getMonth() - from.getMonth());
+  if (now.getDate() < from.getDate()) months -= 1;
+  if (months < 0) return '—';
+  const y = Math.floor(months / 12), m = months % 12;
+  const yTxt = y === 1 ? 'سنة' : y === 2 ? 'سنتان' : y <= 10 ? `${y} سنوات` : `${y} سنة`;
+  const mTxt = m === 1 ? 'شهر' : m === 2 ? 'شهران' : m <= 10 ? `${m} أشهر` : `${m} شهراً`;
+  if (!y) return m ? mTxt : 'أقل من شهر';
+  return m ? `${yTxt} و${mTxt}` : yTxt;
+}
+const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000);
+
+/** شريط تقدّم بعنوان وقيمة */
+function meter(label, valueText, percent, tone = '') {
+  const pct = Math.max(0, Math.min(100, Math.round(percent || 0)));
+  return `<div class="meter"><div class="row"><span class="muted">${esc(label)}</span>
+    <b>${esc(valueText)}</b></div>
+    <div class="progress ${tone}"><i style="width:${pct}%"></i></div></div>`;
+}
+
+/** رسم دائري (SVG) بلا مكتبات خارجية */
+function donut(items) {
+  const data = items.filter((i) => i.value > 0);
+  const total = data.reduce((sum, i) => sum + i.value, 0);
+  if (!total) return '<div class="empty">لا توجد بيانات كافية للعرض</div>';
+  const r = 58, circ = 2 * Math.PI * r;
+  let offset = 0;
+  const rings = data.map((i, idx) => {
+    const len = (i.value / total) * circ;
+    const seg = `<circle r="${r}" cx="75" cy="75" stroke="${i.color || CHART_COLORS[idx % CHART_COLORS.length]}"
+      stroke-dasharray="${len.toFixed(2)} ${(circ - len).toFixed(2)}"
+      stroke-dashoffset="${(-offset).toFixed(2)}"></circle>`;
+    offset += len;
+    return seg;
+  }).join('');
+  const legend = data.map((i, idx) => `<div class="it">
+      <span class="lab"><i style="background:${i.color || CHART_COLORS[idx % CHART_COLORS.length]}"></i>
+        ${esc(i.label)}</span>
+      <b>${i.value} <span class="muted">(${Math.round((i.value / total) * 100)}%)</span></b>
+    </div>`).join('');
+  return `<div class="donut-wrap">
+      <svg class="donut" viewBox="0 0 150 150">${rings}</svg>
+      <div class="donut-legend">${legend}</div>
+    </div>`;
+}
+
 const WEEK_DAYS = [['6','الأحد'],['0','الاثنين'],['1','الثلاثاء'],['2','الأربعاء'],['3','الخميس'],['4','الجمعة'],['5','السبت']];
 
 /* ------------------------------ أدوات عامة ------------------------------ */
@@ -55,12 +141,31 @@ const fmtTime = (v) => (v ? String(v).slice(11, 16) : '—');
 const fmtDateTime = (v) => (v ? String(v).slice(0, 16).replace('T', ' ') : '—');
 const hours = (m) => (m ? (m / 60).toFixed(2) : '0');
 
+const TOAST_ICONS = { ok: '✓', err: '!', '': 'i' };
 function toast(message, type = '') {
   const node = document.createElement('div');
   node.className = 'toast ' + type;
-  node.textContent = message;
+  node.innerHTML = `<span class="ti">${TOAST_ICONS[type] || 'i'}</span><span>${esc(message)}</span>`;
   el('toasts').appendChild(node);
-  setTimeout(() => node.remove(), 4200);
+  const close = () => {
+    node.classList.add('out');
+    setTimeout(() => node.remove(), 220);
+  };
+  node.onclick = close;
+  setTimeout(close, 4200);
+}
+
+/* هياكل تحميل (Skeleton) بدل شاشة الانتظار الفارغة */
+function skeleton(kind = 'rows') {
+  if (kind === 'kpis') {
+    return `<div class="grid cols-4">${'<div class="sk tall"></div>'.repeat(4)}</div>
+      <div class="card"><div class="sk-rows">${'<div class="sk line w80"></div>'.repeat(5)}</div></div>`;
+  }
+  if (kind === 'cards') {
+    return `<div class="grid cards">${'<div class="sk tall" style="height:150px"></div>'.repeat(8)}</div>`;
+  }
+  return `<div class="card"><div class="sk-rows">
+    <div class="sk line w40"></div>${'<div class="sk line"></div>'.repeat(6)}</div></div>`;
 }
 
 async function api(path, options = {}) {
@@ -142,9 +247,18 @@ function startApp() {
   el('login').classList.add('hidden');
   el('app').classList.remove('hidden');
   const pages = PAGES.filter((p) => p.roles.includes(state.user.role));
-  el('nav').innerHTML = pages.map((p) =>
-    `<a data-page="${p.id}"><span class="ico">${p.icon}</span>${esc(p.title)}</a>`).join('');
-  el('nav').querySelectorAll('a').forEach((a) => a.onclick = () => go(a.dataset.page));
+  el('nav').innerHTML = NAV_GROUPS.map((group) => {
+    const items = pages.filter((p) => p.group === group);
+    if (!items.length) return '';
+    return `<div class="nav-group">${esc(group)}</div>` + items.map((p) =>
+      `<a data-page="${p.id}" data-title="${esc(p.title)}">
+         <span class="ico">${p.icon}</span><span class="lbl">${esc(p.title)}</span></a>`).join('');
+  }).join('');
+  el('nav').querySelectorAll('a').forEach((a) => a.onclick = () => {
+    go(a.dataset.page);
+    el('app').classList.remove('drawer-open');
+    closeScrim();
+  });
   el('sideUser').innerHTML = `${esc(state.user.username)} — ${esc(ROLES[state.user.role])}`;
   el('topWho').textContent = state.user.employee_name || ROLES[state.user.role];
   el('selfPunchBtn').classList.toggle('hidden', !state.user.employee_id);
@@ -152,17 +266,48 @@ function startApp() {
   go(pages.some((p) => p.id === state.page) ? state.page : 'dashboard');
 }
 
+const EXTRA_TITLES = { profile: 'ملف الموظف' };
 function go(page) {
   state.page = page;
   const meta = PAGES.find((p) => p.id === page);
-  el('pageTitle').textContent = meta ? meta.title : '';
+  el('pageTitle').textContent = meta ? meta.title : (EXTRA_TITLES[page] || '');
   el('nav').querySelectorAll('a').forEach((a) => a.classList.toggle('active', a.dataset.page === page));
-  el('view').innerHTML = '<div class="empty">جارٍ التحميل…</div>';
+  el('view').innerHTML = skeleton(
+    page === 'dashboard' ? 'kpis' : page === 'employees' ? 'cards' : 'rows');
   const fn = views[page];
   Promise.resolve(fn ? fn() : '<div class="empty">صفحة غير متاحة</div>')
     .catch((e) => { toast(e.message, 'err'); el('view').innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
 }
 const render = (html) => { el('view').innerHTML = html; };
+
+/* ------------------------------ القائمة الجانبية ------------------------------ */
+function closeScrim() {
+  const scrim = document.querySelector('.scrim');
+  if (scrim) scrim.remove();
+}
+function toggleDrawer() {
+  const open = el('app').classList.toggle('drawer-open');
+  closeScrim();
+  if (open) {
+    const scrim = document.createElement('div');
+    scrim.className = 'scrim';
+    scrim.onclick = () => { el('app').classList.remove('drawer-open'); closeScrim(); };
+    document.body.appendChild(scrim);
+  }
+}
+function toggleMini() {
+  const mini = el('app').classList.toggle('mini');
+  localStorage.setItem('hr_sidebar_mini', mini ? '1' : '0');
+  el('collapseBtn').textContent = mini ? '⇥' : '⇤';
+}
+function initShell() {
+  if (localStorage.getItem('hr_sidebar_mini') === '1') {
+    el('app').classList.add('mini');
+    el('collapseBtn').textContent = '⇥';
+  }
+  el('menuBtn').onclick = toggleDrawer;
+  el('collapseBtn').onclick = toggleMini;
+}
 
 function currentPosition(options = {}) {
   return new Promise((resolve, reject) => {
@@ -230,25 +375,63 @@ async function refreshBell() {
   } catch { /* تجاهل أخطاء الشبكة المؤقتة */ }
 }
 
+const NOTIF_META = {
+  document:  ['📁', 'الوثائق'],
+  leave:     ['🌴', 'الإجازات'],
+  violation: ['⚠️', 'المخالفات'],
+  payroll:   ['💰', 'الرواتب'],
+  attendance:['🕒', 'الحضور'],
+  quote:     ['✦', 'عبارة اليوم'],
+};
+
 async function openNotifications() {
   const rows = await api('/api/notifications?limit=50');
+  const unread = rows.filter((n) => !n.is_read).length;
+  const categories = [...new Set(rows.map((n) => n.category).filter(Boolean))];
+  const filters = [['all', `الكل (${rows.length})`], ['unread', `غير مقروء (${unread})`]]
+    .concat(categories.map((c) => [c, (NOTIF_META[c] || ['🔔', c])[1]]));
+
+  const itemHtml = (n) => {
+    const [icon] = NOTIF_META[n.category] || ['🔔'];
+    return `<div class="notif ${n.is_read ? '' : 'unread'}" data-id="${n.id}"
+        data-page="${n.link_page || ''}" data-cat="${n.category || ''}" data-read="${n.is_read ? 1 : 0}">
+      <div class="t">${icon} ${esc(n.title)}</div>
+      ${n.body ? `<div class="b">${esc(n.body)}</div>` : ''}
+      <div class="d">${fmtDateTime(n.created_at)}</div></div>`;
+  };
   const body = rows.length
-    ? rows.map((n) => `<div class="notif ${n.is_read ? '' : 'unread'}" data-id="${n.id}" data-page="${n.link_page || ''}">
-        <div class="t">${esc(n.title)}</div>
-        ${n.body ? `<div class="b">${esc(n.body)}</div>` : ''}
-        <div class="d">${fmtDateTime(n.created_at)}</div></div>`).join('')
-    : '<div class="empty">لا توجد إشعارات</div>';
+    ? `<div class="sub-tabs" style="padding:14px 16px 0;margin:0" id="nFilters">
+         ${filters.map(([key, label], i) =>
+           `<button data-f="${key}" class="${i === 0 ? 'active' : ''}">${esc(label)}</button>`).join('')}
+       </div>
+       <div id="nList">${rows.map(itemHtml).join('')}</div>`
+    : '<div class="empty"><span class="big">🔔</span>لا توجد إشعارات</div>';
+
   modal({
-    title: 'الإشعارات',
+    title: `مركز التنبيهات${unread ? ` — ${unread} جديد` : ''}`,
     body: `<div style="margin:-18px">${body}</div>`,
     footer: '<button class="btn ghost" id="readAll">تعليم الكل كمقروء</button><button class="btn gray" data-close>إغلاق</button>',
-    width: 560,
+    width: 580,
     onOpen: (root) => {
+      const apply = (f) => {
+        root.querySelectorAll('.notif').forEach((node) => {
+          const show = f === 'all' ? true
+            : f === 'unread' ? node.dataset.read === '0'
+            : node.dataset.cat === f;
+          node.classList.toggle('hidden', !show);
+        });
+      };
+      const filterBar = $('#nFilters', root);
+      if (filterBar) filterBar.querySelectorAll('button').forEach((b) => b.onclick = () => {
+        filterBar.querySelectorAll('button').forEach((x) => x.classList.remove('active'));
+        b.classList.add('active');
+        apply(b.dataset.f);
+      });
       root.querySelectorAll('.notif').forEach((node) => node.onclick = async () => {
         try { await api(`/api/notifications/${node.dataset.id}/read`, { method: 'POST' }); } catch {}
         refreshBell();
         if (node.dataset.page) { closeModal(); go(node.dataset.page); }
-        else node.classList.remove('unread');
+        else { node.classList.remove('unread'); node.dataset.read = '1'; }
       });
       $('#readAll', root).onclick = async () => {
         await api('/api/notifications/read-all', { method: 'POST' });
@@ -425,10 +608,10 @@ const options = (items, value, key = 'id', label = 'name') =>
 views.dashboard = async () => {
   const stats = await api('/api/reports/dashboard');
   const mine = state.user.role === 'employee';
-  const myStatus = stats.late ? ['متأخر', 'warn']
-    : stats.on_leave ? ['في إجازة', 'info']
-    : stats.present ? ['حاضر', 'ok']
-    : stats.absent ? ['غياب', 'danger'] : ['لم تُسجَّل بصمة بعد', ''];
+  const myStatus = stats.late ? ['متأخر', 'warn', '⏰']
+    : stats.on_leave ? ['في إجازة', 'info', '🌴']
+    : stats.present ? ['حاضر', 'ok', '✅']
+    : stats.absent ? ['غياب', 'danger', '⛔'] : ['لم تُسجَّل بصمة بعد', '', '🕒'];
   const max = Math.max(1, ...stats.weekly_trend.map((d) => d.present + d.late + d.absent + d.leave));
   const bar = (d) => {
     const seg = (k, v) => v ? `<div class="seg ${k}" style="height:${(v / max) * 100}%" title="${DAY_STATUS[k] || k}: ${v}"></div>` : '';
@@ -436,43 +619,82 @@ views.dashboard = async () => {
         ${seg('present', d.present)}${seg('late', d.late)}${seg('leave', d.leave)}${seg('absent', d.absent)}
       </div><div class="cap">${d.date.slice(5)}</div></div>`;
   };
+  const kpi = (label, value, tone, icon, foot = '') => `
+    <div class="kpi ${tone}"><div class="label">${esc(label)}<span class="ico">${icon}</span></div>
+      <div class="value ${tone === 'primary' ? '' : tone}">${value}</div>
+      ${foot ? `<div class="foot">${esc(foot)}</div>` : ''}</div>`;
+
+  const quickActions = [];
+  if (isHR()) {
+    quickActions.push(['➕', 'إضافة موظف', "go('employees');setTimeout(()=>document.getElementById('eNew')&&document.getElementById('eNew').click(),400)"]);
+    quickActions.push(['🌴', 'اعتماد الإجازات', "go('leaves')"]);
+    quickActions.push(['⚠️', 'تسجيل مخالفة', "go('violations')"]);
+    quickActions.push(['💰', 'مسير الرواتب', "go('payroll')"]);
+    quickActions.push(['📑', 'إصدار تقرير', "go('reports')"]);
+    quickActions.push(['📁', 'إضافة وثيقة', "go('documents')"]);
+  } else if (can('manager')) {
+    quickActions.push(['🌴', 'طلبات فريقي', "go('leaves')"]);
+    quickActions.push(['🕒', 'حضور الفريق', "go('attendance')"]);
+    quickActions.push(['📑', 'التقارير', "go('reports')"]);
+  } else {
+    quickActions.push(['🌴', 'طلب إجازة', "go('myLeaves')"]);
+    quickActions.push(['🕒', 'سجل حضوري', "go('attendance')"]);
+    quickActions.push(['💰', 'قسائم رواتبي', "go('payroll')"]);
+    quickActions.push(['📁', 'وثائقي', "go('documents')"]);
+  }
+
   render(`
-    <div class="grid cols-4">
+    <div class="grid cols-4 stagger">
       ${mine ? `
-      <div class="kpi"><div class="label">حالتي اليوم</div>
-        <div class="value ${myStatus[1]}" style="font-size:19px">${myStatus[0]}</div></div>
-      <div class="kpi"><div class="label">طلبات إجازتي المعلّقة</div><div class="value warn">${stats.pending_leaves}</div></div>
-      <div class="kpi"><div class="label">تاريخ اليوم</div><div class="value" style="font-size:19px">${stats.date}</div></div>
+        ${kpi('حالتي اليوم', `<span style="font-size:19px">${myStatus[0]}</span>`, myStatus[1], myStatus[2])}
+        ${kpi('طلبات إجازتي المعلّقة', stats.pending_leaves, 'warn', '🌴')}
+        ${kpi('تاريخ اليوم', `<span style="font-size:18px">${stats.date}</span>`, 'primary', '📅')}
       ` : `
-      <div class="kpi"><div class="label">إجمالي الموظفين</div><div class="value">${stats.employees_total}</div></div>
-      <div class="kpi"><div class="label">الحضور اليوم</div><div class="value ok">${stats.present}</div></div>
-      <div class="kpi"><div class="label">متأخرون</div><div class="value warn">${stats.late}</div></div>
-      <div class="kpi"><div class="label">غياب</div><div class="value danger">${stats.absent}</div></div>
-      <div class="kpi"><div class="label">في إجازة</div><div class="value info">${stats.on_leave}</div></div>
-      <div class="kpi"><div class="label">طلبات إجازة معلّقة</div><div class="value warn">${stats.pending_leaves}</div></div>
-      ${can('admin','hr') ? `<div class="kpi"><div class="label">أجهزة البصمة المتصلة</div><div class="value">${stats.devices_online}/${stats.devices_total}</div></div>` : ''}
-      <div class="kpi"><div class="label">تاريخ اليوم</div><div class="value" style="font-size:19px">${stats.date}</div></div>
+        ${kpi('إجمالي الموظفين', stats.employees_total, 'primary', '👥')}
+        ${kpi('الحضور اليوم', stats.present, 'ok', '✅')}
+        ${kpi('متأخرون', stats.late, 'warn', '⏰')}
+        ${kpi('غياب', stats.absent, 'danger', '⛔')}
+        ${kpi('في إجازة', stats.on_leave, 'info', '🌴')}
+        ${kpi('طلبات إجازة معلّقة', stats.pending_leaves, 'warn', '📨')}
+        ${can('admin', 'hr') ? kpi('أجهزة البصمة', `${stats.devices_online}/${stats.devices_total}`, 'primary', '📟', 'متصلة خلال ٢٤ ساعة') : ''}
+        ${kpi('تاريخ اليوم', `<span style="font-size:18px">${stats.date}</span>`, 'primary', '📅')}
       `}
     </div>
-    <div class="card">
-      <div class="card-head"><h3>${mine ? 'حضوري خلال آخر ٧ أيام' : 'الحضور خلال آخر ٧ أيام'}</h3>
-        <div class="legend">
-          <span><i style="background:#3f9d6a"></i>حاضر</span><span><i style="background:#e0a33c"></i>متأخر</span>
-          <span><i style="background:#5f8fd8"></i>إجازة</span><span><i style="background:#d05a52"></i>غياب</span>
-        </div>
-      </div>
-      <div class="card-body"><div class="bars">${stats.weekly_trend.map(bar).join('')}</div></div>
-    </div>
-    ${state.user.employee_id ? `<div class="card"><div class="card-head"><h3>تسجيل حضوري من التطبيق</h3>
+
+    <div class="card"><div class="card-head"><h3>⚡ إجراءات سريعة</h3></div>
+      <div class="card-body"><div class="quick">
+        ${quickActions.map(([ico, label, action]) =>
+          `<button onclick="${action}"><span class="qi">${ico}</span>${esc(label)}</button>`).join('')}
+      </div></div></div>
+
+    ${state.user.employee_id ? `<div class="card"><div class="card-head"><h3>🕒 تسجيل حضوري من التطبيق</h3>
       <button class="btn sm ghost" id="checkLoc">التحقق من موقعي</button></div>
       <div class="card-body inline">
-        <button class="btn ok" id="punchNow">🕒 تسجيل حضور / انصراف</button>
+        <button class="btn ok" id="punchNow">تسجيل حضور / انصراف</button>
         <span class="help" id="locHint">يجب أن تكون داخل نطاق موقع العمل المعتمد عند التسجيل.</span>
       </div></div>` : ''}
+
+    <div class="grid cols-2">
+      <div class="card" style="margin:0">
+        <div class="card-head"><h3>${mine ? 'حضوري خلال آخر ٧ أيام' : 'الحضور خلال آخر ٧ أيام'}</h3>
+          <div class="legend">
+            <span><i style="background:#3f9d6a"></i>حاضر</span><span><i style="background:#e0a33c"></i>متأخر</span>
+            <span><i style="background:#5f8fd8"></i>إجازة</span><span><i style="background:#d05a52"></i>غياب</span>
+          </div>
+        </div>
+        <div class="card-body"><div class="bars">${stats.weekly_trend.map(bar).join('')}</div></div>
+      </div>
+      ${mine ? '' : `<div class="card" style="margin:0">
+        <div class="card-head"><h3>توزيع الموظفين حسب الإدارة</h3></div>
+        <div class="card-body" id="depChart"><div class="sk tall"></div></div>
+      </div>`}
+    </div>
+
     <div class="card"><div class="card-head"><h3>${mine ? 'سجلي اليوم' : 'حضور اليوم'}</h3>
       <button class="btn sm ghost" onclick="go('attendance')">${mine ? 'فتح سجل حضوري' : 'فتح الكشف اليومي'}</button></div>
-      <div id="todayTable"><div class="empty">جارٍ التحميل…</div></div>
+      <div id="todayTable"><div class="sk-rows">${'<div class="sk line"></div>'.repeat(4)}</div></div>
     </div>`);
+
   if (el('punchNow')) {
     el('punchNow').onclick = selfPunch;
     el('checkLoc').onclick = async () => {
@@ -484,14 +706,31 @@ views.dashboard = async () => {
       } catch (e) { el('locHint').textContent = e.message; }
     };
   }
+
   const rows = await api('/api/attendance/daily?work_date=' + today());
   el('todayTable').innerHTML = table(
-    ['رقم الموظف', 'الاسم', 'الحضور', 'الانصراف', 'ساعات', 'التأخير (د)', 'الحالة'],
+    ['الموظف', 'الحضور', 'الانصراف', 'ساعات', 'التأخير (د)', 'الحالة'],
     rows,
-    (r) => `<tr><td>${esc(r.employee_code)}</td><td>${esc(r.employee_name)}</td>
+    (r) => `<tr><td><div style="display:flex;align-items:center;gap:9px">${avatar(r.employee_name, 'sm')}
+        <div><div style="font-weight:600">${esc(r.employee_name)}</div>
+        <div class="muted" style="font-size:11.5px">${esc(r.employee_code)}</div></div></div></td>
       <td>${fmtTime(r.check_in)}</td><td>${fmtTime(r.check_out)}</td><td>${hours(r.worked_minutes)}</td>
       <td>${r.late_minutes || 0}</td><td><span class="tag ${r.status}">${DAY_STATUS[r.status]}</span></td></tr>`,
     'لا توجد سجلات لهذا اليوم');
+
+  if (!mine && el('depChart')) {
+    try {
+      const employees = await api('/api/employees?status=active');
+      const counts = {};
+      employees.forEach((e) => {
+        const key = e.department_name || 'بدون إدارة';
+        counts[key] = (counts[key] || 0) + 1;
+      });
+      const items = Object.entries(counts).sort((a, b) => b[1] - a[1])
+        .map(([label, value]) => ({ label, value }));
+      el('depChart').innerHTML = donut(items);
+    } catch (e) { el('depChart').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  }
 };
 
 /* ------------------------------ الحضور اليومي ------------------------------ */
@@ -508,6 +747,7 @@ views.attendance = async () => {
       ${isHR() ? '<button class="btn gray" id="attRecompute">إعادة احتساب</button>' : ''}
       ${isHR() ? '<button class="btn ok" id="attManual">بصمة يدوية</button>' : ''}
     </div></div>
+    <div class="grid cols-4 stagger" id="attKpis"></div>
     <div class="card"><div class="card-head"><h3>كشف الحضور</h3><span class="muted" id="attCount"></span></div>
       <div id="attTable"><div class="empty">اختر التاريخ ثم اضغط «عرض»</div></div></div>
     <div class="card"><div class="card-head"><h3>كشف موظف لفترة</h3></div><div class="card-body">
@@ -526,10 +766,23 @@ views.attendance = async () => {
     if (el('attStatus').value) q.set('status', el('attStatus').value);
     const rows = await api('/api/attendance/daily?' + q);
     el('attCount').textContent = `${rows.length} سجل`;
+    const count = (...st) => rows.filter((r) => st.includes(r.status)).length;
+    el('attKpis').innerHTML = `
+      <div class="kpi ok"><div class="label">حاضر<span class="ico">✅</span></div>
+        <div class="value ok">${count('present', 'missing_out')}</div></div>
+      <div class="kpi warn"><div class="label">متأخر<span class="ico">⏰</span></div>
+        <div class="value warn">${count('late')}</div></div>
+      <div class="kpi danger"><div class="label">غياب<span class="ico">⛔</span></div>
+        <div class="value danger">${count('absent')}</div></div>
+      <div class="kpi info"><div class="label">إجازة / عطلة<span class="ico">🌴</span></div>
+        <div class="value info">${count('leave', 'holiday', 'weekend')}</div></div>`;
     el('attTable').innerHTML = table(
-      ['رقم الموظف', 'الاسم', 'الحضور', 'الانصراف', 'ساعات', 'تأخير (د)', 'خروج مبكر (د)', 'إضافي (د)', 'الحالة', 'ملاحظة'],
+      ['الموظف', 'الحضور', 'الانصراف', 'ساعات', 'تأخير (د)', 'خروج مبكر (د)', 'إضافي (د)', 'الحالة', 'ملاحظة'],
       rows,
-      (r) => `<tr><td>${esc(r.employee_code)}</td><td>${esc(r.employee_name)}</td>
+      (r) => `<tr>
+        <td><div style="display:flex;align-items:center;gap:9px">${avatar(r.employee_name, 'sm')}
+          <div><div style="font-weight:600">${esc(r.employee_name)}</div>
+          <div class="muted" style="font-size:11.5px">${esc(r.employee_code)}</div></div></div></td>
         <td>${fmtTime(r.check_in)}</td><td>${fmtTime(r.check_out)}</td><td>${hours(r.worked_minutes)}</td>
         <td>${r.late_minutes || 0}</td><td>${r.early_leave_minutes || 0}</td><td>${r.overtime_minutes || 0}</td>
         <td><span class="tag ${r.status}">${DAY_STATUS[r.status]}</span></td><td>${esc(r.note || '')}</td></tr>`);
@@ -546,8 +799,19 @@ views.attendance = async () => {
 
   el('empLoad').onclick = async () => {
     const id = el('empSel').value;
-    const rows = await api(`/api/attendance/employee/${id}?date_from=${el('empFrom').value}&date_to=${el('empTo').value}`);
-    el('empTable').innerHTML = table(
+    const from = el('empFrom').value;
+    const rows = await api(`/api/attendance/employee/${id}?date_from=${from}&date_to=${el('empTo').value}`);
+    const [y, m] = from.split('-').map(Number);
+    const calendar = rows.length
+      ? `<div class="card" style="margin:14px 0 0"><div class="card-head">
+          <h3>تقويم ${MONTHS[m - 1]} ${y}</h3>
+          <div class="legend"><span><i style="background:#e6f4e8"></i>حاضر</span>
+            <span><i style="background:#fdf1dd"></i>متأخر</span>
+            <span><i style="background:#fbe6e4"></i>غياب</span>
+            <span><i style="background:#e7f0fd"></i>إجازة</span></div></div>
+          <div class="card-body">${calendarMonth(rows, y, m)}</div></div>`
+      : '';
+    el('empTable').innerHTML = calendar + table(
       ['التاريخ', 'الحضور', 'الانصراف', 'ساعات', 'تأخير (د)', 'إضافي (د)', 'الحالة', 'ملاحظة'],
       rows,
       (r) => `<tr><td>${r.work_date}</td><td>${fmtTime(r.check_in)}</td><td>${fmtTime(r.check_out)}</td>
@@ -640,36 +904,70 @@ views.leaves = async () => {
       <button class="btn ghost" id="lLoad">تحديث</button>
       ${canDecide ? `<button class="btn ghost" id="lExport">تصدير CSV</button>` : ''}
     </div></div>
-    <div class="card"><div class="card-head"><h3>طلبات الإجازة</h3><span class="muted" id="lCount"></span></div>
-      <div id="lTable"><div class="empty">جارٍ التحميل…</div></div></div>`);
+    <div class="card"><div class="card-head">
+        <h3>طلبات الإجازة <span class="muted" id="lCount" style="font-weight:400;font-size:13px"></span></h3>
+        <div class="sub-tabs" style="margin:0">
+          <button id="lModeCards" class="active">▦ بطاقات</button>
+          <button id="lModeTable">☰ جدول</button>
+        </div></div>
+      <div id="lTable"><div class="sk-rows">${'<div class="sk line"></div>'.repeat(4)}</div></div></div>`);
+
+  const actionsFor = (r) => {
+    let actions = '';
+    if (r.status === 'pending' && canDecide) {
+      actions += `<button class="btn sm ok" onclick="decideLeave(${r.id},'approve')">اعتماد</button>
+                  <button class="btn sm danger" onclick="decideLeave(${r.id},'reject')">رفض</button> `;
+    }
+    const mine = state.user.employee_id === r.employee_id;
+    if (r.status === 'pending' && mine) actions += `<button class="btn sm gray" onclick="decideLeave(${r.id},'cancel')">إلغاء</button>`;
+    if (r.status === 'approved' && isHR()) actions += `<button class="btn sm gray" onclick="decideLeave(${r.id},'cancel')">إلغاء</button>`;
+    if (r.attachment_path) actions += ` <a class="btn sm ghost" href="/uploads/${encodeURIComponent(r.attachment_path)}" target="_blank">المرفق</a>`;
+    if (r.status === 'pending' && mine) actions += ` <button class="btn sm ghost" onclick="attachLeave(${r.id})">إرفاق</button>`;
+    return actions;
+  };
+  const cardsHtml = (rows) => rows.length ? `<div class="card-body"><div class="grid cards stagger">
+      ${rows.map((r) => `<div class="emp-card" style="cursor:default">
+        <div class="top">${avatar(r.employee_name)}
+          <div style="min-width:0"><div class="name">${esc(r.employee_name)}</div>
+            <div class="role">${esc(r.leave_type_name)} — ${r.days} يوم</div></div></div>
+        <div class="meta"><span class="chip">من ${r.start_date}</span><span class="chip">إلى ${r.end_date}</span></div>
+        ${r.reason ? `<div class="help" style="margin-bottom:8px">${esc(r.reason)}</div>` : ''}
+        <div class="foot"><span class="tag ${r.status}">${LEAVE_STATUS[r.status]}</span>
+          <span style="display:flex;gap:5px;flex-wrap:wrap">${actionsFor(r)}</span></div>
+      </div>`).join('')}</div></div>`
+    : '<div class="empty"><span class="big">🌴</span>لا توجد طلبات مطابقة</div>';
+
+  let currentRows = [];
+  const paint = () => {
+    const mode = localStorage.getItem('hr_leave_view') || 'cards';
+    el('lModeCards').classList.toggle('active', mode === 'cards');
+    el('lModeTable').classList.toggle('active', mode !== 'cards');
+    el('lTable').innerHTML = mode === 'cards' ? cardsHtml(currentRows) : tableHtml(currentRows);
+  };
 
   const load = async () => {
     const q = new URLSearchParams();
     if (el('lStatus').value) q.set('status', el('lStatus').value);
     if (el('lEmp') && el('lEmp').value) q.set('employee_id', el('lEmp').value);
-    const rows = await api('/api/leave-requests?' + q);
-    el('lCount').textContent = `${rows.length} طلب`;
-    el('lTable').innerHTML = table(
+    currentRows = await api('/api/leave-requests?' + q);
+    el('lCount').textContent = `(${currentRows.length} طلب)`;
+    paint();
+  };
+
+  const tableHtml = (rows) => table(
       ['#', 'الموظف', 'النوع', 'من', 'إلى', 'الأيام', 'الحالة', 'السبب', 'إجراءات'],
       rows,
-      (r) => {
-        const mine = state.user.employee_id === r.employee_id;
-        let actions = '';
-        if (r.status === 'pending' && canDecide) {
-          actions += `<button class="btn sm ok" onclick="decideLeave(${r.id},'approve')">اعتماد</button>
-                      <button class="btn sm danger" onclick="decideLeave(${r.id},'reject')">رفض</button> `;
-        }
-        if (r.status === 'pending' && mine) actions += `<button class="btn sm gray" onclick="decideLeave(${r.id},'cancel')">إلغاء</button>`;
-        if (r.status === 'approved' && isHR()) actions += `<button class="btn sm gray" onclick="decideLeave(${r.id},'cancel')">إلغاء</button>`;
-        if (r.attachment_path) actions += ` <a class="btn sm ghost" href="/uploads/${encodeURIComponent(r.attachment_path)}" target="_blank">المرفق</a>`;
-        if (r.status === 'pending' && mine) actions += ` <button class="btn sm ghost" onclick="attachLeave(${r.id})">إرفاق</button>`;
-        return `<tr><td>${r.id}</td><td>${esc(r.employee_name)}</td><td>${esc(r.leave_type_name)}</td>
+      (r) => `<tr><td>${r.id}</td>
+          <td><div style="display:flex;align-items:center;gap:9px">${avatar(r.employee_name, 'sm')}
+            <span>${esc(r.employee_name)}</span></div></td>
+          <td>${esc(r.leave_type_name)}</td>
           <td>${r.start_date}</td><td>${r.end_date}</td><td>${r.days}</td>
           <td><span class="tag ${r.status}">${LEAVE_STATUS[r.status]}</span></td>
-          <td>${esc(r.reason || '')}</td><td>${actions}</td></tr>`;
-      },
+          <td>${esc(r.reason || '')}</td><td>${actionsFor(r)}</td></tr>`,
       'لا توجد طلبات');
-  };
+
+  el('lModeCards').onclick = () => { localStorage.setItem('hr_leave_view', 'cards'); paint(); };
+  el('lModeTable').onclick = () => { localStorage.setItem('hr_leave_view', 'table'); paint(); };
 
   el('lLoad').onclick = () => load().catch((e) => toast(e.message, 'err'));
   if (el('lExport')) el('lExport').onclick = () =>
@@ -765,13 +1063,15 @@ views.myLeaves = async () => {
       api('/api/leave-balances?year=' + year),
       api('/api/leave-requests'),
     ]);
-    el('mlBal').innerHTML = table(
-      ['نوع الإجازة', 'المستحق', 'مرحّل', 'المستخدم', 'المتبقي'],
-      balances,
-      (b) => `<tr><td>${esc(b.leave_type_name)}</td><td>${b.entitled_days}</td>
-        <td>${b.carried_over_days}</td><td>${b.used_days}</td>
-        <td><b>${b.remaining_days}</b></td></tr>`,
-      'لا توجد أرصدة مسجّلة');
+    el('mlBal').innerHTML = balances.length
+      ? `<div class="card-body">${balances.map((b) => {
+          const total = b.entitled_days + b.carried_over_days;
+          const pct = total ? (b.remaining_days / total) * 100 : 0;
+          return meter(b.leave_type_name, `${b.remaining_days} متبقٍ من ${total} يوم` +
+            (b.used_days ? ` — استُخدم ${b.used_days}` : ''), pct,
+            pct > 50 ? 'ok' : pct > 20 ? 'warn' : 'danger');
+        }).join('')}</div>`
+      : '<div class="empty">لا توجد أرصدة مسجّلة</div>';
     el('mlCount').textContent = `${rows.length} طلب`;
     el('mlTable').innerHTML = table(
       ['#', 'النوع', 'من', 'إلى', 'الأيام', 'الحالة', 'السبب', 'إجراءات'],
@@ -860,34 +1160,80 @@ views.balances = async () => {
 /* ------------------------------ الموظفون ------------------------------ */
 views.employees = async () => {
   const { departments, shifts } = await loadLookups(true);
+  const mode = localStorage.getItem('hr_emp_view') || 'cards';
   render(`
     <div class="card"><div class="card-body inline">
       <div class="field"><label>بحث</label><input id="eQ" placeholder="الاسم أو رقم الموظف" /></div>
       <div class="field"><label>الإدارة</label><select id="eDep"><option value="">الكل</option>${options(departments)}</select></div>
-      <button class="btn" id="eLoad">بحث</button>
-      ${isHR() ? '<button class="btn ok" id="eNew">إضافة موظف</button>' : ''}
-      ${isHR() ? '<button class="btn ghost" id="eExport">تصدير CSV</button>' : ''}
-      ${isHR() ? '<button class="btn gray" id="eImport">استيراد من Excel</button>' : ''}
+      <button class="btn" id="eLoad">🔍 بحث</button>
+      ${isHR() ? '<button class="btn ok" id="eNew">➕ إضافة موظف</button>' : ''}
+      ${isHR() ? '<button class="btn ghost" id="eExport">⬇ تصدير CSV</button>' : ''}
+      ${isHR() ? '<button class="btn gray" id="eImport">⬆ استيراد من Excel</button>' : ''}
     </div></div>
-    <div class="card"><div class="card-head"><h3>قائمة الموظفين</h3><span class="muted" id="eCount"></span></div>
-      <div id="eTable"><div class="empty">جارٍ التحميل…</div></div></div>`);
+    <div class="card"><div class="card-head">
+        <h3>قائمة الموظفين <span class="muted" id="eCount" style="font-weight:400;font-size:13px"></span></h3>
+        <div class="sub-tabs" style="margin:0">
+          <button id="eModeCards" class="${mode === 'cards' ? 'active' : ''}">▦ بطاقات</button>
+          <button id="eModeTable" class="${mode === 'table' ? 'active' : ''}">☰ جدول</button>
+        </div></div>
+      <div id="eTable"><div class="sk-rows">${'<div class="sk line"></div>'.repeat(5)}</div></div></div>`);
+
+  const statusTag = (r) => r.status === 'active'
+    ? '<span class="tag active">على رأس العمل</span>'
+    : r.status === 'suspended' ? '<span class="tag suspended">موقوف</span>'
+    : '<span class="tag terminated">منتهية خدمته</span>';
+
+  const cardsHtml = (rows) => rows.length ? `<div class="card-body"><div class="grid cards stagger">
+      ${rows.map((r) => `<div class="emp-card" onclick="openProfile(${r.id})">
+        <div class="top">${avatar(r.full_name)}
+          <div style="min-width:0">
+            <div class="name">${esc(r.full_name)}</div>
+            <div class="role">${esc(r.job_title || 'بدون مسمى')}</div>
+          </div></div>
+        <div class="meta">
+          <span class="chip">🏷 ${esc(r.code)}</span>
+          <span class="chip">🏢 ${esc(r.department_name || 'بدون إدارة')}</span>
+          ${r.shift_name ? `<span class="chip">🕒 ${esc(r.shift_name)}</span>` : ''}
+        </div>
+        <div class="foot">${statusTag(r)}<span>خدمة: ${esc(serviceLength(r.hire_date))}</span></div>
+      </div>`).join('')}
+    </div></div>` : '<div class="empty"><span class="big">👥</span>لا يوجد موظفون مطابقون</div>';
+
+  const tableHtml = (rows) => table(
+    ['الموظف', 'الإدارة', 'المسمى الوظيفي', 'الوردية', 'تاريخ التعيين', 'مدة الخدمة', 'الحالة', ''],
+    rows,
+    (r) => `<tr>
+      <td><div style="display:flex;align-items:center;gap:9px;cursor:pointer" onclick="openProfile(${r.id})">
+        ${avatar(r.full_name, 'sm')}<div><div style="font-weight:600">${esc(r.full_name)}</div>
+        <div class="muted" style="font-size:11.5px">${esc(r.code)}</div></div></div></td>
+      <td>${esc(r.department_name || '—')}</td><td>${esc(r.job_title || '—')}</td>
+      <td>${esc(r.shift_name || '—')}</td><td>${r.hire_date || '—'}</td>
+      <td>${esc(serviceLength(r.hire_date))}</td>
+      <td>${statusTag(r)}</td>
+      <td><button class="btn sm ghost" onclick="openProfile(${r.id})">الملف</button>
+        ${isHR() ? `<button class="btn sm ghost" onclick="editEmployee(${r.id})">تعديل</button>
+             <button class="btn sm gray" onclick="makeUser(${r.id},'${esc(r.code)}')">حساب دخول</button>` : ''}</td></tr>`,
+    'لا يوجد موظفون');
+
+  let current = [];
+  const paint = () => {
+    const view = localStorage.getItem('hr_emp_view') || 'cards';
+    el('eModeCards').classList.toggle('active', view === 'cards');
+    el('eModeTable').classList.toggle('active', view === 'table');
+    el('eTable').innerHTML = view === 'cards' ? cardsHtml(current) : tableHtml(current);
+  };
   const load = async () => {
     const q = new URLSearchParams();
     if (el('eQ').value) q.set('q', el('eQ').value);
     if (el('eDep').value) q.set('department_id', el('eDep').value);
-    const rows = await api('/api/employees?' + q);
-    state.cache.lookups.employees = rows;
-    el('eCount').textContent = `${rows.length} موظف`;
-    el('eTable').innerHTML = table(
-      ['رقم الموظف', 'الاسم', 'الإدارة', 'المسمى الوظيفي', 'الوردية', 'تاريخ التعيين', 'الحالة', ''],
-      rows,
-      (r) => `<tr><td>${esc(r.code)}</td><td>${esc(r.full_name)}</td><td>${esc(r.department_name || '—')}</td>
-        <td>${esc(r.job_title || '—')}</td><td>${esc(r.shift_name || '—')}</td><td>${r.hire_date || '—'}</td>
-        <td><span class="tag ${r.status === 'active' ? 'on' : 'off'}">${r.status === 'active' ? 'على رأس العمل' : 'موقوف/منتهي'}</span></td>
-        <td>${isHR() ? `<button class="btn sm ghost" onclick="editEmployee(${r.id})">تعديل</button>
-             <button class="btn sm gray" onclick="makeUser(${r.id},'${esc(r.code)}')">حساب دخول</button>` : ''}</td></tr>`,
-      'لا يوجد موظفون');
+    current = await api('/api/employees?' + q);
+    state.cache.lookups.employees = current;
+    el('eCount').textContent = `(${current.length} موظف)`;
+    paint();
   };
+  el('eModeCards').onclick = () => { localStorage.setItem('hr_emp_view', 'cards'); paint(); };
+  el('eModeTable').onclick = () => { localStorage.setItem('hr_emp_view', 'table'); paint(); };
+  el('eQ').onkeydown = (ev) => { if (ev.key === 'Enter') load().catch((e) => toast(e.message, 'err')); };
   el('eLoad').onclick = () => load().catch((e) => toast(e.message, 'err'));
   if (el('eExport')) el('eExport').onclick = () => downloadCsv('/api/employees-export.csv', 'employees.csv');
   if (el('eNew')) el('eNew').onclick = () => employeeModal(null, departments, shifts, load);
@@ -1011,6 +1357,226 @@ function importModal(after) {
     },
   });
 }
+
+/* ------------------------------ ملف الموظف ------------------------------ */
+window.openProfile = (id) => { state.profileId = id; go('profile'); };
+
+views.profile = async () => {
+  const id = state.profileId;
+  if (!id) { go(isHR() || can('manager') ? 'employees' : 'dashboard'); return; }
+  const now = new Date();
+  const year = now.getFullYear();
+  const monthStart = `${year}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+  const soft = (promise) => promise.catch(() => []);
+  const emp = await api('/api/employees/' + id);
+  const [balances, attendance, leaves, violations, documents] = await Promise.all([
+    soft(api(`/api/leave-balances?employee_id=${id}&year=${year}`)),
+    soft(api(`/api/attendance/employee/${id}?date_from=${monthStart}&date_to=${today()}`)),
+    soft(api(`/api/leave-requests?employee_id=${id}`)),
+    soft(api(`/api/violations?employee_id=${id}`)),
+    soft(api(`/api/documents?employee_id=${id}`)),
+  ]);
+
+  // ------- المقاييس -------
+  const counted = attendance.filter((r) => !['weekend', 'holiday', 'scheduled'].includes(r.status));
+  const attended = counted.filter((r) => ['present', 'late', 'missing_out'].includes(r.status)).length;
+  const attendancePct = counted.length ? (attended / counted.length) * 100 : 0;
+  const annual = balances.find((b) => (b.leave_type_name || '').includes('سنوية')) || balances[0];
+  const annualTotal = annual ? annual.entitled_days + annual.carried_over_days : 0;
+  const contract = documents.find((d) => (d.doc_type || '').includes('عقد') && d.expiry_date);
+  const probationDays = emp.hire_date ? Math.min(90, Math.max(0, daysBetween(emp.hire_date, today()))) : null;
+  const lateTotal = attendance.reduce((sum, r) => sum + (r.late_minutes || 0), 0);
+  const absentDays = attendance.filter((r) => r.status === 'absent').length;
+
+  const meters = [
+    meter('نسبة الحضور هذا الشهر', `${Math.round(attendancePct)}%`, attendancePct,
+      attendancePct >= 90 ? 'ok' : attendancePct >= 75 ? 'warn' : 'danger'),
+    annual ? meter(`رصيد ${annual.leave_type_name}`,
+      `${annual.remaining_days} من ${annualTotal} يوم`,
+      annualTotal ? (annual.remaining_days / annualTotal) * 100 : 0, 'info') : '',
+    probationDays !== null && probationDays < 90
+      ? meter('فترة التجربة (٩٠ يوماً)', `مضى ${probationDays} يوماً`, (probationDays / 90) * 100, 'warn')
+      : '',
+    contract ? (() => {
+      const left = daysBetween(today(), contract.expiry_date);
+      const span = contract.issue_date ? Math.max(1, daysBetween(contract.issue_date, contract.expiry_date)) : 365;
+      return meter('مدة العقد المتبقية',
+        left >= 0 ? `${left} يوماً حتى ${contract.expiry_date}` : `منتهٍ منذ ${Math.abs(left)} يوماً`,
+        Math.max(0, (left / span) * 100), left < 0 ? 'danger' : left < 45 ? 'warn' : 'ok');
+    })() : '',
+  ].filter(Boolean).join('');
+
+  const statusTag = emp.status === 'active' ? '<span class="tag active">على رأس العمل</span>'
+    : emp.status === 'suspended' ? '<span class="tag suspended">موقوف</span>'
+    : '<span class="tag terminated">منتهية خدمته</span>';
+
+  // ------- الجدول الزمني -------
+  const events = [];
+  if (emp.hire_date) events.push({ date: emp.hire_date, tone: 'ok', title: 'التعيين ومباشرة العمل',
+    body: `المسمى: ${emp.job_title || '—'}${emp.department_name ? ' — ' + emp.department_name : ''}` });
+  documents.forEach((d) => {
+    if (d.issue_date) events.push({ date: d.issue_date, tone: 'info',
+      title: `إصدار وثيقة: ${d.doc_type}`, body: d.number ? `الرقم: ${d.number}` : '' });
+    if (d.expiry_date) events.push({ date: d.expiry_date,
+      tone: (d.days_left !== null && d.days_left < 0) ? 'danger' : 'warn',
+      title: `انتهاء وثيقة: ${d.doc_type}`,
+      body: d.days_left === null ? '' : d.days_left < 0 ? `منتهية منذ ${Math.abs(d.days_left)} يوماً`
+        : `متبقٍ ${d.days_left} يوماً` });
+  });
+  leaves.forEach((l) => events.push({ date: l.start_date,
+    tone: l.status === 'approved' ? 'ok' : l.status === 'rejected' ? 'danger' : 'warn',
+    title: `${l.leave_type_name} — ${LEAVE_STATUS[l.status]}`,
+    body: `${l.start_date} ← ${l.end_date} (${l.days} يوم)${l.reason ? ' — ' + l.reason : ''}` }));
+  violations.forEach((v) => events.push({ date: v.occurred_on, tone: 'danger',
+    title: `مخالفة: ${v.violation_type_name}`,
+    body: `${v.penalty_action_label || ''}${v.penalty_amount ? ` — خصم ${money(v.penalty_amount)} ريال` : ''}` }));
+  events.sort((a, b) => (a.date < b.date ? 1 : -1));
+
+  const tabs = [
+    ['overview', 'نظرة عامة'], ['attendance', 'الحضور'], ['leaves', 'الإجازات'],
+    ['salary', 'الراتب'], ['violations', 'المخالفات'], ['documents', 'الوثائق'],
+    ['timeline', 'الجدول الزمني'],
+  ];
+
+  render(`
+    <div class="card"><div class="card-body">
+      <div class="profile-head">
+        ${avatar(emp.full_name, 'lg')}
+        <div class="who" style="flex:1;min-width:200px">
+          <h2>${esc(emp.full_name)}</h2>
+          <div class="sub">
+            <span>${esc(emp.job_title || 'بدون مسمى')}</span>·
+            <span>${esc(emp.department_name || 'بدون إدارة')}</span>·
+            <span>رقم ${esc(emp.code)}</span>·
+            <span>خدمة ${esc(serviceLength(emp.hire_date))}</span>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          ${statusTag}
+          ${isHR() ? `<button class="btn sm ghost" onclick="editEmployeeFromProfile(${emp.id})">تعديل البيانات</button>` : ''}
+          <button class="btn sm gray" onclick="go('${isHR() || can('manager') ? 'employees' : 'dashboard'}')">رجوع</button>
+        </div>
+      </div>
+    </div></div>
+
+    <div class="grid cols-4 stagger">
+      <div class="kpi ok"><div class="label">أيام الحضور هذا الشهر<span class="ico">✅</span></div>
+        <div class="value ok">${attended}</div><div class="foot">من ${counted.length} يوم عمل</div></div>
+      <div class="kpi danger"><div class="label">أيام الغياب<span class="ico">⛔</span></div>
+        <div class="value danger">${absentDays}</div><div class="foot">خلال الشهر الجاري</div></div>
+      <div class="kpi warn"><div class="label">دقائق التأخير<span class="ico">⏰</span></div>
+        <div class="value warn">${lateTotal}</div><div class="foot">مجموع الشهر</div></div>
+      <div class="kpi primary"><div class="label">الراتب الكامل<span class="ico">💰</span></div>
+        <div class="value">${money(emp.total_salary || (emp.basic_salary + (emp.allowances || 0)))}</div>
+        <div class="foot">أساسي ${money(emp.basic_salary)} + بدلات ${money(emp.allowances || 0)}</div></div>
+    </div>
+
+    <div class="sub-tabs" id="pTabs">
+      ${tabs.map(([id2, label], i) =>
+        `<button data-tab="${id2}" class="${i === 0 ? 'active' : ''}">${label}</button>`).join('')}
+    </div>
+    <div id="pBody"></div>`);
+
+  const kv = (rows) => `<div class="kv">${rows.map(([k, v]) =>
+    `<div><div class="k">${esc(k)}</div><div class="v">${v === null || v === undefined || v === '' ? '—' : esc(String(v))}</div></div>`).join('')}</div>`;
+
+  const panels = {
+    overview: () => `
+      <div class="grid cols-2">
+        <div class="card" style="margin:0"><div class="card-head"><h3>البيانات الأساسية</h3></div>
+          <div class="card-body">${kv([
+            ['رقم الموظف', emp.code], ['الاسم', emp.full_name], ['الهوية / الإقامة', emp.national_id],
+            ['الجوال', emp.phone], ['البريد', emp.email], ['المسمى الوظيفي', emp.job_title],
+            ['الإدارة', emp.department_name], ['الوردية', emp.shift_name],
+            ['موقع العمل', emp.site_name], ['تاريخ التعيين', emp.hire_date],
+          ])}</div></div>
+        <div class="card" style="margin:0"><div class="card-head"><h3>مؤشرات الملف</h3></div>
+          <div class="card-body">${meters || '<div class="empty">لا توجد مؤشرات كافية بعد</div>'}</div></div>
+      </div>`,
+    attendance: () => `
+      <div class="card"><div class="card-head"><h3>تقويم ${MONTHS[now.getMonth()]} ${year}</h3>
+        <div class="legend"><span><i style="background:#e6f4e8"></i>حاضر</span>
+          <span><i style="background:#fdf1dd"></i>متأخر</span>
+          <span><i style="background:#fbe6e4"></i>غياب</span>
+          <span><i style="background:#e7f0fd"></i>إجازة</span></div></div>
+        <div class="card-body">${calendarMonth(attendance, year, now.getMonth() + 1)}</div></div>
+      <div class="card"><div class="card-head"><h3>تفصيل أيام الشهر</h3></div>
+        ${table(['التاريخ', 'الحضور', 'الانصراف', 'ساعات', 'تأخير (د)', 'إضافي (د)', 'الحالة'], attendance,
+          (r) => `<tr><td>${r.work_date}</td><td>${fmtTime(r.check_in)}</td><td>${fmtTime(r.check_out)}</td>
+            <td>${hours(r.worked_minutes)}</td><td>${r.late_minutes || 0}</td><td>${r.overtime_minutes || 0}</td>
+            <td><span class="tag ${r.status}">${DAY_STATUS[r.status]}</span></td></tr>`,
+          'لا توجد سجلات لهذا الشهر')}</div>`,
+    leaves: () => `
+      <div class="card"><div class="card-head"><h3>الأرصدة</h3></div>
+        ${table(['النوع', 'المستحق', 'مرحّل', 'المستخدم', 'المتبقي'], balances,
+          (b) => `<tr><td>${esc(b.leave_type_name)}</td><td>${b.entitled_days}</td>
+            <td>${b.carried_over_days}</td><td>${b.used_days}</td><td><b>${b.remaining_days}</b></td></tr>`,
+          'لا توجد أرصدة')}</div>
+      <div class="card"><div class="card-head"><h3>الطلبات</h3></div>
+        <div class="card-body">${leaves.length ? `<div class="grid cards stagger">${leaves.map((l) => `
+          <div class="emp-card" style="cursor:default">
+            <div class="top">${avatar(l.leave_type_name)}
+              <div style="min-width:0"><div class="name">${esc(l.leave_type_name)}</div>
+                <div class="role">${l.days} يوم</div></div></div>
+            <div class="meta"><span class="chip">من ${l.start_date}</span><span class="chip">إلى ${l.end_date}</span></div>
+            <div class="foot"><span class="tag ${l.status}">${LEAVE_STATUS[l.status]}</span>
+              <span>${esc((l.reason || '').slice(0, 24))}</span></div>
+          </div>`).join('')}</div>` : '<div class="empty"><span class="big">🌴</span>لا توجد طلبات إجازة</div>'}
+        </div></div>`,
+    salary: () => `
+      <div class="card"><div class="card-head"><h3>مكوّنات الراتب</h3></div>
+        <div class="card-body">${kv([
+          ['الراتب الأساسي', money(emp.basic_salary) + ' ريال'],
+          ['البدلات', money(emp.allowances || 0) + ' ريال'],
+          ['الراتب الكامل', money(emp.total_salary || 0) + ' ريال'],
+          ['أجر اليوم التقديري', money((emp.total_salary || 0) / 30) + ' ريال'],
+          ['أجر الساعة التقديري', money((emp.total_salary || 0) / 30 / 8) + ' ريال'],
+        ])}
+        <div class="help">الخصومات والإضافي تُحتسب في مسير الرواتب الشهري حسب القواعد المعتمدة.</div>
+        ${isHR() ? '<button class="btn ghost" onclick="go(\'payroll\')">فتح مسير الرواتب</button>' : ''}
+        </div></div>`,
+    violations: () => `
+      <div class="card"><div class="card-head"><h3>سجل المخالفات</h3></div>
+        ${table(['التاريخ', 'المخالفة', 'التكرار', 'الجزاء', 'الخصم', 'الحالة'], violations,
+          (v) => `<tr><td>${v.occurred_on}</td><td>${esc(v.violation_type_name)}</td>
+            <td>${v.repetition_no}</td><td>${esc(v.penalty_action_label || '')}</td>
+            <td class="money">${money(v.penalty_amount)}</td>
+            <td><span class="tag ${v.status}">${esc(v.status_label || VIOLATION_STATUS[v.status] || '')}</span></td></tr>`,
+          'لا توجد مخالفات — سجل نظيف')}</div>`,
+    documents: () => `
+      <div class="card"><div class="card-head"><h3>الوثائق</h3>
+        ${isHR() ? '<button class="btn sm ghost" onclick="go(\'documents\')">إدارة الوثائق</button>' : ''}</div>
+        ${table(['النوع', 'الرقم', 'الإصدار', 'الانتهاء', 'المتبقي', ''], documents,
+          (d) => `<tr><td>${esc(d.doc_type)}</td><td>${esc(d.number || '—')}</td>
+            <td>${d.issue_date || '—'}</td><td>${d.expiry_date || '—'}</td>
+            <td>${d.days_left === null || d.days_left === undefined ? '—'
+              : `<span class="tag ${d.days_left < 0 ? 'expired' : d.days_left < 30 ? 'soon' : 'on'}">
+                  ${d.days_left < 0 ? 'منتهية' : d.days_left + ' يوم'}</span>`}</td>
+            <td>${d.file_path ? `<a class="btn sm ghost" href="/uploads/${encodeURIComponent(d.file_path)}" target="_blank">عرض</a>` : ''}</td></tr>`,
+          'لا توجد وثائق مسجّلة')}</div>`,
+    timeline: () => `
+      <div class="card"><div class="card-head"><h3>أهم الأحداث</h3></div>
+        <div class="card-body">${events.length ? `<ul class="timeline stagger">${events.slice(0, 40).map((e) => `
+          <li class="${e.tone}"><div class="t">${esc(e.title)}</div>
+            <div class="d">${e.date}</div>
+            ${e.body ? `<div class="b">${esc(e.body)}</div>` : ''}</li>`).join('')}</ul>`
+          : '<div class="empty">لا توجد أحداث مسجّلة بعد</div>'}
+        </div></div>`,
+  };
+
+  const paint = (tab) => {
+    el('pBody').innerHTML = panels[tab]();
+    el('pTabs').querySelectorAll('button').forEach((b) =>
+      b.classList.toggle('active', b.dataset.tab === tab));
+  };
+  el('pTabs').querySelectorAll('button').forEach((b) => b.onclick = () => paint(b.dataset.tab));
+  paint('overview');
+
+  window.editEmployeeFromProfile = async (empId) => {
+    const { departments, shifts } = await loadLookups();
+    employeeModal(await api('/api/employees/' + empId), departments, shifts, () => go('profile'));
+  };
+};
 
 /* ------------------------------ أجهزة البصمة ------------------------------ */
 views.devices = async () => {
@@ -1160,18 +1726,34 @@ views.payroll = async () => {
       <button class="btn ok" id="prRun">احتساب المسير</button>
       <span class="help">يُحتسب من الحضور والإجازات والمخالفات المعتمدة تلقائياً.</span>
     </div></div>
+    <div class="grid cols-4 stagger" id="prKpis"></div>
     <div class="card"><div class="card-head"><h3>مسيّرات الرواتب</h3></div>
-      <div id="prRuns"><div class="empty">جارٍ التحميل…</div></div></div>
+      <div id="prRuns"><div class="sk-rows">${'<div class="sk line"></div>'.repeat(3)}</div></div></div>
     <div id="prDetail"></div>`);
 
   const loadRuns = async () => {
     const runs = await api('/api/payroll/runs');
+    const latest = runs[0];
+    el('prKpis').innerHTML = latest ? `
+      <div class="kpi primary"><div class="label">آخر مسير<span class="ico">🗓</span></div>
+        <div class="value" style="font-size:19px">${MONTHS[latest.month - 1]} ${latest.year}</div>
+        <div class="foot">${latest.employees} موظف — ${latest.status === 'approved' ? 'معتمد' : 'مسودة'}</div></div>
+      <div class="kpi primary"><div class="label">الأساسي + البدلات<span class="ico">💵</span></div>
+        <div class="value">${money(latest.basic_total + (latest.allowances_total || 0))}</div>
+        <div class="foot">أساسي ${money(latest.basic_total)} — بدلات ${money(latest.allowances_total || 0)}</div></div>
+      <div class="kpi danger"><div class="label">الخصومات<span class="ico">➖</span></div>
+        <div class="value danger">${money(latest.deductions_total)}</div>
+        <div class="foot">غياب وتأخير ومخالفات</div></div>
+      <div class="kpi ok"><div class="label">صافي المسير<span class="ico">🏦</span></div>
+        <div class="value ok">${money(latest.net_total)}</div>
+        <div class="foot">بدل إضافي ${money(latest.overtime_total)}</div></div>` : '';
     el('prRuns').innerHTML = table(
-      ['الفترة', 'الحالة', 'الموظفون', 'إجمالي الأساسي', 'الخصومات', 'الإضافي', 'صافي المسير', 'إجراءات'],
+      ['الفترة', 'الحالة', 'الموظفون', 'الأساسي', 'البدلات', 'الخصومات', 'الإضافي', 'صافي المسير', 'إجراءات'],
       runs,
       (r) => `<tr><td>${MONTHS[r.month - 1]} ${r.year}</td>
         <td><span class="tag ${r.status === 'approved' ? 'approved' : 'draft'}">${r.status === 'approved' ? 'معتمد' : 'مسودة'}</span></td>
         <td>${r.employees}</td><td class="money">${money(r.basic_total)}</td>
+        <td class="money">${money(r.allowances_total || 0)}</td>
         <td class="money">${money(r.deductions_total)}</td><td class="money">${money(r.overtime_total)}</td>
         <td class="money">${money(r.net_total)}</td>
         <td><button class="btn sm" onclick="openRun(${r.id})">عرض القسائم</button>
@@ -2102,6 +2684,7 @@ views.account = async () => {
 /* ------------------------------ الإقلاع ------------------------------ */
 el('loginForm').onsubmit = login;
 el('logoutBtn').onclick = logout;
+initShell();
 el('selfPunchBtn').onclick = selfPunch;
 el('bellBtn').onclick = () => openNotifications().catch((e) => toast(e.message, 'err'));
 window.go = go;
@@ -2141,6 +2724,11 @@ function applyBranding(b) {
   if (loginTitle) loginTitle.textContent = title;
   const sideTitle = el('sideTitle');
   if (sideTitle) sideTitle.textContent = b.company_name || 'الموارد البشرية';
+  const mark = el('brandMark');
+  if (mark) {
+    const words = (b.company_name || 'HR').trim().split(/\s+/).slice(0, 2);
+    mark.textContent = words.map((w) => w[0]).join('') || 'HR';
+  }
   document.title = b.company_name ? `${b.company_name} — الحضور والإجازات` : document.title;
 
   [['loginLogo', b.logo_url], ['sideLogo', b.logo_url]].forEach(([id, url]) => {

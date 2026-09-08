@@ -45,24 +45,31 @@
   <div id="app" class="layout hidden">
     <aside class="sidebar">
       <div class="brand">
-        <img id="sideLogo" class="side-logo hidden" alt="شعار المنشأة" />
-        <h2 id="sideTitle">الموارد البشرية</h2>
-        <span>الحضور والانصراف والإجازات</span>
+        <div class="brand-mark" id="brandMark">HR</div>
+        <div class="brand-text">
+          <img id="sideLogo" class="side-logo hidden" alt="شعار المنشأة" />
+          <h2 id="sideTitle">الموارد البشرية</h2>
+          <span>الحضور والانصراف والإجازات</span>
+        </div>
       </div>
       <nav class="nav" id="nav"></nav>
       <div class="sidebar-footer">
-        <div id="sideUser"></div>
-        <a id="logoutBtn" style="color:#f3b1ac;cursor:pointer">تسجيل الخروج</a>
+        <div class="who-name" id="sideUser"></div>
+        <a id="logoutBtn" title="تسجيل الخروج">⏻</a>
       </div>
     </aside>
     <main class="main">
       <div class="topbar">
-        <h1 id="pageTitle">لوحة المؤشرات</h1>
-        <div style="display:flex;align-items:center;gap:12px">
+        <div style="display:flex;align-items:center;gap:10px;min-width:0">
+          <button class="icon-btn" id="menuBtn" title="القائمة" aria-label="القائمة">☰</button>
+          <button class="icon-btn" id="collapseBtn" title="تصغير القائمة" aria-label="تصغير القائمة">⇤</button>
+          <h1 id="pageTitle">لوحة المؤشرات</h1>
+        </div>
+        <div class="topbar-actions">
           <span class="who" id="topWho"></span>
           <button class="btn sm ghost hidden" id="installBtn" onclick="installApp()">تثبيت التطبيق</button>
           <button class="bell" id="bellBtn" title="الإشعارات">🔔<span class="badge hidden" id="bellCount">0</span></button>
-          <button class="btn sm" id="selfPunchBtn">تسجيل بصمة الآن</button>
+          <button class="btn sm" id="selfPunchBtn">🕒 تسجيل بصمة</button>
         </div>
       </div>
       <div class="content" id="view"></div>
