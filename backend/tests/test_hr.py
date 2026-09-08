@@ -1371,3 +1371,178 @@ def test_linked_employee_sees_own_balances(client, auth):
     assert {r["employee_id"] for r in rows} == {emp["id"]}
     annual = next(r for r in rows if r["leave_type_name"] == "إجازة سنوية")
     assert annual["entitled_days"] == 30 and annual["remaining_days"] == 30
+
+
+# ------------------------------ السلف على الراتب ------------------------------
+def test_loan_schedule_and_payroll_deduction(client, auth):
+    """السلفة تُقسَّم أقساطاً ثابتة، وتُخصم في مسير الشهر المطابق فقط."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9900", "full_name": "موظف السلفة", "basic_salary": 3000}).json()
+    previous = date.today().replace(day=1) - timedelta(days=1)
+    year, month = previous.year, previous.month
+
+    loan = client.post("/api/loans", headers=auth, json={
+        "employee_id": emp["id"], "amount": 1000, "installment_amount": 400,
+        "start_year": year, "start_month": month, "reason": "سلفة شخصية"})
+    assert loan.status_code == 201, loan.text
+    data = loan.json()
+    assert data["months"] == 3                      # 400 + 400 + 200
+    # السلفة بدأت الشهر الماضي: قسطان استُحقا حتى الشهر الجاري
+    assert data["paid_amount"] == 800
+    assert data["remaining_amount"] == 200
+
+    run = client.post(f"/api/payroll/runs?year={year}&month={month}", headers=auth)
+    assert run.status_code == 201, run.text
+    slips = client.get(f"/api/payroll/runs/{run.json()['id']}/payslips", headers=auth).json()
+    slip = next(s for s in slips if s["employee_code"] == "9900")
+    assert slip["loan_deduction"] == 400
+    assert slip["net_pay"] == max(0, round(
+        slip["basic_salary"] + slip["allowances"] + slip["overtime_amount"]
+        - slip["absence_deduction"] - slip["late_deduction"] - slip["unpaid_leave_deduction"]
+        - slip["violation_deduction"] - slip["loan_deduction"], 2))
+
+    # إعادة الاحتساب لا تُكرّر الخصم
+    again = client.post(f"/api/payroll/runs?year={year}&month={month}", headers=auth)
+    slips = client.get(f"/api/payroll/runs/{again.json()['id']}/payslips", headers=auth).json()
+    assert next(s for s in slips if s["employee_code"] == "9900")["loan_deduction"] == 400
+
+    # الإلغاء يوقف الخصم
+    client.patch(f"/api/loans/{data['id']}", headers=auth, json={"status": "cancelled"})
+    rebuilt = client.post(f"/api/payroll/runs?year={year}&month={month}", headers=auth)
+    slips = client.get(f"/api/payroll/runs/{rebuilt.json()['id']}/payslips", headers=auth).json()
+    assert next(s for s in slips if s["employee_code"] == "9900")["loan_deduction"] == 0
+
+
+def test_loan_validation_and_employee_scope(client, auth):
+    """القسط لا يتجاوز المبلغ، والموظف لا يرى سلف غيره."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9901", "full_name": "موظف سلفة ثانية", "basic_salary": 4000}).json()
+    bad = client.post("/api/loans", headers=auth, json={
+        "employee_id": emp["id"], "amount": 500, "installment_amount": 900,
+        "start_year": 2026, "start_month": 1})
+    assert bad.status_code == 400
+    assert client.post("/api/loans", headers=auth, json={
+        "employee_id": emp["id"], "amount": 500, "installment_amount": 0,
+        "start_year": 2026, "start_month": 1}).status_code == 422
+
+    ok = client.post("/api/loans", headers=auth, json={
+        "employee_id": emp["id"], "amount": 900, "installment_amount": 300,
+        "start_year": 2026, "start_month": 1})
+    assert ok.status_code == 201 and ok.json()["months"] == 3
+
+    client.post("/api/users", headers=auth, json={
+        "username": "loan_emp", "password": "Aa123456", "role": "employee",
+        "employee_id": emp["id"]})
+    token = client.post("/api/auth/login", data={
+        "username": "loan_emp", "password": "Aa123456"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+    mine = client.get("/api/loans", headers=h).json()
+    assert {row["employee_id"] for row in mine} == {emp["id"]}
+    assert client.post("/api/loans", headers=h, json={
+        "employee_id": emp["id"], "amount": 100, "installment_amount": 50,
+        "start_year": 2026, "start_month": 1}).status_code == 403
+
+
+# ------------------------------ تنبيه الغياب والتأخير ------------------------------
+def test_attendance_alert_notifies_supervisors(client, auth):
+    """فحص التنبيه يرسل إشعاراً بمن لم يبصم اليوم."""
+    client.post("/api/employees", headers=auth, json={
+        "code": "9910", "full_name": "موظف بلا بصمة"})
+    before = client.get("/api/notifications?limit=50", headers=auth).json()
+    res = client.post("/api/attendance/alerts/scan", headers=auth)
+    assert res.status_code == 200, res.text
+    report = res.json()
+    assert report["ok"] is True
+    if report.get("missing"):
+        after = client.get("/api/notifications?limit=50", headers=auth).json()
+        assert len(after) > len(before)
+        alert = next(n for n in after if n["category"] == "attendance")
+        assert "لم يبصم" in alert["title"] or "لم يبصم" in (alert["body"] or "")
+
+
+def test_attendance_alert_can_be_disabled(client, auth):
+    settings = client.put("/api/settings", headers=auth, json={
+        "attendance_alert_enabled": False}).json()
+    assert settings["attendance_alert_enabled"] is False
+    client.put("/api/settings", headers=auth, json={"attendance_alert_enabled": True})
+
+
+# ------------------------------ إشعارات الجوال ------------------------------
+def test_push_subscription_lifecycle(client, auth):
+    """المفتاح العام يُولَّد تلقائياً، ويمكن تسجيل جهاز وإلغاؤه."""
+    info = client.get("/api/push/key", headers=auth).json()
+    assert info["enabled"] is True
+    assert len(info["public_key"]) > 60      # مفتاح VAPID بصيغة base64url
+    assert info["devices"] == 0
+
+    endpoint = "https://fcm.googleapis.com/fcm/send/test-device-1"
+    res = client.post("/api/push/subscribe", headers=auth, json={
+        "endpoint": endpoint, "p256dh": "BFakeKeyForTestsOnly1234567890",
+        "auth": "authSecret123", "user_agent": "pytest"})
+    assert res.status_code == 200 and res.json()["ok"] is True
+    assert client.get("/api/push/key", headers=auth).json()["devices"] == 1
+
+    # التسجيل مرة أخرى بنفس العنوان لا يُكرّر الجهاز
+    client.post("/api/push/subscribe", headers=auth, json={
+        "endpoint": endpoint, "p256dh": "BFakeKeyForTestsOnly1234567890", "auth": "authSecret123"})
+    assert client.get("/api/push/key", headers=auth).json()["devices"] == 1
+
+    client.post("/api/push/unsubscribe", headers=auth, json={"endpoint": endpoint})
+    assert client.get("/api/push/key", headers=auth).json()["devices"] == 0
+
+
+def test_push_is_signed_and_encrypted(client, auth):
+    """الإشعار يصل خدمة الدفع موقّعاً بمفتاح VAPID ومشفّراً (aes128gcm)."""
+    import base64
+    import threading
+    import time as _time
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    os.environ["NO_PROXY"] = os.environ["no_proxy"] = "127.0.0.1,localhost"
+    captured: list[dict] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            length = int(self.headers.get("Content-Length", 0))
+            captured.append({
+                "headers": {k.lower(): v for k, v in self.headers.items()},
+                "body": self.rfile.read(length),
+            })
+            self.send_response(201)
+            self.end_headers()
+
+        def log_message(self, *args):  # صمت في الاختبارات
+            pass
+
+    HTTPServer.allow_reuse_address = True
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        b64 = lambda raw: base64.urlsafe_b64encode(raw).decode().rstrip("=")  # noqa: E731
+        device_key = ec.generate_private_key(ec.SECP256R1())
+        p256dh = b64(device_key.public_key().public_bytes(
+            encoding=serialization.Encoding.X962,
+            format=serialization.PublicFormat.UncompressedPoint))
+
+        client.post("/api/push/subscribe", headers=auth, json={
+            "endpoint": f"http://127.0.0.1:{port}/push/device",
+            "p256dh": p256dh, "auth": b64(b"0123456789abcdef")})
+        assert client.post("/api/push/test", headers=auth).json()["devices"] == 1
+
+        for _ in range(50):
+            if captured:
+                break
+            _time.sleep(0.1)
+        assert captured, "لم يصل الإشعار إلى خدمة الدفع"
+        request = captured[0]
+        assert request["headers"]["authorization"].startswith("vapid t=")
+        assert request["headers"]["content-encoding"] == "aes128gcm"
+        assert len(request["body"]) > 100
+    finally:
+        server.shutdown()
+        client.post("/api/push/unsubscribe", headers=auth,
+                    json={"endpoint": f"http://127.0.0.1:{port}/push/device"})

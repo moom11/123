@@ -56,6 +56,14 @@ class PunchSource(str, enum.Enum):
     web = "web"                   # تسجيل ذاتي من الويب
 
 
+class LoanStatus(str, enum.Enum):
+    """حالة السلفة."""
+
+    active = "active"        # سارية، تُخصم أقساطها شهرياً
+    settled = "settled"      # سُدّدت بالكامل
+    cancelled = "cancelled"  # أُلغيت ولا تُخصم
+
+
 class DayStatus(str, enum.Enum):
     present = "present"
     late = "late"
@@ -481,6 +489,7 @@ class Payslip(Base):
     employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
     basic_salary: Mapped[float] = mapped_column(Float, default=0)
     allowances: Mapped[float] = mapped_column(Float, default=0)
+    loan_deduction: Mapped[float] = mapped_column(Float, default=0)
     present_days: Mapped[int] = mapped_column(Integer, default=0)
     absent_days: Mapped[int] = mapped_column(Integer, default=0)
     paid_leave_days: Mapped[float] = mapped_column(Float, default=0)
@@ -498,6 +507,43 @@ class Payslip(Base):
     note: Mapped[str | None] = mapped_column(String(255))
 
     employee: Mapped[Employee] = relationship()
+
+
+class EmployeeLoan(Base):
+    """سلفة على الراتب تُخصم على أقساط شهرية."""
+
+    __tablename__ = "employee_loans"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    amount: Mapped[float] = mapped_column(Float)                # إجمالي السلفة
+    installment_amount: Mapped[float] = mapped_column(Float)     # القسط الشهري
+    start_year: Mapped[int] = mapped_column(Integer)             # أول شهر يُخصم فيه
+    start_month: Mapped[int] = mapped_column(Integer)
+    reason: Mapped[str | None] = mapped_column(String(255))
+    status: Mapped[LoanStatus] = mapped_column(Enum(LoanStatus), default=LoanStatus.active)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    employee: Mapped[Employee] = relationship()
+
+
+class PushSubscription(Base):
+    """اشتراك متصفح/جوال في إشعارات الويب (Web Push)."""
+
+    __tablename__ = "push_subscriptions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    endpoint: Mapped[str] = mapped_column(String(500), unique=True)
+    p256dh: Mapped[str] = mapped_column(String(255))
+    auth: Mapped[str] = mapped_column(String(255))
+    user_agent: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    last_sent_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_error: Mapped[str | None] = mapped_column(String(255))
+
+    user: Mapped[User] = relationship()
 
 
 class SheetsOutbox(Base):

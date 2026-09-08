@@ -19,6 +19,7 @@ from ..models import (
     Payslip,
 )
 from . import attendance as attendance_service
+from . import loans as loans_service
 from . import settings_store, violations
 
 
@@ -77,12 +78,14 @@ def compute_payslip(db: Session, employee: Employee, year: int, month: int) -> d
     late_deduction = round((late_minutes / 60) * hourly, 2) if late_mode == "proportional" else 0.0
     overtime_amount = round((overtime_minutes / 60) * hourly * overtime_multiplier, 2)
     violation_deduction = violations.monthly_deduction(db, employee.id, year, month)
+    loan_deduction = loans_service.monthly_deduction(db, employee.id, year, month)
 
     basic = round(employee.basic_salary or 0, 2)
     allowances = round(employee.allowances or 0, 2)
     net = round(
         basic + allowances + overtime_amount
-        - absence_deduction - unpaid_leave_deduction - late_deduction - violation_deduction,
+        - absence_deduction - unpaid_leave_deduction - late_deduction - violation_deduction
+        - loan_deduction,
         2,
     )
     return {
@@ -99,6 +102,7 @@ def compute_payslip(db: Session, employee: Employee, year: int, month: int) -> d
         "late_deduction": late_deduction,
         "unpaid_leave_deduction": unpaid_leave_deduction,
         "violation_deduction": violation_deduction,
+        "loan_deduction": loan_deduction,
         "overtime_amount": overtime_amount,
         "other_additions": 0.0,
         "other_deductions": 0.0,
@@ -159,10 +163,11 @@ def totals(db: Session, run_id: int) -> dict:
         "employees": len(slips),
         "basic_total": round(sum(s.basic_salary for s in slips), 2),
         "allowances_total": round(sum(s.allowances or 0 for s in slips), 2),
+        "loans_total": round(sum(s.loan_deduction or 0 for s in slips), 2),
         "deductions_total": round(
             sum(
                 s.absence_deduction + s.late_deduction + s.unpaid_leave_deduction
-                + s.violation_deduction + s.other_deductions
+                + s.violation_deduction + (s.loan_deduction or 0) + s.other_deductions
                 for s in slips
             ),
             2,

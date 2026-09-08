@@ -42,6 +42,7 @@ def payslip_out(slip: Payslip) -> PayslipOut:
         department_name=slip.employee.department.name if slip.employee and slip.employee.department else None,
         basic_salary=slip.basic_salary,
         allowances=slip.allowances or 0,
+        loan_deduction=slip.loan_deduction or 0,
         present_days=slip.present_days,
         absent_days=slip.absent_days,
         paid_leave_days=slip.paid_leave_days,
@@ -116,7 +117,7 @@ def adjust_payslip(
         round(
             slip.basic_salary + (slip.allowances or 0) + slip.overtime_amount + slip.other_additions
             - slip.absence_deduction - slip.late_deduction - slip.unpaid_leave_deduction
-            - slip.violation_deduction - slip.other_deductions,
+            - slip.violation_deduction - (slip.loan_deduction or 0) - slip.other_deductions,
             2,
         ),
     )
@@ -188,7 +189,7 @@ def export_run(run_id: int, db: Session = Depends(get_db)):
     writer.writerow([
         "رقم الموظف", "الاسم", "الإدارة", "الراتب الأساسي", "البدلات", "أيام الحضور", "أيام الغياب",
         "إجازة مدفوعة", "إجازة بدون راتب", "دقائق التأخير", "دقائق الإضافي",
-        "خصم الغياب", "خصم التأخير", "خصم إجازة بدون راتب", "خصم المخالفات",
+        "خصم الغياب", "خصم التأخير", "خصم إجازة بدون راتب", "خصم المخالفات", "قسط السلفة",
         "بدل الإضافي", "إضافات أخرى", "خصومات أخرى", "صافي الراتب",
     ])
     for s in sorted(slips, key=lambda x: x.employee.code if x.employee else ""):
@@ -197,7 +198,7 @@ def export_run(run_id: int, db: Session = Depends(get_db)):
             s.employee.department.name if s.employee and s.employee.department else "",
             s.basic_salary, s.allowances or 0, s.present_days, s.absent_days, s.paid_leave_days, s.unpaid_leave_days,
             s.late_minutes, s.overtime_minutes, s.absence_deduction, s.late_deduction,
-            s.unpaid_leave_deduction, s.violation_deduction, s.overtime_amount,
+            s.unpaid_leave_deduction, s.violation_deduction, s.loan_deduction or 0, s.overtime_amount,
             s.other_additions, s.other_deductions, s.net_pay,
         ])
     return Response(

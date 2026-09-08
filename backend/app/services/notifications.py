@@ -21,6 +21,7 @@ from ..config import (
     SMTP_USER,
 )
 from ..models import Employee, Notification, Role, User
+from . import push as push_service
 
 logger = logging.getLogger("hr")
 
@@ -84,10 +85,12 @@ def notify_users(
 ) -> int:
     """ينشئ إشعاراً داخل النظام لكل مستخدم، ويرسله بالبريد/الويب هوك إن كانا مضبوطين."""
     payloads: list[dict] = []
+    push_targets: list[int] = []
     created = 0
     for user in users:
         if not user or not user.is_active:
             continue
+        push_targets.append(user.id)
         db.add(
             Notification(
                 user_id=user.id,
@@ -111,6 +114,10 @@ def notify_users(
     else:
         db.flush()
     _dispatch_external(payloads)
+    try:
+        push_service.send_to_users(db, push_targets, title, body or "", link_page)
+    except Exception as exc:  # pragma: no cover - لا يعطّل الإشعار الداخلي أبداً
+        logger.warning("تعذر إرسال إشعار الجوال: %s", exc)
     return created
 
 

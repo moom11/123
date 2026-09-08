@@ -20,6 +20,7 @@ const PAGES = [
   { id: 'balances',   title: 'أرصدة الإجازات', icon: '⚖️', group: 'الإجازات', roles: ['admin','hr','manager'] },
   { id: 'violations', title: 'المخالفات',      icon: '⚠️', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
   { id: 'payroll',    title: 'الرواتب',        icon: '💰', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
+  { id: 'loans',      title: 'السلف',          icon: '💳', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
   { id: 'employees',  title: 'الموظفون',       icon: '👥', group: 'شؤون الموظفين', roles: ['admin','hr','manager'] },
   { id: 'documents',  title: 'الوثائق',        icon: '📁', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
   { id: 'devices',    title: 'أجهزة البصمة',   icon: '📟', group: 'الإدارة',  roles: ['admin','hr'] },
@@ -279,6 +280,61 @@ function go(page) {
     .catch((e) => { toast(e.message, 'err'); el('view').innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
 }
 const render = (html) => { el('view').innerHTML = html; };
+
+/* ------------------------------ إشعارات الجوال ------------------------------ */
+const urlBase64ToUint8Array = (base64) => {
+  const padded = (base64 + '='.repeat((4 - base64.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(padded);
+  return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+};
+
+async function pushState() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    return { supported: false, reason: 'المتصفح لا يدعم إشعارات الويب' };
+  }
+  if (!window.isSecureContext) return { supported: false, reason: 'الإشعارات تتطلب HTTPS' };
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.getSubscription();
+  return { supported: true, permission: Notification.permission, subscribed: !!sub, sub, reg };
+}
+
+async function enablePush() {
+  const st = await pushState();
+  if (!st.supported) { toast(st.reason, 'err'); return false; }
+  const permission = await Notification.requestPermission();
+  if (permission !== 'granted') {
+    toast('لم تُمنح صلاحية الإشعارات — فعّلها من إعدادات المتصفح', 'err');
+    return false;
+  }
+  const info = await api('/api/push/key');
+  if (!info.enabled || !info.public_key) {
+    toast('إشعارات الجوال معطّلة من إعدادات النظام', 'err');
+    return false;
+  }
+  let sub = st.sub;
+  if (!sub) {
+    sub = await st.reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(info.public_key),
+    });
+  }
+  const json = sub.toJSON();
+  await api('/api/push/subscribe', { method: 'POST', body: {
+    endpoint: sub.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth,
+    user_agent: navigator.userAgent.slice(0, 200),
+  } });
+  toast('تم تفعيل إشعارات هذا الجهاز', 'ok');
+  return true;
+}
+
+async function disablePush() {
+  const st = await pushState();
+  if (st.sub) {
+    await api('/api/push/unsubscribe', { method: 'POST', body: { endpoint: st.sub.endpoint } });
+    await st.sub.unsubscribe();
+  }
+  toast('تم إيقاف إشعارات هذا الجهاز', 'ok');
+}
 
 /* ------------------------------ القائمة الجانبية ------------------------------ */
 function closeScrim() {
@@ -1358,6 +1414,131 @@ function importModal(after) {
   });
 }
 
+/* ------------------------------ السلف على الراتب ------------------------------ */
+views.loans = async () => {
+  const manage = isHR();
+  const { employees } = manage ? await loadLookups() : { employees: [] };
+  const now = new Date();
+  render(`
+    <div class="card"><div class="card-body inline">
+      ${manage ? '<button class="btn ok" id="lnNew">➕ تسجيل سلفة</button>' : ''}
+      <div class="field"><label>الحالة</label><select id="lnStatus">
+        <option value="">الكل</option><option value="active">سارية</option>
+        <option value="settled">مسدّدة</option><option value="cancelled">ملغاة</option></select></div>
+      ${manage ? `<div class="field"><label>الموظف</label><select id="lnEmp"><option value="">الكل</option>${options(employees, '', 'id', 'full_name')}</select></div>` : ''}
+      <button class="btn ghost" id="lnLoad">تحديث</button>
+      <span class="help">القسط يُخصم تلقائياً في مسير الرواتب الشهري.</span>
+    </div></div>
+    <div class="grid cols-4 stagger" id="lnKpis"></div>
+    <div class="card"><div class="card-head"><h3>السلف</h3><span class="muted" id="lnCount"></span></div>
+      <div id="lnTable"><div class="sk-rows">${'<div class="sk line"></div>'.repeat(4)}</div></div></div>`);
+
+  const load = async () => {
+    const q = new URLSearchParams();
+    if (el('lnStatus').value) q.set('status', el('lnStatus').value);
+    if (el('lnEmp') && el('lnEmp').value) q.set('employee_id', el('lnEmp').value);
+    const rows = await api('/api/loans?' + q);
+    el('lnCount').textContent = `${rows.length} سلفة`;
+    const active = rows.filter((r) => r.status === 'active');
+    el('lnKpis').innerHTML = `
+      <div class="kpi primary"><div class="label">سلف سارية<span class="ico">💳</span></div>
+        <div class="value">${active.length}</div></div>
+      <div class="kpi warn"><div class="label">إجمالي المتبقي<span class="ico">⏳</span></div>
+        <div class="value warn">${money(active.reduce((t, r) => t + r.remaining_amount, 0))}</div></div>
+      <div class="kpi ok"><div class="label">المسدّد<span class="ico">✅</span></div>
+        <div class="value ok">${money(active.reduce((t, r) => t + r.paid_amount, 0))}</div></div>
+      <div class="kpi info"><div class="label">أقساط هذا الشهر<span class="ico">📆</span></div>
+        <div class="value info">${money(active.reduce((t, r) =>
+          t + (r.remaining_amount > 0 ? Math.min(r.installment_amount, r.remaining_amount) : 0), 0))}</div>
+        <div class="foot">${MONTHS[now.getMonth()]} ${now.getFullYear()}</div></div>`;
+    el('lnTable').innerHTML = table(
+      ['الموظف', 'المبلغ', 'القسط', 'الأقساط', 'المسدّد', 'المتبقي', 'يبدأ', 'الحالة', ''],
+      rows,
+      (r) => {
+        const pct = r.amount ? (r.paid_amount / r.amount) * 100 : 0;
+        return `<tr>
+          <td><div style="display:flex;align-items:center;gap:9px">${avatar(r.employee_name, 'sm')}
+            <div><div style="font-weight:600">${esc(r.employee_name || '')}</div>
+            <div class="muted" style="font-size:11.5px">${esc(r.employee_code || '')}</div></div></div></td>
+          <td class="money">${money(r.amount)}</td><td class="money">${money(r.installment_amount)}</td>
+          <td>${r.months}</td>
+          <td style="min-width:130px"><div class="progress ok"><i style="width:${Math.min(100, pct)}%"></i></div>
+            <span class="muted" style="font-size:11.5px">${money(r.paid_amount)}</span></td>
+          <td class="money"><b>${money(r.remaining_amount)}</b></td>
+          <td>${String(r.start_month).padStart(2, '0')}/${r.start_year}</td>
+          <td><span class="tag ${r.status === 'active' ? 'on' : r.status === 'settled' ? 'approved' : 'cancelled'}">
+            ${r.status === 'active' ? 'سارية' : r.status === 'settled' ? 'مسدّدة' : 'ملغاة'}</span></td>
+          <td>${manage ? `${r.status === 'active'
+              ? `<button class="btn sm gray" onclick="cancelLoan(${r.id})">إلغاء</button>
+                 <button class="btn sm ok" onclick="settleLoan(${r.id})">تسديد كامل</button>` : ''}
+             <button class="btn sm danger" onclick="deleteLoan(${r.id})">حذف</button>` : ''}</td></tr>`;
+      },
+      manage ? 'لا توجد سلف مسجّلة' : 'لا توجد سلف على راتبك');
+  };
+
+  el('lnLoad').onclick = () => load().catch((e) => toast(e.message, 'err'));
+  if (el('lnStatus')) el('lnStatus').onchange = () => load().catch((e) => toast(e.message, 'err'));
+  if (el('lnNew')) el('lnNew').onclick = () => modal({
+    title: 'تسجيل سلفة على الراتب',
+    body: `
+      <div class="field"><label>الموظف</label><select id="lnFEmp">${options(employees, '', 'id', 'full_name')}</select></div>
+      <div class="inline">
+        <div class="field" style="flex:1"><label>مبلغ السلفة</label><input type="number" id="lnFAmount" value="1000" /></div>
+        <div class="field" style="flex:1"><label>القسط الشهري</label><input type="number" id="lnFInst" value="250" /></div>
+      </div>
+      <div class="inline">
+        <div class="field" style="flex:1"><label>يبدأ الخصم من شهر</label><select id="lnFMonth">${
+          MONTHS.map((m, i) => `<option value="${i + 1}" ${i === now.getMonth() ? 'selected' : ''}>${m}</option>`).join('')
+        }</select></div>
+        <div class="field" style="flex:1"><label>السنة</label><input type="number" id="lnFYear" value="${now.getFullYear()}" /></div>
+      </div>
+      <div class="field"><label>السبب (اختياري)</label><input id="lnFReason" placeholder="سلفة شخصية" /></div>
+      <div class="help" id="lnFHint"></div>`,
+    footer: `<button class="btn" id="lnFSave">حفظ</button><button class="btn gray" data-close>إلغاء</button>`,
+    onOpen: (root) => {
+      const hint = () => {
+        const amount = Number(el('lnFAmount').value || 0);
+        const inst = Number(el('lnFInst').value || 0);
+        el('lnFHint').textContent = amount > 0 && inst > 0
+          ? `عدد الأقساط: ${Math.ceil(amount / inst)} — آخر قسط ${money(amount - inst * (Math.ceil(amount / inst) - 1))} ريال`
+          : 'أدخل المبلغ والقسط لعرض الجدول.';
+      };
+      ['lnFAmount', 'lnFInst'].forEach((id) => el(id).oninput = hint);
+      hint();
+      $('#lnFSave', root).onclick = async () => {
+        try {
+          await api('/api/loans', { method: 'POST', body: {
+            employee_id: Number(el('lnFEmp').value),
+            amount: Number(el('lnFAmount').value),
+            installment_amount: Number(el('lnFInst').value),
+            start_year: Number(el('lnFYear').value),
+            start_month: Number(el('lnFMonth').value),
+            reason: el('lnFReason').value || null,
+          } });
+          toast('تم تسجيل السلفة', 'ok'); closeModal(); load();
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    },
+  });
+
+  window.cancelLoan = async (id) => {
+    if (!confirm('إلغاء السلفة؟ لن تُخصم أقساطها بعد الآن.')) return;
+    try { await api('/api/loans/' + id, { method: 'PATCH', body: { status: 'cancelled' } });
+      toast('أُلغيت السلفة', 'ok'); load(); } catch (e) { toast(e.message, 'err'); }
+  };
+  window.settleLoan = async (id) => {
+    if (!confirm('تأكيد تسديد السلفة بالكامل؟')) return;
+    try { await api('/api/loans/' + id, { method: 'PATCH', body: { status: 'settled' } });
+      toast('سُجّلت مسدّدة', 'ok'); load(); } catch (e) { toast(e.message, 'err'); }
+  };
+  window.deleteLoan = async (id) => {
+    if (!confirm('حذف السلفة نهائياً؟')) return;
+    try { await api('/api/loans/' + id, { method: 'DELETE' });
+      toast('تم الحذف', 'ok'); load(); } catch (e) { toast(e.message, 'err'); }
+  };
+  load();
+};
+
 /* ------------------------------ ملف الموظف ------------------------------ */
 window.openProfile = (id) => { state.profileId = id; go('profile'); };
 
@@ -1780,7 +1961,7 @@ views.payroll = async () => {
       <div class="card-head"><h3>قسائم ${MONTHS[run.month - 1]} ${run.year}</h3>
         <span class="muted">صافي المسير: <b class="money">${money(run.net_total)}</b> ريال</span></div>
       ${table(['رقم الموظف', 'الاسم', 'الأساسي', 'البدلات', 'حضور', 'غياب', 'تأخير (د)', 'إضافي (د)',
-               'خصم غياب', 'خصم تأخير', 'إجازة بلا راتب', 'خصم مخالفات', 'بدل إضافي',
+               'خصم غياب', 'خصم تأخير', 'إجازة بلا راتب', 'خصم مخالفات', 'قسط سلفة', 'بدل إضافي',
                'إضافات', 'خصومات', 'الصافي', ''],
         slips,
         (s) => `<tr><td>${esc(s.employee_code)}</td><td>${esc(s.employee_name)}</td>
@@ -1789,6 +1970,7 @@ views.payroll = async () => {
           <td>${s.late_minutes}</td><td>${s.overtime_minutes}</td>
           <td class="money">${money(s.absence_deduction)}</td><td class="money">${money(s.late_deduction)}</td>
           <td class="money">${money(s.unpaid_leave_deduction)}</td><td class="money">${money(s.violation_deduction)}</td>
+          <td class="money">${money(s.loan_deduction)}</td>
           <td class="money">${money(s.overtime_amount)}</td><td class="money">${money(s.other_additions)}</td>
           <td class="money">${money(s.other_deductions)}</td><td class="money"><b>${money(s.net_pay)}</b></td>
           <td>${locked ? '' : `<button class="btn sm ghost" onclick="adjustSlip(${s.id},${s.other_additions},${s.other_deductions})">تعديل</button>`}</td></tr>`,
@@ -1830,13 +2012,14 @@ views.payroll = async () => {
 async function myPayslipsView() {
   const slips = await api('/api/payroll/my-payslips');
   render(`<div class="card"><div class="card-head"><h3>قسائم رواتبي</h3></div>
-    ${table(['الشهر', 'الراتب الأساسي', 'البدلات', 'أيام الحضور', 'أيام الغياب', 'خصومات', 'بدل الإضافي', 'صافي الراتب'],
+    ${table(['الشهر', 'الراتب الأساسي', 'البدلات', 'أيام الحضور', 'أيام الغياب', 'خصومات', 'قسط السلفة', 'بدل الإضافي', 'صافي الراتب'],
       slips,
       (s) => {
         const deductions = s.absence_deduction + s.late_deduction + s.unpaid_leave_deduction
           + s.violation_deduction + s.other_deductions;
         return `<tr><td>مسير ${s.run_id}</td><td class="money">${money(s.basic_salary)}</td>
           <td class="money">${money(s.allowances)}</td><td>${s.present_days}</td><td>${s.absent_days}</td><td class="money">${money(deductions)}</td>
+          <td class="money">${money(s.loan_deduction)}</td>
           <td class="money">${money(s.overtime_amount)}</td><td class="money"><b>${money(s.net_pay)}</b></td></tr>`;
       },
       'لا توجد قسائم معتمدة بعد')}</div>`);
@@ -2016,6 +2199,7 @@ views.settings = async () => {
       <button data-tab="sites">مواقع العمل والبصم الذاتي</button>
       <button data-tab="violationTypes">المخالفات والجزاءات</button>
       <button data-tab="payrollRules">قواعد الرواتب</button>
+      <button data-tab="alerts">التنبيهات وإشعارات الجوال</button>
       <button data-tab="branding">هوية المنشأة</button>
       <button data-tab="backup">النسخ الاحتياطي</button>
       <button data-tab="sheets">ربط جوجل شيت</button>
@@ -2031,6 +2215,63 @@ views.settings = async () => {
 };
 
 const settingsTabs = {};
+
+settingsTabs.alerts = async () => {
+  const st = await api('/api/settings');
+  el('setBody').innerHTML = `<div class="card">
+    <div class="card-head"><h3>تنبيه الغياب والتأخير</h3></div>
+    <div class="card-body">
+      <div class="grid cols-3">
+        <div class="field"><label>تفعيل التنبيه اليومي</label><select id="alEnabled">
+          <option value="true" ${st.attendance_alert_enabled ? 'selected' : ''}>مفعّل</option>
+          <option value="false" ${st.attendance_alert_enabled ? '' : 'selected'}>معطّل</option></select></div>
+        <div class="field"><label>بعد بداية الوردية بـ (دقيقة)</label>
+          <input type="number" id="alAfter" min="5" max="600" value="${st.attendance_alert_after_minutes}" /></div>
+        <div class="field"><label>تنبيه الموظف نفسه</label><select id="alEmp">
+          <option value="true" ${st.attendance_alert_notify_employee ? 'selected' : ''}>نعم</option>
+          <option value="false" ${st.attendance_alert_notify_employee ? '' : 'selected'}>لا</option></select></div>
+      </div>
+      <div class="inline">
+        <button class="btn" id="alSave">حفظ</button>
+        <button class="btn ghost" id="alScan">إرسال التنبيه الآن</button>
+      </div>
+      <div class="help">يُرسل مرة واحدة يومياً بعد مرور المدة أعلاه على بداية وردية كل موظف:
+        قائمة من لم يبصم ومن تأخر، إلى الموارد البشرية ومدير الإدارة (وللموظف نفسه عند التفعيل).</div>
+    </div></div>
+    <div class="card">
+      <div class="card-head"><h3>إشعارات الجوال (Web Push)</h3></div>
+      <div class="card-body">
+        <div class="field" style="max-width:260px"><label>تفعيل إشعارات الجوال للنظام كله</label>
+          <select id="alPush">
+            <option value="true" ${st.push_enabled ? 'selected' : ''}>مفعّلة</option>
+            <option value="false" ${st.push_enabled ? '' : 'selected'}>معطّلة</option></select></div>
+        <button class="btn" id="alPushSave">حفظ</button>
+        <div class="help">كل مستخدم يفعّلها على جهازه من صفحة «حسابي ← إشعارات الجوال».
+          تتطلب HTTPS، وعلى الآيفون تتطلب إضافة النظام إلى الشاشة الرئيسية.</div>
+      </div></div>`;
+  el('alSave').onclick = async () => {
+    try {
+      await api('/api/settings', { method: 'PUT', body: {
+        attendance_alert_enabled: el('alEnabled').value === 'true',
+        attendance_alert_after_minutes: Number(el('alAfter').value),
+        attendance_alert_notify_employee: el('alEmp').value === 'true',
+      } });
+      toast('تم حفظ إعدادات التنبيه', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  el('alPushSave').onclick = async () => {
+    try {
+      await api('/api/settings', { method: 'PUT', body: { push_enabled: el('alPush').value === 'true' } });
+      toast('تم الحفظ', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  el('alScan').onclick = async () => {
+    try {
+      const r = await api('/api/attendance/alerts/scan', { method: 'POST' });
+      toast(r.message, r.ok ? 'ok' : 'err'); refreshBell();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+};
 
 settingsTabs.departments = async () => {
   const { employees } = await loadLookups();
@@ -2684,6 +2925,20 @@ settingsTabs.users = async () => {
 /* ------------------------------ حسابي ------------------------------ */
 views.account = async () => {
   render(`<div class="card" style="max-width:520px">
+    <div class="card-head"><h3>🔔 إشعارات الجوال</h3></div>
+    <div class="card-body">
+      <div class="help" id="pnState">جارٍ فحص حالة الإشعارات…</div>
+      <div class="inline" style="margin-top:10px">
+        <button class="btn" id="pnEnable">تفعيل على هذا الجهاز</button>
+        <button class="btn ghost" id="pnTest">إرسال إشعار تجريبي</button>
+        <button class="btn gray" id="pnDisable">إيقاف</button>
+      </div>
+      <div class="help" style="margin-top:8px">
+        يصلك الإشعار بنغمة الجهاز حتى والتطبيق مغلق. على الآيفون: أضف النظام إلى الشاشة الرئيسية
+        أولاً (مشاركة ← إضافة إلى الشاشة الرئيسية) ثم فعّل الإشعارات من هنا.
+      </div>
+    </div></div>
+    <div class="card" style="max-width:520px">
     <div class="card-head"><h3>تغيير كلمة المرور</h3></div>
     <div class="card-body">
       <div class="field"><label>كلمة المرور الحالية</label><input type="password" id="acOld" /></div>
@@ -2703,12 +2958,53 @@ views.account = async () => {
       toast('تم تغيير كلمة المرور', 'ok'); el('acOld').value = ''; el('acNew').value = '';
     } catch (e) { toast(e.message, 'err'); }
   };
+
+  const refreshPushState = async () => {
+    const st = await pushState();
+    if (!st.supported) {
+      el('pnState').innerHTML = `<span class="tag off">غير مدعوم</span> ${esc(st.reason)}`;
+      ['pnEnable', 'pnTest', 'pnDisable'].forEach((id) => el(id).disabled = true);
+      return;
+    }
+    let devices = 0, enabled = true;
+    try {
+      const info = await api('/api/push/key');
+      devices = info.devices; enabled = info.enabled;
+    } catch (e) { /* تجاهل */ }
+    el('pnState').innerHTML = !enabled
+      ? '<span class="tag off">معطّل من إعدادات النظام</span>'
+      : st.subscribed
+        ? `<span class="tag on">مفعّل على هذا الجهاز</span> — أجهزتك المسجّلة: <b>${devices}</b>`
+        : `<span class="tag pending">غير مفعّل على هذا الجهاز</span> — أجهزتك المسجّلة: <b>${devices}</b>`;
+    el('pnEnable').disabled = !enabled || st.subscribed;
+    el('pnDisable').disabled = !st.subscribed;
+  };
+  el('pnEnable').onclick = async () => {
+    try { if (await enablePush()) refreshPushState(); } catch (e) { toast(e.message, 'err'); }
+  };
+  el('pnDisable').onclick = async () => {
+    try { await disablePush(); refreshPushState(); } catch (e) { toast(e.message, 'err'); }
+  };
+  el('pnTest').onclick = async () => {
+    try { const r = await api('/api/push/test', { method: 'POST' }); toast(r.message, r.ok ? 'ok' : 'err'); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+  refreshPushState();
 };
 
 /* ------------------------------ الإقلاع ------------------------------ */
 el('loginForm').onsubmit = login;
 el('logoutBtn').onclick = logout;
 initShell();
+
+// فتح الصفحة المطلوبة عند الضغط على إشعار الجوال
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    if (event.data && event.data.type === 'open-page' && state.user) go(event.data.page);
+  });
+}
+const requestedPage = new URLSearchParams(location.search).get('page');
+if (requestedPage) state.page = requestedPage;
 el('selfPunchBtn').onclick = selfPunch;
 el('bellBtn').onclick = () => openNotifications().catch((e) => toast(e.message, 'err'));
 window.go = go;

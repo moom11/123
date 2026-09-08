@@ -10,6 +10,7 @@ from .models import (
     DeviceMode,
     EmployeeStatus,
     LeaveStatus,
+    LoanStatus,
     PayrollStatus,
     PenaltyAction,
     PunchSource,
@@ -268,6 +269,10 @@ class SettingsOut(BaseModel):
     payroll_deduction_base: str = "total"
     violation_reset_days: int = 180
     document_alert_days: int = 30
+    push_enabled: bool = True
+    attendance_alert_enabled: bool = True
+    attendance_alert_after_minutes: int = 60
+    attendance_alert_notify_employee: bool = True
 
 
 class SettingsIn(BaseModel):
@@ -282,6 +287,10 @@ class SettingsIn(BaseModel):
     payroll_deduction_base: str | None = None
     violation_reset_days: int | None = Field(default=None, ge=30, le=730)
     document_alert_days: int | None = Field(default=None, ge=1, le=365)
+    push_enabled: bool | None = None
+    attendance_alert_enabled: bool | None = None
+    attendance_alert_after_minutes: int | None = Field(default=None, ge=5, le=600)
+    attendance_alert_notify_employee: bool | None = None
 
 
 class AttendanceOverride(BaseModel):
@@ -639,6 +648,7 @@ class PayrollRunOut(ORMModel):
     employees: int = 0
     basic_total: float = 0
     allowances_total: float = 0
+    loans_total: float = 0
     deductions_total: float = 0
     overtime_total: float = 0
     net_total: float = 0
@@ -653,6 +663,7 @@ class PayslipOut(ORMModel):
     department_name: str | None = None
     basic_salary: float
     allowances: float = 0
+    loan_deduction: float = 0
     present_days: int
     absent_days: int
     paid_leave_days: float
@@ -668,6 +679,46 @@ class PayslipOut(ORMModel):
     other_deductions: float
     net_pay: float
     note: str | None = None
+
+
+class LoanIn(BaseModel):
+    employee_id: int
+    amount: float = Field(gt=0)
+    installment_amount: float = Field(gt=0)
+    start_year: int = Field(ge=2000, le=2100)
+    start_month: int = Field(ge=1, le=12)
+    reason: str | None = None
+
+
+class LoanUpdate(BaseModel):
+    installment_amount: float | None = Field(default=None, gt=0)
+    reason: str | None = None
+    status: LoanStatus | None = None
+
+
+class LoanOut(ORMModel):
+    id: int
+    employee_id: int
+    employee_code: str | None = None
+    employee_name: str | None = None
+    amount: float
+    installment_amount: float
+    start_year: int
+    start_month: int
+    reason: str | None = None
+    status: LoanStatus
+    months: int = 0
+    paid_amount: float = 0
+    remaining_amount: float = 0
+    last_installment: str | None = None
+    created_at: datetime | None = None
+
+
+class PushSubscriptionIn(BaseModel):
+    endpoint: str = Field(min_length=10, max_length=500)
+    p256dh: str = Field(min_length=10, max_length=255)
+    auth: str = Field(min_length=4, max_length=255)
+    user_agent: str | None = None
 
 
 class PayslipAdjust(BaseModel):

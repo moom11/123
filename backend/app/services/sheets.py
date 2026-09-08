@@ -50,7 +50,8 @@ DATASETS: dict[str, dict] = {
     "payroll": {
         "sheet": "الرواتب",
         "headers": ["الفترة", "رقم الموظف", "الاسم", "الأساسي", "البدلات", "أيام الحضور", "أيام الغياب",
-                    "خصم الغياب", "خصم التأخير", "خصم المخالفات", "بدل الإضافي", "الصافي"],
+                    "خصم الغياب", "خصم التأخير", "خصم المخالفات", "قسط السلفة",
+                    "بدل الإضافي", "الصافي"],
     },
 }
 
@@ -267,6 +268,7 @@ def payslip_rows(run, slips) -> list[list]:
             s.absence_deduction,
             s.late_deduction,
             s.violation_deduction,
+            s.loan_deduction or 0,
             s.overtime_amount,
             s.net_pay,
         ]

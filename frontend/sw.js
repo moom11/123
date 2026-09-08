@@ -1,6 +1,6 @@
 /* عامل الخدمة: يجعل النظام قابلاً للتثبيت كتطبيق ويسرّع فتحه.
    ملاحظة: طلبات الـ API لا تُخزَّن إطلاقاً حتى تبقى بيانات الحضور والرواتب صحيحة دائماً. */
-const CACHE = 'hr-shell-v3';
+const CACHE = 'hr-shell-v4';
 const SHELL = [
   '/app/index.html',
   '/app/styles.css',
@@ -42,4 +42,38 @@ self.addEventListener('fetch', (event) => {
       return cached || network;
     })
   );
+});
+
+/* ------------------------------ إشعارات الجوال ------------------------------ */
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch (e) { data = { title: 'إشعار جديد' }; }
+  const title = data.title || 'نظام الموارد البشرية';
+  event.waitUntil(self.registration.showNotification(title, {
+    body: data.body || '',
+    icon: '/app/assets/icon-192.png',
+    badge: '/app/assets/icon-192.png',
+    dir: 'rtl',
+    lang: 'ar',
+    tag: 'hr-' + (data.page || 'general'),
+    renotify: true,
+    vibrate: [180, 90, 180],
+    data: { page: data.page || '' },
+  }));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const page = (event.notification.data && event.notification.data.page) || '';
+  const target = '/app/' + (page ? '?page=' + encodeURIComponent(page) : '');
+  event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+    .then((list) => {
+      for (const client of list) {
+        if (client.url.includes('/app/') && 'focus' in client) {
+          if (page) client.postMessage({ type: 'open-page', page });
+          return client.focus();
+        }
+      }
+      return self.clients.openWindow(target);
+    }));
 });

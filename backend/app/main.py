@@ -22,7 +22,9 @@ from .routers import (
     hr_extra,
     iclock,
     leaves,
+    loans,
     payroll,
+    push,
     reports,
     sheets,
     sites,
@@ -30,7 +32,9 @@ from .routers import (
     violations,
 )
 from .seed import bootstrap
+from .services import attendance_alerts
 from .services import daily as daily_service
+from .services import push as push_service
 from .services import sheets as sheets_service
 from .services import zk_service
 
@@ -53,7 +57,7 @@ async def _auto_sync_loop() -> None:
 
 
 async def _background_loop() -> None:
-    """مهام دورية: العبارة التحفيزية اليومية، ودفعات جوجل شيت وملخص الحضور."""
+    """مهام دورية: العبارة اليومية، تنبيه الغياب والتأخير، ودفعات جوجل شيت."""
     while True:
         await asyncio.sleep(300)   # كل خمس دقائق
         try:
@@ -61,6 +65,9 @@ async def _background_loop() -> None:
                 sent = await asyncio.to_thread(daily_service.send_daily_quote, db)
                 if sent:
                     logger.info("أُرسلت العبارة اليومية إلى %s مستخدم", sent)
+                alert = await asyncio.to_thread(attendance_alerts.scan, db)
+                if alert.get("sent"):
+                    logger.info("تنبيه الحضور: %s", alert.get("message"))
                 if sheets_service.is_enabled(db):
                     await asyncio.to_thread(sheets_service.flush, db)
                     await asyncio.to_thread(sheets_service.daily_attendance_job, db)
@@ -71,6 +78,12 @@ async def _background_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     bootstrap()
+    # توليد مفاتيح إشعارات الجوال مرة واحدة عند الإقلاع
+    try:
+        with SessionLocal() as db:
+            push_service.ensure_keys(db)
+    except Exception as exc:  # pragma: no cover - لا يمنع الإقلاع
+        logger.warning("تعذر تهيئة مفاتيح إشعارات الجوال: %s", exc)
     tasks = [asyncio.create_task(_background_loop())]
     if AUTO_SYNC_MINUTES > 0:
         tasks.append(asyncio.create_task(_auto_sync_loop()))
@@ -105,6 +118,8 @@ for router in (
     sites.router,
     violations.router,
     payroll.router,
+    loans.router,
+    push.router,
     branding.router,
     backup.router,
     hr_extra.router,

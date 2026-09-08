@@ -19,6 +19,7 @@ NEW_COLUMNS: list[tuple[str, str, str]] = [
     ("punches", "distance_meters", "FLOAT"),
     ("employees", "allowances", "FLOAT DEFAULT 0"),
     ("payslips", "allowances", "FLOAT DEFAULT 0"),
+    ("payslips", "loan_deduction", "FLOAT DEFAULT 0"),
 ]
 
 

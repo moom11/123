@@ -345,6 +345,16 @@ def recompute_range(
     return {"ok": True, "days": count, "message": f"تمت إعادة احتساب {count} يوم"}
 
 
+@router.post("/alerts/scan")
+def scan_attendance_alerts(
+    db: Session = Depends(get_db), _: User = Depends(require_hr)
+):
+    """إرسال تنبيه الغياب والتأخير الآن (يدوياً) بدل انتظار الموعد اليومي."""
+    from ..services import attendance_alerts
+
+    return attendance_alerts.scan(db, force=True)
+
+
 @router.get("/export.csv")
 def export_attendance(
     date_from: date,
