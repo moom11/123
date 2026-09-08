@@ -25,7 +25,7 @@ from ..models import (
 )
 from ..schemas import AuditLogOut, DocumentIn, DocumentOut, ImportReport, NotificationOut
 from ..security import can_view_employee, get_current_user, require_admin, require_hr
-from ..services import audit, notifications, settings_store
+from ..services import accounts, audit, notifications, settings_store
 
 router = APIRouter(prefix="/api", tags=["hr-extra"])
 
@@ -329,11 +329,24 @@ def import_employees(
         salary = _parse_number(cells[8])
         allowances = _parse_number(cells[10])
 
+        phone = (cells[4] or "").strip() or None
+        if phone:
+            employee_row = existing.get(code)
+            conflict = accounts.phone_conflict(
+                db, phone, employee_row.id if employee_row else None
+            )
+            if conflict:
+                report.errors.append(
+                    f"السطر {index}: رقم الجوال مسجّل للموظف {conflict.full_name} "
+                    f"({conflict.code}) — استُورد الموظف بدون رقم"
+                )
+                phone = None
+
         data = dict(
             full_name=name,
             department_id=department.id if department else None,
             job_title=(cells[3] or "").strip() or None,
-            phone=(cells[4] or "").strip() or None,
+            phone=phone,
             email=(cells[5] or "").strip() or None,
             national_id=(cells[6] or "").strip() or None,
             hire_date=_parse_date(cells[7] or ""),
@@ -349,11 +362,15 @@ def import_employees(
             db.flush()
             existing[code] = employee
             report.created += 1
+            if accounts.ensure_account(db, employee):
+                report.accounts_created += 1
         elif update_existing:
             for key, value in data.items():
                 if value not in (None, "", 0.0) or key in ("basic_salary", "allowances"):
                     setattr(employee, key, value)
             report.updated += 1
+            if accounts.ensure_account(db, employee):
+                report.accounts_created += 1
         else:
             report.skipped += 1
 
@@ -365,5 +382,7 @@ def import_employees(
     report.message = (
         f"تم إنشاء {report.created} موظف وتحديث {report.updated}"
         + (f" وتخطي {report.skipped}" if report.skipped else "")
+        + (f"، وأُنشئ {report.accounts_created} حساب دخول بأرقام الجوال"
+           if report.accounts_created else "")
     )
     return report

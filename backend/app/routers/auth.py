@@ -23,19 +23,11 @@ def user_out(user: User) -> UserOut:
         is_active=user.is_active,
         employee_id=user.employee_id,
         employee_name=user.employee.full_name if user.employee else None,
+        must_change_password=bool(user.must_change_password),
     )
 
 
-def normalize_phone(value: str | None) -> str:
-    """يوحّد صيغة رقم الجوال: أرقام فقط، ويحوّل 9665… و+9665… إلى 05…"""
-    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
-    if digits.startswith("00966"):
-        digits = digits[5:]
-    elif digits.startswith("966"):
-        digits = digits[3:]
-    if len(digits) == 9 and digits.startswith("5"):
-        digits = "0" + digits
-    return digits
+from ..services.accounts import normalize_phone
 
 
 def find_login_user(db: Session, identifier: str) -> User | None:
@@ -85,7 +77,10 @@ def change_password(
 ):
     if not verify_password(payload.current_password, user.password_hash):
         raise HTTPException(status_code=400, detail="كلمة المرور الحالية غير صحيحة")
+    if payload.new_password == payload.current_password:
+        raise HTTPException(status_code=400, detail="اختر كلمة مرور مختلفة عن الحالية")
     user.password_hash = hash_password(payload.new_password)
+    user.must_change_password = False
     audit.log(db, user, "password", "user", user.id, "تغيير كلمة المرور الذاتية", commit=False)
     db.commit()
     return {"ok": True, "message": "تم تغيير كلمة المرور"}

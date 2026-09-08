@@ -122,6 +122,7 @@ def _settings_out(values: dict) -> SettingsOut:
         violation_reset_days=int(float(values["violation_reset_days"])),
         document_alert_days=int(float(values["document_alert_days"])),
         push_enabled=values.get("push_enabled") == "true",
+        auto_account_on_phone=values.get("auto_account_on_phone") == "true",
         attendance_alert_enabled=values.get("attendance_alert_enabled") == "true",
         attendance_alert_after_minutes=int(float(values.get("attendance_alert_after_minutes") or 60)),
         attendance_alert_notify_employee=values.get("attendance_alert_notify_employee") == "true",

@@ -137,6 +137,8 @@ class User(Base):
     role: Mapped[Role] = mapped_column(Enum(Role), default=Role.employee)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     employee_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id", ondelete="SET NULL"))
+    # حساب أُنشئ تلقائياً بكلمة مرور مؤقتة: يُطالَب صاحبه بتغييرها عند أول دخول
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     employee: Mapped["Employee | None"] = relationship(back_populates="user", foreign_keys=[employee_id])

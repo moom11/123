@@ -20,7 +20,7 @@ from ..schemas import (
     ShiftOut,
 )
 from ..security import get_current_user, require_hr
-from ..services import audit
+from ..services import accounts, audit
 
 router = APIRouter(prefix="/api", tags=["employees"])
 
@@ -83,10 +83,21 @@ def create_employee(
 ):
     if db.scalar(select(Employee).where(Employee.code == payload.code)):
         raise HTTPException(status_code=400, detail="رقم الموظف مستخدم مسبقاً")
+    conflict = accounts.phone_conflict(db, payload.phone)
+    if conflict:
+        raise HTTPException(
+            status_code=400,
+            detail=f"رقم الجوال مسجّل للموظف {conflict.full_name} ({conflict.code}) — "
+                   "لكل موظف رقم خاص به لأنه وسيلة دخوله",
+        )
     emp = Employee(**payload.model_dump())
     db.add(emp)
     db.flush()
     audit.log(db, user, "create", "employee", emp.id, f"{emp.code} - {emp.full_name}", commit=False)
+    account = accounts.ensure_account(db, emp)
+    if account:
+        audit.log(db, user, "create", "user", account.id,
+                  f"حساب تلقائي بالجوال للموظف {emp.full_name}", commit=False)
     db.commit()
     db.refresh(emp)
     _link_orphan_punches(db, emp)
@@ -135,13 +146,51 @@ def update_employee(
     if "code" in data and data["code"] != emp.code:
         if db.scalar(select(Employee).where(Employee.code == data["code"])):
             raise HTTPException(status_code=400, detail="رقم الموظف مستخدم مسبقاً")
+    if data.get("phone"):
+        conflict = accounts.phone_conflict(db, data["phone"], emp.id)
+        if conflict:
+            raise HTTPException(
+                status_code=400,
+                detail=f"رقم الجوال مسجّل للموظف {conflict.full_name} ({conflict.code}) — "
+                       "لكل موظف رقم خاص به لأنه وسيلة دخوله",
+            )
     for key, value in data.items():
         setattr(emp, key, value)
     audit.log(db, user, "update", "employee", emp.id,
               "الحقول: " + "، ".join(data.keys()), commit=False)
+    if "phone" in data:
+        account = accounts.ensure_account(db, emp)
+        if account:
+            audit.log(db, user, "create", "user", account.id,
+                      f"حساب تلقائي بالجوال للموظف {emp.full_name}", commit=False)
     db.commit()
     db.refresh(emp)
     return employee_out(emp)
+
+
+@router.post("/employees/ensure-accounts")
+def ensure_accounts(db: Session = Depends(get_db), user: User = Depends(require_hr)):
+    """ينشئ حسابات دخول لكل موظف له رقم جوال ولا حساب له (للأرقام المسجّلة سابقاً)."""
+    created: list[str] = []
+    skipped_duplicates: list[str] = []
+    for emp in db.scalars(select(Employee).order_by(Employee.code)).all():
+        if not accounts.is_valid_phone(emp.phone):
+            continue
+        if accounts.phone_conflict(db, emp.phone, emp.id):
+            skipped_duplicates.append(f"{emp.full_name} ({emp.code})")
+            continue
+        account = accounts.ensure_account(db, emp)
+        if account:
+            created.append(f"{emp.full_name}: {account.username}")
+    if created:
+        audit.log(db, user, "create", "user", None,
+                  f"إنشاء {len(created)} حساب دخول بأرقام الجوال", commit=False)
+    db.commit()
+    message = f"أُنشئ {len(created)} حساب دخول"
+    if skipped_duplicates:
+        message += f"، وتُخطّي {len(skipped_duplicates)} لتكرار الرقم"
+    return {"ok": True, "created": len(created), "accounts": created,
+            "duplicates": skipped_duplicates, "message": message}
 
 
 @router.delete("/employees/{employee_id}")

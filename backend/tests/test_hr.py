@@ -1549,39 +1549,106 @@ def test_push_is_signed_and_encrypted(client, auth):
 
 
 # ------------------------------ الدخول برقم الجوال ------------------------------
-def test_login_with_phone_number(client, auth):
-    """الموظف يدخل باسم المستخدم أو برقم جواله بأي صيغة معتادة."""
+def test_phone_creates_account_automatically(client, auth):
+    """إضافة رقم الجوال وحدها تُنشئ حساب دخول: الرقم اسم مستخدم وكلمة مرور مؤقتة."""
     emp = client.post("/api/employees", headers=auth, json={
         "code": "9950", "full_name": "موظف الجوال", "phone": "0533221100"}).json()
-    client.post("/api/users", headers=auth, json={
-        "username": "phone_emp", "password": "Aa123456", "role": "employee",
-        "employee_id": emp["id"]})
+    assert emp["has_user"] is True
 
-    for identifier in ("phone_emp", "0533221100", "+966533221100", "966533221100", "0533 221 100"):
-        res = client.post("/api/auth/login", data={"username": identifier, "password": "Aa123456"})
+    for identifier in ("0533221100", "+966533221100", "966533221100", "0533 221 100"):
+        res = client.post("/api/auth/login", data={"username": identifier, "password": "0533221100"})
         assert res.status_code == 200, f"فشل الدخول بـ {identifier}: {res.text}"
-        assert res.json()["user"]["username"] == "phone_emp"
+        assert res.json()["user"]["employee_id"] == emp["id"]
+        assert res.json()["user"]["must_change_password"] is True
 
-    # كلمة مرور خاطئة تبقى مرفوضة
+    # كلمة مرور خاطئة ورقم غير مسجّل: مرفوضان
     assert client.post("/api/auth/login", data={
         "username": "0533221100", "password": "wrong"}).status_code == 401
-    # رقم غير مسجّل
     assert client.post("/api/auth/login", data={
-        "username": "0559999999", "password": "Aa123456"}).status_code == 401
+        "username": "0559999999", "password": "0559999999"}).status_code == 401
 
 
-def test_phone_shared_by_two_employees_is_rejected(client, auth):
-    """رقم مشترك بين موظفَين لا يُستخدم للدخول (لا تخمين)."""
-    first = client.post("/api/employees", headers=auth, json={
-        "code": "9951", "full_name": "أخ أول", "phone": "0555555555"}).json()
+def test_temp_password_must_be_changed_on_first_login(client, auth):
+    """كلمة المرور المؤقتة تُلزم صاحبها بتغييرها، وبعدها لا تعمل القديمة."""
     client.post("/api/employees", headers=auth, json={
-        "code": "9952", "full_name": "أخ ثانٍ", "phone": "0555555555"})
-    client.post("/api/users", headers=auth, json={
-        "username": "shared_phone", "password": "Aa123456", "role": "employee",
-        "employee_id": first["id"]})
+        "code": "9953", "full_name": "موظف مؤقت", "phone": "0533221101"})
+    token = client.post("/api/auth/login", data={
+        "username": "0533221101", "password": "0533221101"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+    assert client.get("/api/auth/me", headers=h).json()["must_change_password"] is True
 
+    same = client.post("/api/auth/change-password", headers=h, json={
+        "current_password": "0533221101", "new_password": "0533221101"})
+    assert same.status_code == 400   # لا يجوز إبقاء نفس كلمة المرور
+
+    changed = client.post("/api/auth/change-password", headers=h, json={
+        "current_password": "0533221101", "new_password": "Jawal@2026"})
+    assert changed.status_code == 200
+    assert client.get("/api/auth/me", headers=h).json()["must_change_password"] is False
     assert client.post("/api/auth/login", data={
-        "username": "0555555555", "password": "Aa123456"}).status_code == 401
-    # واسم المستخدم ما زال يعمل
+        "username": "0533221101", "password": "0533221101"}).status_code == 401
     assert client.post("/api/auth/login", data={
-        "username": "shared_phone", "password": "Aa123456"}).status_code == 200
+        "username": "0533221101", "password": "Jawal@2026"}).status_code == 200
+
+
+def test_auto_account_rules(client, auth):
+    """لا حساب بلا جوال، ولا حساب لرقم مكرر، ويمكن إيقاف الخاصية من الإعدادات."""
+    no_phone = client.post("/api/employees", headers=auth, json={
+        "code": "9954", "full_name": "موظف بلا جوال"}).json()
+    assert no_phone["has_user"] is False
+
+    # الرقم وسيلة دخول، فلا يُقبل تكراره بين موظفَين
+    first = client.post("/api/employees", headers=auth, json={
+        "code": "9955", "full_name": "أخ أول", "phone": "0533221199"})
+    assert first.status_code == 201 and first.json()["has_user"] is True
+    second = client.post("/api/employees", headers=auth, json={
+        "code": "9956", "full_name": "أخ ثانٍ", "phone": "0533 221 199"})
+    assert second.status_code == 400
+    assert "مسجّل للموظف" in second.json()["detail"]
+
+    # إضافة الجوال لاحقاً تُنشئ الحساب
+    later = client.patch(f"/api/employees/{no_phone['id']}", headers=auth,
+                         json={"phone": "0533221102"}).json()
+    assert later["has_user"] is True
+    assert client.post("/api/auth/login", data={
+        "username": "0533221102", "password": "0533221102"}).status_code == 200
+
+    # إيقاف الخاصية من الإعدادات
+    client.put("/api/settings", headers=auth, json={"auto_account_on_phone": False})
+    off = client.post("/api/employees", headers=auth, json={
+        "code": "9957", "full_name": "بعد الإيقاف", "phone": "0533221103"}).json()
+    assert off["has_user"] is False
+    client.put("/api/settings", headers=auth, json={"auto_account_on_phone": True})
+
+
+def test_import_creates_accounts_for_phones(client, auth):
+    """استيراد كشف فيه أرقام جوال يُنشئ حسابات الدخول دفعة واحدة."""
+    content = (
+        "رقم الموظف,الاسم,الإدارة,المسمى الوظيفي,الجوال,البريد,الهوية,تاريخ التعيين,"
+        "الراتب الأساسي,الوردية,البدلات\n"
+        "9960,نادل الصباح,الفترة الصباحية,نادل,0533000001,,,,1000,الوردية الصباحية,1000\n"
+        "9961,معسل المساء,الفترة المسائية,معسل,0533000002,,,,800,الوردية المسائية,1450\n"
+    ).encode("utf-8")
+    report = client.post("/api/employees/import", headers=auth,
+                         files={"file": ("roster.csv", content, "text/csv")}).json()
+    assert report["created"] == 2
+    assert report["accounts_created"] == 2
+    assert "حساب دخول" in report["message"]
+    assert client.post("/api/auth/login", data={
+        "username": "0533000001", "password": "0533000001"}).status_code == 200
+
+
+def test_ensure_accounts_backfill(client, auth):
+    """زر إنشاء الحسابات ينشئ حسابات للأرقام المسجّلة قبل تفعيل الخاصية."""
+    client.put("/api/settings", headers=auth, json={"auto_account_on_phone": False})
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9970", "full_name": "رقم قديم", "phone": "0533000077"}).json()
+    assert emp["has_user"] is False
+
+    client.put("/api/settings", headers=auth, json={"auto_account_on_phone": True})
+    res = client.post("/api/employees/ensure-accounts", headers=auth).json()
+    assert res["created"] >= 1
+    assert client.post("/api/auth/login", data={
+        "username": "0533000077", "password": "0533000077"}).status_code == 200
+    # تشغيلها مرة أخرى لا يُنشئ حسابات مكررة
+    assert client.post("/api/employees/ensure-accounts", headers=auth).json()["created"] == 0

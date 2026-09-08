@@ -244,6 +244,35 @@ function logout() {
   el('login').classList.remove('hidden');
 }
 
+function forcePasswordChange() {
+  modal({
+    title: 'كلمة المرور المؤقتة',
+    body: `<div class="help" style="margin-bottom:12px">
+        دخلت بكلمة مرور مؤقتة (رقم جوالك). اختر كلمة مرور جديدة لتأمين حسابك — لن تتمكن من
+        متابعة العمل قبل تغييرها.</div>
+      <div class="field"><label>كلمة المرور الحالية</label>
+        <input type="password" id="fcOld" autocomplete="current-password" /></div>
+      <div class="field"><label>كلمة المرور الجديدة (٦ أحرف فأكثر)</label>
+        <input type="password" id="fcNew" autocomplete="new-password" /></div>`,
+    footer: `<button class="btn" id="fcSave">حفظ ومتابعة</button>
+             <button class="btn gray" id="fcLogout">خروج</button>`,
+    onOpen: (root) => {
+      root.querySelectorAll('[data-close]').forEach((b) => b.remove());
+      $('#fcSave', root).onclick = async () => {
+        try {
+          await api('/api/auth/change-password', { method: 'POST', body: {
+            current_password: el('fcOld').value, new_password: el('fcNew').value } });
+          state.user.must_change_password = false;
+          localStorage.setItem('hr_user', JSON.stringify(state.user));
+          closeModal();
+          toast('تم تغيير كلمة المرور، أهلاً بك', 'ok');
+        } catch (e) { toast(e.message, 'err'); }
+      };
+      $('#fcLogout', root).onclick = () => { closeModal(); logout(); };
+    },
+  });
+}
+
 function startApp() {
   el('login').classList.add('hidden');
   el('app').classList.remove('hidden');
@@ -265,6 +294,7 @@ function startApp() {
   el('selfPunchBtn').classList.toggle('hidden', !state.user.employee_id);
   refreshBell();
   go(pages.some((p) => p.id === state.page) ? state.page : 'dashboard');
+  if (state.user.must_change_password) forcePasswordChange();
 }
 
 const EXTRA_TITLES = { profile: 'ملف الموظف' };
@@ -1251,7 +1281,9 @@ views.employees = async () => {
           <span class="chip">🏢 ${esc(r.department_name || 'بدون إدارة')}</span>
           ${r.shift_name ? `<span class="chip">🕒 ${esc(r.shift_name)}</span>` : ''}
         </div>
-        <div class="foot">${statusTag(r)}<span>خدمة: ${esc(serviceLength(r.hire_date))}</span></div>
+        <div class="foot">${statusTag(r)}
+          <span>${r.has_user ? '🔑 له حساب دخول' : (r.phone ? '' : '📵 بلا جوال')}
+            ${r.has_user ? '' : ' — خدمة ' + esc(serviceLength(r.hire_date))}</span></div>
       </div>`).join('')}
     </div></div>` : '<div class="empty"><span class="big">👥</span>لا يوجد موظفون مطابقون</div>';
 
@@ -1329,7 +1361,9 @@ function employeeModal(emp, departments, shifts, after) {
       <div class="field"><label>رقم الموظف (نفس الرقم في جهاز البصمة)</label><input id="fCode" value="${esc(v('code'))}" /></div>
       <div class="field"><label>الاسم الكامل</label><input id="fName" value="${esc(v('full_name'))}" /></div>
       <div class="field"><label>الهوية / الإقامة</label><input id="fNid" value="${esc(v('national_id'))}" /></div>
-      <div class="field"><label>الجوال</label><input id="fPhone" value="${esc(v('phone'))}" /></div>
+      <div class="field"><label>الجوال</label><input id="fPhone" value="${esc(v('phone'))}" />
+        <div class="help">بمجرد حفظ الرقم يُنشأ حساب دخول للموظف: اسم المستخدم وكلمة المرور
+          المؤقتة هما الرقم نفسه، ويُطالَب بتغييرها عند أول دخول.</div></div>
       <div class="field"><label>البريد</label><input id="fEmail" value="${esc(v('email'))}" /></div>
       <div class="field"><label>المسمى الوظيفي</label><input id="fTitle" value="${esc(v('job_title'))}" /></div>
       <div class="field"><label>الإدارة</label><select id="fDep"><option value="">—</option>${options(departments, v('department_id'))}</select></div>
@@ -2241,6 +2275,21 @@ settingsTabs.alerts = async () => {
         قائمة من لم يبصم ومن تأخر، إلى الموارد البشرية ومدير الإدارة (وللموظف نفسه عند التفعيل).</div>
     </div></div>
     <div class="card">
+      <div class="card-head"><h3>حسابات دخول الموظفين</h3></div>
+      <div class="card-body">
+        <div class="field" style="max-width:320px"><label>إنشاء حساب تلقائياً عند إضافة رقم الجوال</label>
+          <select id="alAuto">
+            <option value="true" ${st.auto_account_on_phone ? 'selected' : ''}>مفعّل</option>
+            <option value="false" ${st.auto_account_on_phone ? '' : 'selected'}>معطّل</option></select></div>
+        <div class="inline">
+          <button class="btn" id="alAutoSave">حفظ</button>
+          <button class="btn ghost" id="alBackfill">إنشاء حسابات لكل من له رقم جوال</button>
+        </div>
+        <div class="help">عند التفعيل: أي موظف يُسجَّل له رقم جوال يصبح مصرَّحاً له بالدخول فوراً —
+          اسم المستخدم وكلمة المرور المؤقتة هما رقم جواله، ويُلزم بتغييرها عند أول دخول.
+          ولأن الرقم وسيلة دخول، لا يُقبل تكرار الرقم بين موظفَين.</div>
+      </div></div>
+    <div class="card">
       <div class="card-head"><h3>إشعارات الجوال (Web Push)</h3></div>
       <div class="card-body">
         <div class="field" style="max-width:260px"><label>تفعيل إشعارات الجوال للنظام كله</label>
@@ -2259,6 +2308,25 @@ settingsTabs.alerts = async () => {
         attendance_alert_notify_employee: el('alEmp').value === 'true',
       } });
       toast('تم حفظ إعدادات التنبيه', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  el('alAutoSave').onclick = async () => {
+    try {
+      await api('/api/settings', { method: 'PUT', body: {
+        auto_account_on_phone: el('alAuto').value === 'true' } });
+      toast('تم الحفظ', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  el('alBackfill').onclick = async () => {
+    if (!confirm('سيُنشأ حساب دخول لكل موظف له رقم جوال ولا حساب له. متابعة؟')) return;
+    try {
+      const r = await api('/api/employees/ensure-accounts', { method: 'POST' });
+      toast(r.message, 'ok');
+      if (r.duplicates && r.duplicates.length) {
+        modal({ title: 'أرقام مكررة لم يُنشأ لها حساب',
+          body: `<div class="help">${r.duplicates.map(esc).join('<br>')}</div>`,
+          footer: '<button class="btn gray" data-close>إغلاق</button>' });
+      }
     } catch (e) { toast(e.message, 'err'); }
   };
   el('alPushSave').onclick = async () => {

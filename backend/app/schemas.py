@@ -38,6 +38,7 @@ class UserOut(ORMModel):
     is_active: bool
     employee_id: int | None = None
     employee_name: str | None = None
+    must_change_password: bool = False
 
 
 class UserCreate(BaseModel):
@@ -270,6 +271,7 @@ class SettingsOut(BaseModel):
     violation_reset_days: int = 180
     document_alert_days: int = 30
     push_enabled: bool = True
+    auto_account_on_phone: bool = True
     attendance_alert_enabled: bool = True
     attendance_alert_after_minutes: int = 60
     attendance_alert_notify_employee: bool = True
@@ -288,6 +290,7 @@ class SettingsIn(BaseModel):
     violation_reset_days: int | None = Field(default=None, ge=30, le=730)
     document_alert_days: int | None = Field(default=None, ge=1, le=365)
     push_enabled: bool | None = None
+    auto_account_on_phone: bool | None = None
     attendance_alert_enabled: bool | None = None
     attendance_alert_after_minutes: int | None = Field(default=None, ge=5, le=600)
     attendance_alert_notify_employee: bool | None = None
@@ -631,6 +634,7 @@ class DocumentOut(ORMModel):
 class ImportReport(BaseModel):
     created: int = 0
     updated: int = 0
+    accounts_created: int = 0
     skipped: int = 0
     errors: list[str] = []
     message: str = ""
