@@ -1233,11 +1233,12 @@ def test_allowances_added_to_salary_and_deduction_base(client, auth):
         slips = client.get(f"/api/payroll/runs/{run.json()['id']}/payslips", headers=auth).json()
         return next(s for s in slips if s["employee_code"] == "9750")
 
+    multiplier = client.get("/api/settings", headers=auth).json()["payroll_absence_multiplier"]
     total_slip = slip_for("total")
     assert total_slip["basic_salary"] == 800 and total_slip["allowances"] == 700
     assert total_slip["absent_days"] > 0, "الشهر الماضي بلا بصمات: يجب أن يظهر غياب"
     assert total_slip["absence_deduction"] == round(
-        total_slip["absent_days"] * round(1500 / 30, 4), 2
+        total_slip["absent_days"] * round(1500 / 30, 4) * multiplier, 2
     )
     assert total_slip["net_pay"] == max(round(
         800 + 700 + total_slip["overtime_amount"] - total_slip["absence_deduction"]
@@ -1246,7 +1247,7 @@ def test_allowances_added_to_salary_and_deduction_base(client, auth):
 
     basic_slip = slip_for("basic")
     assert basic_slip["absence_deduction"] == round(
-        basic_slip["absent_days"] * round(800 / 30, 4), 2
+        basic_slip["absent_days"] * round(800 / 30, 4) * multiplier, 2
     )
     assert basic_slip["absence_deduction"] < total_slip["absence_deduction"]
 
@@ -1280,3 +1281,45 @@ def test_import_employees_with_allowances_and_shifts(client, auth):
     orphan = client.get("/api/employees?q=9802", headers=auth).json()[0]
     assert orphan["shift_id"] is None
     assert any("وردية غير موجودة" in e for e in report["errors"])
+
+
+def test_unauthorized_absence_deducts_two_days(client, auth):
+    """الغياب بدون إذن يُخصم بأجر يومين، والغياب بإذن (إجازة بلا راتب) بيوم واحد."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9751", "full_name": "موظف الغياب", "basic_salary": 1500}).json()
+    previous = date.today().replace(day=1) - timedelta(days=1)
+    year, month = previous.year, previous.month
+
+    def slip_with(multiplier: float) -> dict:
+        client.put("/api/settings", headers=auth,
+                   json={"payroll_absence_multiplier": multiplier})
+        run = client.post(f"/api/payroll/runs?year={year}&month={month}", headers=auth)
+        assert run.status_code == 201, run.text
+        slips = client.get(f"/api/payroll/runs/{run.json()['id']}/payslips", headers=auth).json()
+        return next(s for s in slips if s["employee_code"] == "9751")
+
+    one_day = slip_with(1)
+    assert one_day["absent_days"] > 0
+    assert one_day["absence_deduction"] == round(one_day["absent_days"] * round(1500 / 30, 4), 2)
+
+    two_days = slip_with(2)
+    assert two_days["absent_days"] == one_day["absent_days"]
+    assert two_days["absence_deduction"] == round(one_day["absence_deduction"] * 2, 2)
+
+    # الغياب بإذن: إجازة بدون راتب تُخصم يوماً واحداً مهما كان معامل الغياب
+    unpaid = next(t for t in client.get("/api/leave-types", headers=auth).json()
+                  if t["code"] == "unpaid")
+    day = date(year, month, 10)
+    req = client.post("/api/leave-requests", headers=auth, json={
+        "employee_id": emp["id"], "leave_type_id": unpaid["id"],
+        "start_date": str(day), "end_date": str(day), "reason": "غياب بإذن"})
+    assert req.status_code == 201, req.text
+    approve = client.post(f"/api/leave-requests/{req.json()['id']}/approve", headers=auth)
+    assert approve.status_code == 200, approve.text
+
+    excused = slip_with(2)
+    assert excused["unpaid_leave_days"] == 1
+    assert excused["unpaid_leave_deduction"] == round(round(1500 / 30, 4), 2)
+    assert excused["absent_days"] == one_day["absent_days"] - 1
+
+    client.put("/api/settings", headers=auth, json={"payroll_absence_multiplier": 2})

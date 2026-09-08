@@ -22,8 +22,9 @@ DEFAULTS: dict[str, str] = {
     "payroll_overtime_multiplier": "1.5",
     # خصم التأخير: proportional = بمقدار زمن التأخير، none = بدون خصم
     "payroll_late_deduction_mode": "proportional",
-    # معامل خصم يوم الغياب (1 = أجر يوم كامل)
-    "payroll_absence_multiplier": "1",
+    # عدد أيام الأجر التي تُخصم عن كل يوم غياب بدون إذن (2 = أجر يومين عن اليوم الواحد).
+    # الغياب بإذن يُسجَّل إجازة: بدون راتب = يوم واحد، أو إجازة مدفوعة = بلا خصم.
+    "payroll_absence_multiplier": "2",
     # أساس احتساب الخصومات وأجر اليوم: total = الأساسي + البدلات، basic = الأساسي فقط
     "payroll_deduction_base": "total",
     # ------------------------------ المخالفات ------------------------------

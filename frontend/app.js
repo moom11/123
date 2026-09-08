@@ -1661,7 +1661,9 @@ settingsTabs.payrollRules = async () => {
         <div class="field"><label>خصم التأخير</label><select id="pyLate">
           <option value="proportional" ${st.payroll_late_deduction_mode === 'proportional' ? 'selected' : ''}>بمقدار زمن التأخير</option>
           <option value="none" ${st.payroll_late_deduction_mode === 'none' ? 'selected' : ''}>بدون خصم</option></select></div>
-        <div class="field"><label>معامل خصم يوم الغياب</label><input type="number" step="0.5" id="pyAbs" value="${st.payroll_absence_multiplier}" /></div>
+        <div class="field"><label>خصم يوم الغياب بدون إذن (بالأيام)</label>
+          <input type="number" step="0.5" min="0" max="3" id="pyAbs" value="${st.payroll_absence_multiplier}" />
+          <div class="help">2 = يُخصم أجر يومين عن كل يوم غياب بدون إذن.</div></div>
         <div class="field"><label>أساس احتساب الخصم وأجر اليوم</label><select id="pyBase">
           <option value="total" ${st.payroll_deduction_base !== 'basic' ? 'selected' : ''}>الأساسي + البدلات (الإجمالي)</option>
           <option value="basic" ${st.payroll_deduction_base === 'basic' ? 'selected' : ''}>الأساسي فقط</option></select></div>
@@ -1670,7 +1672,9 @@ settingsTabs.payrollRules = async () => {
       </div>
       <button class="btn" id="pySave">حفظ القواعد</button>
       <div class="help">نظام العمل السعودي: أجر الساعة الإضافية = أجر الساعة + 50% (المعامل 1.5)،
-        والمخالفة تُمحى من سجل التكرار بعد 180 يوماً.</div>
+        والمخالفة تُمحى من سجل التكرار بعد 180 يوماً.<br>
+        الغياب <b>بدون إذن</b> يُخصم بالمعامل أعلاه، أما الغياب <b>بإذن</b> فيُسجَّل إجازة:
+        «إجازة بدون راتب» تُخصم يوماً واحداً فقط، والإجازة المدفوعة بلا خصم.</div>
     </div></div>`;
   el('pySave').onclick = async () => {
     try {
