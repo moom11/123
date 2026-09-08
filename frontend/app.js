@@ -1946,7 +1946,9 @@ views.reports = async () => {
       <button class="btn" id="rLoad">عرض الملخص الشهري</button>
       <button class="btn ghost" id="rExport">تصدير CSV</button>
     </div></div>
-    <div class="card"><div class="card-head"><h3>الملخص الشهري</h3></div><div id="rTable"><div class="empty">جارٍ التحميل…</div></div></div>
+    <div class="grid cols-4 stagger" id="rKpis"></div>
+    <div class="card"><div class="card-head"><h3>الملخص الشهري</h3></div>
+      <div id="rTable"><div class="sk-rows">${'<div class="sk line"></div>'.repeat(4)}</div></div></div>
     <div class="card"><div class="card-head"><h3>تقرير الاستثناءات (غياب / تأخير / انصراف ناقص)</h3></div>
       <div class="card-body inline">
         <div class="field"><label>من</label><input type="date" id="xFrom" value="${monthStart()}" /></div>
@@ -1958,12 +1960,34 @@ views.reports = async () => {
     const q = new URLSearchParams({ year: el('rYear').value, month: el('rMonth').value });
     if (el('rDep').value) q.set('department_id', el('rDep').value);
     const rows = await api('/api/reports/monthly?' + q);
+    const sum = (key) => rows.reduce((total, r) => total + (r[key] || 0), 0);
+    el('rKpis').innerHTML = rows.length ? `
+      <div class="kpi ok"><div class="label">أيام الحضور<span class="ico">✅</span></div>
+        <div class="value ok">${sum('present_days')}</div><div class="foot">${rows.length} موظف</div></div>
+      <div class="kpi danger"><div class="label">أيام الغياب<span class="ico">⛔</span></div>
+        <div class="value danger">${sum('absent_days')}</div></div>
+      <div class="kpi warn"><div class="label">دقائق التأخير<span class="ico">⏰</span></div>
+        <div class="value warn">${sum('late_minutes')}</div><div class="foot">${sum('late_days')} يوم تأخير</div></div>
+      <div class="kpi primary"><div class="label">ساعات العمل<span class="ico">🕒</span></div>
+        <div class="value">${Math.round(sum('worked_hours'))}</div>
+        <div class="foot">إضافي ${sum('overtime_minutes')} دقيقة</div></div>` : '';
     el('rTable').innerHTML = table(
-      ['رقم الموظف', 'الاسم', 'الإدارة', 'حضور', 'تأخير', 'غياب', 'إجازات', 'ساعات العمل', 'دقائق تأخير', 'إضافي (د)'],
+      ['الموظف', 'الإدارة', 'حضور', 'تأخير', 'غياب', 'إجازات', 'نسبة الحضور', 'ساعات العمل', 'دقائق تأخير', 'إضافي (د)'],
       rows,
-      (r) => `<tr><td>${esc(r.employee_code)}</td><td>${esc(r.employee_name)}</td><td>${esc(r.department_name || '—')}</td>
+      (r) => {
+        const counted = r.present_days + r.late_days + r.absent_days;
+        const pct = counted ? Math.round(((r.present_days + r.late_days) / counted) * 100) : 0;
+        const tone = pct >= 90 ? 'ok' : pct >= 75 ? 'warn' : 'danger';
+        return `<tr>
+        <td><div style="display:flex;align-items:center;gap:9px">${avatar(r.employee_name, 'sm')}
+          <div><div style="font-weight:600">${esc(r.employee_name)}</div>
+          <div class="muted" style="font-size:11.5px">${esc(r.employee_code)}</div></div></div></td>
+        <td>${esc(r.department_name || '—')}</td>
         <td>${r.present_days}</td><td>${r.late_days}</td><td>${r.absent_days}</td><td>${r.leave_days}</td>
-        <td>${r.worked_hours}</td><td>${r.late_minutes}</td><td>${r.overtime_minutes}</td></tr>`);
+        <td style="min-width:120px"><div class="progress ${tone}" title="${pct}%"><i style="width:${pct}%"></i></div>
+          <span class="muted" style="font-size:11.5px">${pct}%</span></td>
+        <td>${r.worked_hours}</td><td>${r.late_minutes}</td><td>${r.overtime_minutes}</td></tr>`;
+      });
   };
   el('rLoad').onclick = () => loadMonthly().catch((e) => toast(e.message, 'err'));
   el('rExport').onclick = () => downloadCsv(
@@ -1974,7 +1998,7 @@ views.reports = async () => {
       ['التاريخ', 'رقم الموظف', 'الاسم', 'الحالة', 'الحضور', 'الانصراف', 'تأخير (د)', 'خروج مبكر (د)'],
       rows,
       (r) => `<tr><td>${r.work_date}</td><td>${esc(r.employee_code)}</td><td>${esc(r.employee_name)}</td>
-        <td>${esc(r.status)}</td><td>${esc(r.check_in || '—')}</td><td>${esc(r.check_out || '—')}</td>
+        <td><span class="tag ${r.status === 'غائب' ? 'absent' : r.status === 'متأخر' ? 'late' : 'missing_out'}">${esc(r.status)}</span></td><td>${esc(r.check_in || '—')}</td><td>${esc(r.check_out || '—')}</td>
         <td>${r.late_minutes}</td><td>${r.early_leave_minutes}</td></tr>`,
       'لا توجد استثناءات في هذه الفترة');
   };
