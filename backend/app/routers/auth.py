@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import User
+from ..models import Employee, User
 from ..schemas import PasswordChange, Token, UserOut
 from ..security import create_access_token, get_current_user, hash_password, verify_password
 from ..services import audit
@@ -26,11 +26,46 @@ def user_out(user: User) -> UserOut:
     )
 
 
+def normalize_phone(value: str | None) -> str:
+    """يوحّد صيغة رقم الجوال: أرقام فقط، ويحوّل 9665… و+9665… إلى 05…"""
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    if digits.startswith("00966"):
+        digits = digits[5:]
+    elif digits.startswith("966"):
+        digits = digits[3:]
+    if len(digits) == 9 and digits.startswith("5"):
+        digits = "0" + digits
+    return digits
+
+
+def find_login_user(db: Session, identifier: str) -> User | None:
+    """يقبل اسم المستخدم أو رقم جوال الموظف (بأي صيغة معتادة)."""
+    identifier = (identifier or "").strip()
+    user = db.scalar(select(User).where(User.username == identifier))
+    if user:
+        return user
+
+    phone = normalize_phone(identifier)
+    if len(phone) < 9:
+        return None
+    matches = [
+        employee
+        for employee in db.scalars(select(Employee).where(Employee.phone.is_not(None))).all()
+        if normalize_phone(employee.phone) == phone
+    ]
+    if len(matches) != 1:
+        # رقم غير موجود، أو مشترك بين أكثر من موظف: لا نخمّن
+        return None
+    return db.scalar(select(User).where(User.employee_id == matches[0].id))
+
+
 @router.post("/login", response_model=Token)
 def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = db.scalar(select(User).where(User.username == form.username))
+    user = find_login_user(db, form.username)
     if not user or not verify_password(form.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="اسم المستخدم أو كلمة المرور غير صحيحة")
+        raise HTTPException(
+            status_code=401, detail="اسم المستخدم أو رقم الجوال أو كلمة المرور غير صحيحة"
+        )
     if not user.is_active:
         raise HTTPException(status_code=403, detail="الحساب موقوف، راجع مدير النظام")
     audit.log(db, user, "login", "user", user.id, f"دخول {user.username}")

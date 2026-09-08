@@ -1305,7 +1305,9 @@ views.employees = async () => {
         <div class="field"><label>كلمة المرور</label><input id="uPass" type="text" value="Aa123456" /></div>
         <div class="field"><label>الصلاحية</label><select id="uRole">
           <option value="employee">موظف</option><option value="manager">مدير إدارة</option>
-          <option value="hr">موارد بشرية</option><option value="admin">مدير النظام</option></select></div>`,
+          <option value="hr">موارد بشرية</option><option value="admin">مدير النظام</option></select></div>
+        <div class="help">يستطيع الموظف الدخول باسم المستخدم أعلاه <b>أو برقم جواله المسجّل في ملفه</b>
+          (بأي صيغة: 05… أو ‎+966…‎). تأكّد أن رقم جواله مسجّل وغير مكرر مع موظف آخر.</div>`,
       footer: `<button class="btn" id="uSave">إنشاء</button><button class="btn gray" data-close>إلغاء</button>`,
       onOpen: (root) => { $('#uSave', root).onclick = async () => {
         try {

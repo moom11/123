@@ -1546,3 +1546,42 @@ def test_push_is_signed_and_encrypted(client, auth):
         server.shutdown()
         client.post("/api/push/unsubscribe", headers=auth,
                     json={"endpoint": f"http://127.0.0.1:{port}/push/device"})
+
+
+# ------------------------------ الدخول برقم الجوال ------------------------------
+def test_login_with_phone_number(client, auth):
+    """الموظف يدخل باسم المستخدم أو برقم جواله بأي صيغة معتادة."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9950", "full_name": "موظف الجوال", "phone": "0533221100"}).json()
+    client.post("/api/users", headers=auth, json={
+        "username": "phone_emp", "password": "Aa123456", "role": "employee",
+        "employee_id": emp["id"]})
+
+    for identifier in ("phone_emp", "0533221100", "+966533221100", "966533221100", "0533 221 100"):
+        res = client.post("/api/auth/login", data={"username": identifier, "password": "Aa123456"})
+        assert res.status_code == 200, f"فشل الدخول بـ {identifier}: {res.text}"
+        assert res.json()["user"]["username"] == "phone_emp"
+
+    # كلمة مرور خاطئة تبقى مرفوضة
+    assert client.post("/api/auth/login", data={
+        "username": "0533221100", "password": "wrong"}).status_code == 401
+    # رقم غير مسجّل
+    assert client.post("/api/auth/login", data={
+        "username": "0559999999", "password": "Aa123456"}).status_code == 401
+
+
+def test_phone_shared_by_two_employees_is_rejected(client, auth):
+    """رقم مشترك بين موظفَين لا يُستخدم للدخول (لا تخمين)."""
+    first = client.post("/api/employees", headers=auth, json={
+        "code": "9951", "full_name": "أخ أول", "phone": "0555555555"}).json()
+    client.post("/api/employees", headers=auth, json={
+        "code": "9952", "full_name": "أخ ثانٍ", "phone": "0555555555"})
+    client.post("/api/users", headers=auth, json={
+        "username": "shared_phone", "password": "Aa123456", "role": "employee",
+        "employee_id": first["id"]})
+
+    assert client.post("/api/auth/login", data={
+        "username": "0555555555", "password": "Aa123456"}).status_code == 401
+    # واسم المستخدم ما زال يعمل
+    assert client.post("/api/auth/login", data={
+        "username": "shared_phone", "password": "Aa123456"}).status_code == 200
