@@ -1159,3 +1159,57 @@ def test_daily_quote_respects_disable_switch(client, auth):
         settings_store.set_many(db, {"daily_quote_enabled": False, "daily_quote_last_sent": ""})
         assert send_daily_quote(db) == 0
         settings_store.set_many(db, {"daily_quote_enabled": True})
+
+
+# ------------------------------ النسخ الاحتياطي ------------------------------
+def test_backup_download_contains_database_and_uploads(client, auth):
+    """النسخة تحوي قاعدة بيانات قابلة للفتح، والمرفقات، وملف تعليمات."""
+    import io as _io
+    import json as _json
+    import sqlite3
+    import tarfile
+    import tempfile
+    from pathlib import Path as _Path
+
+    # مرفق حقيقي حتى نتأكد من ضمّه
+    png = bytes.fromhex(
+        "89504e470d0a1a0a0000000d494844520000000100000001080600000"
+        "01f15c4890000000a49444154789c6360000002000100ffff03000006000557bfabd40000000049454e44ae426082"
+    )
+    client.post("/api/branding/logo", headers=auth, files={"file": ("logo.png", png, "image/png")})
+
+    info = client.get("/api/backup/info", headers=auth).json()
+    assert info["records"]["employees"] > 0
+
+    res = client.get("/api/backup/download", headers=auth)
+    assert res.status_code == 200, res.text
+    assert res.headers["content-type"] == "application/gzip"
+    assert "hr-backup-" in res.headers["content-disposition"]
+
+    with tarfile.open(fileobj=_io.BytesIO(res.content), mode="r:gz") as tar:
+        names = tar.getnames()
+        assert "manifest.json" in names
+        assert "hr.db" in names
+        assert any(n.startswith("uploads/") for n in names), "المرفقات غير مضمّنة"
+
+        manifest = _json.loads(tar.extractfile("manifest.json").read().decode("utf-8"))
+        assert manifest["records"]["employees"] == info["records"]["employees"]
+        assert "restore" in manifest
+
+        # قاعدة البيانات المستخرجة تُفتح فعلاً وتحوي الموظفين
+        with tempfile.TemporaryDirectory() as tmp:
+            tar.extract("hr.db", path=tmp)
+            with sqlite3.connect(_Path(tmp) / "hr.db") as conn:
+                count = conn.execute("SELECT COUNT(*) FROM employees").fetchone()[0]
+                assert count == info["records"]["employees"]
+                tables = {r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+                assert {"punches", "leave_requests", "violations", "payslips"} <= tables
+
+
+def test_backup_requires_hr_role(client, auth):
+    token = client.post("/api/auth/login", data={
+        "username": "viol_emp", "password": "Aa123456"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+    assert client.get("/api/backup/download", headers=h).status_code == 403
+    assert client.get("/api/backup/info", headers=h).status_code == 403

@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# نسخة احتياطية لنظام الموارد البشرية ورفعها إلى جوجل درايف عبر rclone.
+# يُستدعى من مؤقّت systemd يومياً. الإعدادات من /etc/hr-backup.env
+set -euo pipefail
+
+DATA_DIR="${HR_DATA_DIR:-/opt/hr/data}"
+LOCAL_DIR="${HR_BACKUP_DIR:-/var/backups/hr}"
+REMOTE="${HR_RCLONE_REMOTE:-gdrive:HR-Backups}"
+KEEP_DAYS="${HR_BACKUP_KEEP_DAYS:-14}"
+RCLONE_CONF="${HR_RCLONE_CONFIG:-/root/.config/rclone/rclone.conf}"
+
+STAMP="$(date +%F_%H%M)"
+ARCHIVE="${LOCAL_DIR}/hr-backup-${STAMP}.tar.gz"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+mkdir -p "$LOCAL_DIR"
+
+# نسخة متسقة من قاعدة SQLite حتى أثناء عمل النظام
+if [ -f "${DATA_DIR}/hr.db" ]; then
+  sqlite3 "${DATA_DIR}/hr.db" ".backup '${TMP}/hr.db'"
+fi
+
+# المرفقات (وثائق، مرفقات إجازات ومخالفات، الشعار)
+if [ -d "${DATA_DIR}/uploads" ]; then
+  cp -r "${DATA_DIR}/uploads" "${TMP}/uploads"
+fi
+
+cat > "${TMP}/manifest.json" <<JSON
+{
+  "created_at": "$(date -Is)",
+  "host": "$(hostname)",
+  "restore": "انسخ hr.db و uploads/ إلى ${DATA_DIR} ثم: sudo systemctl restart hr"
+}
+JSON
+
+tar czf "$ARCHIVE" -C "$TMP" .
+echo "أُنشئت النسخة: $ARCHIVE ($(du -h "$ARCHIVE" | cut -f1))"
+
+# الرفع إلى جوجل درايف
+if command -v rclone >/dev/null 2>&1 && [ -f "$RCLONE_CONF" ]; then
+  rclone copy "$ARCHIVE" "$REMOTE" --config "$RCLONE_CONF" --retries 3
+  echo "رُفعت إلى ${REMOTE}"
+  # حذف النسخ القديمة على درايف
+  rclone delete "$REMOTE" --min-age "${KEEP_DAYS}d" --config "$RCLONE_CONF" 2>/dev/null || true
+else
+  echo "تحذير: rclone غير مهيأ — النسخة محفوظة محلياً فقط في $LOCAL_DIR" >&2
+fi
+
+# تنظيف النسخ المحلية القديمة
+find "$LOCAL_DIR" -name 'hr-backup-*.tar.gz' -mtime "+${KEEP_DAYS}" -delete

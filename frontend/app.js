@@ -1320,6 +1320,7 @@ views.settings = async () => {
       <button data-tab="violationTypes">المخالفات والجزاءات</button>
       <button data-tab="payrollRules">قواعد الرواتب</button>
       <button data-tab="branding">هوية المنشأة</button>
+      <button data-tab="backup">النسخ الاحتياطي</button>
       <button data-tab="sheets">ربط جوجل شيت</button>
       <button data-tab="audit">سجل التدقيق</button>
       ${can('admin') ? '<button data-tab="users">المستخدمون</button>' : ''}
@@ -1756,6 +1757,67 @@ settingsTabs.branding = async () => {
     try { const r = await api('/api/branding/send-quote', { method: 'POST' });
       toast(`أُرسلت العبارة إلى ${r.sent} مستخدم`, 'ok'); refreshBell(); }
     catch (e) { toast(e.message, 'err'); }
+  };
+};
+
+settingsTabs.backup = async () => {
+  const info = await api('/api/backup/info');
+  el('setBody').innerHTML = `
+    <div class="card"><div class="card-head"><h3>النسخة الاحتياطية</h3></div>
+      <div class="card-body">
+        <div class="help" style="margin-bottom:16px;line-height:2.1">
+          تُنزّل نسخة كاملة تحوي <b>قاعدة البيانات</b> و<b>كل المرفقات</b>
+          (وثائق الموظفين، مرفقات الإجازات والمخالفات، الشعار) في ملف واحد مضغوط،
+          مع ملف تعليمات الاسترجاع بداخله.
+          <br>احفظها في جوجل درايف أو على جهازك — المهم أن تكون <b>خارج الخادم</b>.
+        </div>
+        <div class="grid cols-3" style="margin-bottom:16px">
+          <div class="kpi"><div class="label">حجم البيانات</div><div class="value">${info.size_mb} م.ب</div></div>
+          <div class="kpi"><div class="label">الموظفون</div><div class="value">${info.records.employees}</div></div>
+          <div class="kpi"><div class="label">البصمات</div><div class="value">${info.records.punches}</div></div>
+        </div>
+        <button class="btn ok" id="bkDownload">⬇️ تنزيل نسخة احتياطية الآن</button>
+        <span class="help" id="bkStatus" style="margin-right:12px"></span>
+      </div>
+    </div>
+
+    <div class="card"><div class="card-head"><h3>الأتمتة والاسترجاع</h3></div>
+      <div class="card-body help" style="line-height:2.1">
+        <b>نسخة يومية تلقائية على الخادم</b> (نفّذها مرة واحدة عبر SSH):
+        <br><code>sudo crontab -e</code> ثم أضف السطر:
+        <br><code>0 2 * * * tar czf /var/backups/hr-$(date +\%F).tar.gz -C /opt/hr data && find /var/backups -name 'hr-*.tar.gz' -mtime +14 -delete</code>
+        <br><span class="muted">تحفظ نسخة كل ليلة 2 صباحاً وتبقي آخر 14 يوماً — لكنها على نفس الخادم،
+        فلا تُغني عن تنزيل نسخة خارجية بين حين وآخر.</span>
+        <br><br>
+        <b>الاسترجاع:</b> فك ضغط الملف، انسخ <code>hr.db</code> و<code>uploads/</code> إلى
+        <code>/opt/hr/data</code> على الخادم، ثم <code>sudo systemctl restart hr</code>.
+      </div>
+    </div>`;
+
+  el('bkDownload').onclick = async () => {
+    const btn = el('bkDownload');
+    btn.disabled = true;
+    el('bkStatus').textContent = 'جارٍ تجهيز النسخة…';
+    try {
+      const res = await fetch('/api/backup/download', {
+        headers: { Authorization: 'Bearer ' + state.token },
+      });
+      if (!res.ok) throw new Error('تعذّر إنشاء النسخة');
+      const blob = await res.blob();
+      const name = (res.headers.get('content-disposition') || '').match(/filename="?([^";]+)/);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name ? name[1] : 'hr-backup.tar.gz';
+      a.click();
+      URL.revokeObjectURL(a.href);
+      el('bkStatus').textContent = `تم التنزيل (${(blob.size / 1048576).toFixed(2)} م.ب) — ارفعها إلى جوجل درايف.`;
+      toast('تم تنزيل النسخة الاحتياطية', 'ok');
+    } catch (e) {
+      el('bkStatus').textContent = e.message;
+      toast(e.message, 'err');
+    } finally {
+      btn.disabled = false;
+    }
   };
 };
 

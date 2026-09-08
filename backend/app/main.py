@@ -15,6 +15,7 @@ from .database import SessionLocal
 from .routers import (
     attendance,
     auth,
+    backup,
     branding,
     devices,
     employees,
@@ -105,6 +106,7 @@ for router in (
     violations.router,
     payroll.router,
     branding.router,
+    backup.router,
     hr_extra.router,
     sheets.router,
     reports.router,
