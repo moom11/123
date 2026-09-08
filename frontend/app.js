@@ -937,6 +937,40 @@ function downloadCsv(url, filename) {
     .catch((e) => toast(e.message, 'err'));
 }
 
+/** يفتح صفحة HTML محمية (قسيمة راتب) في تبويب جديد مع ترويسة المصادقة */
+async function openAuthedDocument(url, fallbackTitle = 'مستند') {
+  const tab = window.open('', '_blank');
+  if (tab) {
+    tab.document.write(
+      `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8">
+       <title>${esc(fallbackTitle)}</title></head>
+       <body style="font-family:Tahoma;padding:40px;text-align:center;color:#66798a">
+       جارٍ تجهيز المستند…</body></html>`);
+  }
+  try {
+    const res = await fetch(url, { headers: { Authorization: 'Bearer ' + state.token } });
+    if (!res.ok) {
+      let message = 'تعذر فتح المستند';
+      try { message = (await res.json()).detail || message; } catch (e) { /* تجاهل */ }
+      throw new Error(message);
+    }
+    const html = await res.text();
+    if (tab) {
+      tab.document.open();
+      tab.document.write(html);
+      tab.document.close();
+    } else {
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      window.open(URL.createObjectURL(blob), '_blank');
+    }
+  } catch (e) {
+    if (tab) tab.close();
+    toast(e.message, 'err');
+  }
+}
+window.printPayslip = (id) => openAuthedDocument(`/api/payroll/payslips/${id}/print`, 'قسيمة راتب');
+window.printRun = (id) => openAuthedDocument(`/api/payroll/runs/${id}/print`, 'قسائم الرواتب');
+
 /* ------------------------------ سجل البصمات ------------------------------ */
 views.punches = async () => {
   const { employees } = await loadLookups();
@@ -1974,6 +2008,7 @@ views.payroll = async () => {
         <td class="money">${money(r.deductions_total)}</td><td class="money">${money(r.overtime_total)}</td>
         <td class="money">${money(r.net_total)}</td>
         <td><button class="btn sm" onclick="openRun(${r.id})">عرض القسائم</button>
+            <button class="btn sm ghost" onclick="printRun(${r.id})">🖨 القسائم PDF</button>
             <button class="btn sm ghost" onclick="exportRun(${r.id})">CSV</button>
             ${r.status !== 'approved' ? `<button class="btn sm ok" onclick="approveRun(${r.id})">اعتماد</button>
               <button class="btn sm danger" onclick="deleteRun(${r.id})">حذف</button>` : ''}</td></tr>`,
@@ -2009,7 +2044,8 @@ views.payroll = async () => {
           <td class="money">${money(s.loan_deduction)}</td>
           <td class="money">${money(s.overtime_amount)}</td><td class="money">${money(s.other_additions)}</td>
           <td class="money">${money(s.other_deductions)}</td><td class="money"><b>${money(s.net_pay)}</b></td>
-          <td>${locked ? '' : `<button class="btn sm ghost" onclick="adjustSlip(${s.id},${s.other_additions},${s.other_deductions})">تعديل</button>`}</td></tr>`,
+          <td><button class="btn sm ghost" onclick="printPayslip(${s.id})">🖨 قسيمة</button>
+            ${locked ? '' : `<button class="btn sm ghost" onclick="adjustSlip(${s.id},${s.other_additions},${s.other_deductions})">تعديل</button>`}</td></tr>`,
         'لا توجد قسائم')}
       </div>`;
   };
@@ -2048,7 +2084,7 @@ views.payroll = async () => {
 async function myPayslipsView() {
   const slips = await api('/api/payroll/my-payslips');
   render(`<div class="card"><div class="card-head"><h3>قسائم رواتبي</h3></div>
-    ${table(['الشهر', 'الراتب الأساسي', 'البدلات', 'أيام الحضور', 'أيام الغياب', 'خصومات', 'قسط السلفة', 'بدل الإضافي', 'صافي الراتب'],
+    ${table(['الشهر', 'الراتب الأساسي', 'البدلات', 'أيام الحضور', 'أيام الغياب', 'خصومات', 'قسط السلفة', 'بدل الإضافي', 'صافي الراتب', ''],
       slips,
       (s) => {
         const deductions = s.absence_deduction + s.late_deduction + s.unpaid_leave_deduction
@@ -2056,7 +2092,8 @@ async function myPayslipsView() {
         return `<tr><td>مسير ${s.run_id}</td><td class="money">${money(s.basic_salary)}</td>
           <td class="money">${money(s.allowances)}</td><td>${s.present_days}</td><td>${s.absent_days}</td><td class="money">${money(deductions)}</td>
           <td class="money">${money(s.loan_deduction)}</td>
-          <td class="money">${money(s.overtime_amount)}</td><td class="money"><b>${money(s.net_pay)}</b></td></tr>`;
+          <td class="money">${money(s.overtime_amount)}</td><td class="money"><b>${money(s.net_pay)}</b></td>
+          <td><button class="btn sm ghost" onclick="printPayslip(${s.id})">🖨 قسيمتي</button></td></tr>`;
       },
       'لا توجد قسائم معتمدة بعد')}</div>`);
 }

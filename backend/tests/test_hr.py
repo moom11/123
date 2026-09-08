@@ -1652,3 +1652,51 @@ def test_ensure_accounts_backfill(client, auth):
         "username": "0533000077", "password": "0533000077"}).status_code == 200
     # تشغيلها مرة أخرى لا يُنشئ حسابات مكررة
     assert client.post("/api/employees/ensure-accounts", headers=auth).json()["created"] == 0
+
+
+# ------------------------------ قسيمة الراتب للطباعة ------------------------------
+def test_payslip_print_document(client, auth):
+    """القسيمة تُصدَر HTML جاهزاً للطباعة، وتحوي التفقيط والمكوّنات."""
+    from app.services.payslip_doc import amount_in_words
+
+    assert amount_in_words(1) == "ريال واحد"
+    assert amount_in_words(2) == "ريالان"
+    assert amount_in_words(100) == "مئة ريال"
+    assert amount_in_words(1500.50) == "ألف وخمسمئة ريال وخمسون هللة"
+    assert amount_in_words(0) == "صفر ريال"
+
+    today = date.today()
+    runs = client.get("/api/payroll/runs", headers=auth).json()
+    run = next(r for r in runs if r["year"] == today.year and r["month"] == today.month)
+    slips = client.get(f"/api/payroll/runs/{run['id']}/payslips", headers=auth).json()
+    slip = slips[0]
+
+    res = client.get(f"/api/payroll/payslips/{slip['id']}/print", headers=auth)
+    assert res.status_code == 200
+    assert "text/html" in res.headers["content-type"]
+    html = res.text
+    assert "قسيمة راتب" in html
+    assert slip["employee_name"] in html
+    assert "صافي الراتب المستحق" in html
+    assert "إجمالي الاستقطاعات" in html
+    assert "توقيع الموظف" in html
+    assert "window.print()" in html
+
+    whole = client.get(f"/api/payroll/runs/{run['id']}/print", headers=auth)
+    assert whole.status_code == 200
+    assert whole.text.count('class="slip"') == len(slips)
+
+
+def test_employee_prints_only_own_approved_payslip(client, auth):
+    """الموظف يطبع قسيمته المعتمدة فقط، ولا يصل قسيمة غيره."""
+    token = client.post("/api/auth/login", data={
+        "username": "viol_emp", "password": "Aa123456"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+    mine = client.get("/api/payroll/my-payslips", headers=h).json()
+    assert mine, "يفترض وجود قسيمة معتمدة للموظف"
+    assert client.get(f"/api/payroll/payslips/{mine[0]['id']}/print", headers=h).status_code == 200
+
+    others = client.get(f"/api/payroll/runs/{mine[0]['run_id']}/payslips", headers=auth).json()
+    other = next(s for s in others if s["employee_id"] != mine[0]["employee_id"])
+    assert client.get(f"/api/payroll/payslips/{other['id']}/print", headers=h).status_code == 403
+    assert client.get(f"/api/payroll/runs/{mine[0]['run_id']}/print", headers=h).status_code == 403

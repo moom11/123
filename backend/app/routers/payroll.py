@@ -6,14 +6,16 @@ import io
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.responses import HTMLResponse
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import PayrollRun, PayrollStatus, Payslip, Role, User
 from ..schemas import PayrollRunOut, PayslipAdjust, PayslipOut
-from ..security import get_current_user, require_hr
-from ..services import audit, notifications, sheets
+from ..models import Employee
+from ..security import can_view_employee, get_current_user, require_hr
+from ..services import audit, notifications, payslip_doc, sheets
 from ..services import payroll as service
 
 router = APIRouter(prefix="/api/payroll", tags=["payroll"])
@@ -140,7 +142,7 @@ def approve_run(run_id: int, db: Session = Depends(get_db), user: User = Depends
         notifications.notify_employee(
             db, slip.employee_id,
             f"قسيمة راتب {run.month}/{run.year} جاهزة",
-            body=f"صافي الراتب: {slip.net_pay} ريال",
+            body=f"صافي الراتب: {slip.net_pay:,.2f} ريال — افتح «الرواتب» لطباعة قسيمتك أو حفظها PDF",
             category="payroll", link_page="payroll", commit=False,
         )
     db.commit()
@@ -176,6 +178,41 @@ def my_payslips(db: Session = Depends(get_db), user: User = Depends(get_current_
         )
     ).all()
     return [payslip_out(s) for s in sorted(slips, key=lambda s: s.run_id, reverse=True)]
+
+
+@router.get("/payslips/{payslip_id}/print", response_class=HTMLResponse)
+def print_payslip(payslip_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """قسيمة راتب جاهزة للطباعة أو الحفظ PDF من المتصفح."""
+    slip = db.get(Payslip, payslip_id)
+    if not slip:
+        raise HTTPException(status_code=404, detail="القسيمة غير موجودة")
+    run = db.get(PayrollRun, slip.run_id)
+    if user.role == Role.employee:
+        if slip.employee_id != user.employee_id:
+            raise HTTPException(status_code=403, detail="لا تملك صلاحية عرض هذه القسيمة")
+        if run.status != PayrollStatus.approved:
+            raise HTTPException(status_code=403, detail="القسيمة غير معتمدة بعد")
+    elif user.role == Role.manager and not can_view_employee(user, slip.employee_id, db):
+        raise HTTPException(status_code=403, detail="لا تملك صلاحية عرض هذا الموظف")
+
+    employee = db.get(Employee, slip.employee_id)
+    title = f"قسيمة راتب {employee.full_name if employee else ''} - {run.month:02d}/{run.year}"
+    return HTMLResponse(payslip_doc.document(db, run, [slip], title))
+
+
+@router.get("/runs/{run_id}/print", response_class=HTMLResponse, dependencies=[Depends(require_hr)])
+def print_run(run_id: int, db: Session = Depends(get_db)):
+    """كل قسائم المسير في مستند واحد، كل قسيمة في صفحة."""
+    run = db.get(PayrollRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="المسير غير موجود")
+    slips = db.scalars(select(Payslip).where(Payslip.run_id == run_id)).all()
+    slips = sorted(slips, key=lambda s: s.employee.code if s.employee else "")
+    if not slips:
+        raise HTTPException(status_code=400, detail="لا توجد قسائم في هذا المسير")
+    return HTMLResponse(
+        payslip_doc.document(db, run, slips, f"قسائم رواتب {run.month:02d}/{run.year}")
+    )
 
 
 @router.get("/runs/{run_id}/export.csv", dependencies=[Depends(require_hr)])
