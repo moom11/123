@@ -49,7 +49,7 @@ DATASETS: dict[str, dict] = {
     },
     "payroll": {
         "sheet": "الرواتب",
-        "headers": ["الفترة", "رقم الموظف", "الاسم", "الأساسي", "أيام الحضور", "أيام الغياب",
+        "headers": ["الفترة", "رقم الموظف", "الاسم", "الأساسي", "البدلات", "أيام الحضور", "أيام الغياب",
                     "خصم الغياب", "خصم التأخير", "خصم المخالفات", "بدل الإضافي", "الصافي"],
     },
 }
@@ -261,6 +261,7 @@ def payslip_rows(run, slips) -> list[list]:
             s.employee.code if s.employee else "",
             s.employee.full_name if s.employee else "",
             s.basic_salary,
+            s.allowances or 0,
             s.present_days,
             s.absent_days,
             s.absence_deduction,

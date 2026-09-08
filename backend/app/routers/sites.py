@@ -118,6 +118,7 @@ def _settings_out(values: dict) -> SettingsOut:
         payroll_overtime_multiplier=float(values["payroll_overtime_multiplier"]),
         payroll_late_deduction_mode=values["payroll_late_deduction_mode"],
         payroll_absence_multiplier=float(values["payroll_absence_multiplier"]),
+        payroll_deduction_base=values.get("payroll_deduction_base") or "total",
         violation_reset_days=int(float(values["violation_reset_days"])),
         document_alert_days=int(float(values["document_alert_days"])),
     )
@@ -133,6 +134,10 @@ def update_settings(
     payload: SettingsIn, db: Session = Depends(get_db), user: User = Depends(require_hr)
 ):
     changes = payload.model_dump(exclude_unset=True)
+    if changes.get("payroll_deduction_base") not in (None, "total", "basic"):
+        raise HTTPException(status_code=400, detail="أساس احتساب الخصم يجب أن يكون الإجمالي أو الأساسي")
+    if changes.get("payroll_late_deduction_mode") not in (None, "proportional", "none"):
+        raise HTTPException(status_code=400, detail="طريقة خصم التأخير غير صحيحة")
     values = settings_store.set_many(db, changes)
     audit.log(
         db, user, "settings", "settings", None,

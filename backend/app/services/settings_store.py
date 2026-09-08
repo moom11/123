@@ -24,6 +24,8 @@ DEFAULTS: dict[str, str] = {
     "payroll_late_deduction_mode": "proportional",
     # معامل خصم يوم الغياب (1 = أجر يوم كامل)
     "payroll_absence_multiplier": "1",
+    # أساس احتساب الخصومات وأجر اليوم: total = الأساسي + البدلات، basic = الأساسي فقط
+    "payroll_deduction_base": "total",
     # ------------------------------ المخالفات ------------------------------
     # المدة التي تُمحى بعدها المخالفة من سجل التكرار (نظام العمل: 180 يوماً)
     "violation_reset_days": "180",

@@ -22,11 +22,11 @@ from . import attendance as attendance_service
 from . import settings_store, violations
 
 
-def _rates(db: Session, basic_salary: float) -> tuple[float, float]:
-    """أجر اليوم وأجر الساعة."""
+def _rates(db: Session, monthly_salary: float) -> tuple[float, float]:
+    """أجر اليوم وأجر الساعة من الأجر الشهري المعتمد."""
     days = settings_store.get_int(db, "payroll_days_per_month", 30) or 30
     hours = settings_store.get_int(db, "payroll_workday_hours", 8) or 8
-    daily = (basic_salary or 0) / days
+    daily = (monthly_salary or 0) / days
     return round(daily, 4), round(daily / hours, 4)
 
 
@@ -34,7 +34,7 @@ def compute_payslip(db: Session, employee: Employee, year: int, month: int) -> d
     """يحسب قسيمة راتب موظف واحد لشهر محدد."""
     last_day = monthrange(year, month)[1]
     start, end = date(year, month, 1), date(year, month, last_day)
-    daily, hourly = _rates(db, employee.basic_salary or 0)
+    daily, hourly = _rates(db, violations.salary_base(db, employee))
 
     rows = db.scalars(
         select(AttendanceDay).where(
@@ -79,14 +79,16 @@ def compute_payslip(db: Session, employee: Employee, year: int, month: int) -> d
     violation_deduction = violations.monthly_deduction(db, employee.id, year, month)
 
     basic = round(employee.basic_salary or 0, 2)
+    allowances = round(employee.allowances or 0, 2)
     net = round(
-        basic + overtime_amount
+        basic + allowances + overtime_amount
         - absence_deduction - unpaid_leave_deduction - late_deduction - violation_deduction,
         2,
     )
     return {
         "employee_id": employee.id,
         "basic_salary": basic,
+        "allowances": allowances,
         "present_days": present_days,
         "absent_days": absent_days,
         "paid_leave_days": paid_leave_days,
@@ -156,6 +158,7 @@ def totals(db: Session, run_id: int) -> dict:
     return {
         "employees": len(slips),
         "basic_total": round(sum(s.basic_salary for s in slips), 2),
+        "allowances_total": round(sum(s.allowances or 0 for s in slips), 2),
         "deductions_total": round(
             sum(
                 s.absence_deduction + s.late_deduction + s.unpaid_leave_deduction

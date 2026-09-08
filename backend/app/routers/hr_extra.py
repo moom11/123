@@ -31,7 +31,7 @@ router = APIRouter(prefix="/api", tags=["hr-extra"])
 
 DOC_ATTACHMENTS = {".pdf", ".png", ".jpg", ".jpeg", ".webp"}
 IMPORT_COLUMNS = ["رقم الموظف", "الاسم", "الإدارة", "المسمى الوظيفي", "الجوال", "البريد",
-                  "الهوية", "تاريخ التعيين", "الراتب الأساسي", "الوردية"]
+                  "الهوية", "تاريخ التعيين", "الراتب الأساسي", "الوردية", "البدلات"]
 
 
 # ------------------------------ الإشعارات ------------------------------
@@ -241,7 +241,7 @@ def import_template(_: User = Depends(require_hr)):
     writer = csv.writer(buffer)
     writer.writerow(IMPORT_COLUMNS)
     writer.writerow(["1001", "عبدالله محمد", "تقنية المعلومات", "مطور", "0500000000",
-                     "a@example.com", "1012345678", "2024-01-15", "9000", "الوردية الصباحية"])
+                     "a@example.com", "1012345678", "2024-01-15", "9000", "الوردية الصباحية", "1500"])
     return Response(
         "﻿" + buffer.getvalue(),
         media_type="text/csv; charset=utf-8",
@@ -264,6 +264,15 @@ def _rows_from_upload(filename: str, content: bytes) -> list[list[str]]:
     text = content.decode("utf-8-sig", errors="ignore")
     delimiter = ";" if text.count(";") > text.count(",") else ","
     return [[c.strip() for c in row] for row in csv.reader(io.StringIO(text), delimiter=delimiter)]
+
+
+def _parse_number(value: str | None) -> float:
+    """يقرأ رقماً من خلية قد تحتوي فواصل آلاف أو رمز عملة."""
+    text = (value or "").replace(",", "").replace("ر.س", "").replace("SAR", "").strip()
+    try:
+        return float(text or 0)
+    except ValueError:
+        return 0.0
 
 
 def _parse_date(value: str):
@@ -298,7 +307,7 @@ def import_employees(
     for index, row in enumerate(rows[1:], start=2):
         if not any((c or "").strip() for c in row):
             continue
-        cells = list(row) + [""] * (10 - len(row))
+        cells = list(row) + [""] * (11 - len(row))
         code, name = (cells[0] or "").strip(), (cells[1] or "").strip()
         if not code or not name:
             report.errors.append(f"السطر {index}: رقم الموظف أو الاسم مفقود")
@@ -312,12 +321,13 @@ def import_employees(
             db.add(department)
             db.flush()
             departments[dep_name] = department
-        shift = shifts.get((cells[9] or "").strip())
+        shift_name = (cells[9] or "").strip()
+        shift = shifts.get(shift_name)
+        if shift_name and shift is None:
+            report.errors.append(f"السطر {index}: الوردية «{shift_name}» غير معرفة، أُضيف الموظف بدون وردية")
 
-        try:
-            salary = float((cells[8] or "0").replace(",", "") or 0)
-        except ValueError:
-            salary = 0.0
+        salary = _parse_number(cells[8])
+        allowances = _parse_number(cells[10])
 
         data = dict(
             full_name=name,
@@ -328,6 +338,7 @@ def import_employees(
             national_id=(cells[6] or "").strip() or None,
             hire_date=_parse_date(cells[7] or ""),
             basic_salary=salary,
+            allowances=allowances,
             shift_id=shift.id if shift else None,
         )
 
@@ -340,7 +351,7 @@ def import_employees(
             report.created += 1
         elif update_existing:
             for key, value in data.items():
-                if value not in (None, "", 0.0) or key in ("basic_salary",):
+                if value not in (None, "", 0.0) or key in ("basic_salary", "allowances"):
                     setattr(employee, key, value)
             report.updated += 1
         else:

@@ -108,6 +108,7 @@ class EmployeeIn(BaseModel):
     manager_id: int | None = None
     hire_date: date | None = None
     basic_salary: float = 0
+    allowances: float = 0
     status: EmployeeStatus = EmployeeStatus.active
 
 
@@ -124,6 +125,7 @@ class EmployeeUpdate(BaseModel):
     manager_id: int | None = None
     hire_date: date | None = None
     basic_salary: float | None = None
+    allowances: float | None = None
     status: EmployeeStatus | None = None
 
 
@@ -144,6 +146,8 @@ class EmployeeOut(ORMModel):
     manager_id: int | None = None
     hire_date: date | None = None
     basic_salary: float = 0
+    allowances: float = 0
+    total_salary: float = 0
     status: EmployeeStatus
     has_user: bool = False
 
@@ -261,6 +265,7 @@ class SettingsOut(BaseModel):
     payroll_overtime_multiplier: float = 1.5
     payroll_late_deduction_mode: str = "proportional"
     payroll_absence_multiplier: float = 1
+    payroll_deduction_base: str = "total"
     violation_reset_days: int = 180
     document_alert_days: int = 30
 
@@ -274,6 +279,7 @@ class SettingsIn(BaseModel):
     payroll_overtime_multiplier: float | None = Field(default=None, ge=1, le=3)
     payroll_late_deduction_mode: str | None = None
     payroll_absence_multiplier: float | None = Field(default=None, ge=0, le=3)
+    payroll_deduction_base: str | None = None
     violation_reset_days: int | None = Field(default=None, ge=30, le=730)
     document_alert_days: int | None = Field(default=None, ge=1, le=365)
 
@@ -632,6 +638,7 @@ class PayrollRunOut(ORMModel):
     approved_at: datetime | None = None
     employees: int = 0
     basic_total: float = 0
+    allowances_total: float = 0
     deductions_total: float = 0
     overtime_total: float = 0
     net_total: float = 0
@@ -645,6 +652,7 @@ class PayslipOut(ORMModel):
     employee_name: str | None = None
     department_name: str | None = None
     basic_salary: float
+    allowances: float = 0
     present_days: int
     absent_days: int
     paid_leave_days: float

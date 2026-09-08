@@ -74,9 +74,17 @@ def penalty_for(vtype: ViolationType, repetition: int) -> tuple[PenaltyAction, f
     return levels[min(max(repetition, 1), 4) - 1]
 
 
+def salary_base(db: Session, employee: Employee) -> float:
+    """الأجر الشهري المعتمد للخصومات: الإجمالي (أساسي + بدلات) أو الأساسي فقط حسب الإعداد."""
+    basic = employee.basic_salary or 0
+    if (settings_store.get(db, "payroll_deduction_base") or "total") == "basic":
+        return basic
+    return basic + (employee.allowances or 0)
+
+
 def daily_wage(db: Session, employee: Employee) -> float:
     days = settings_store.get_int(db, "payroll_days_per_month", 30) or 30
-    return round((employee.basic_salary or 0) / days, 2)
+    return round(salary_base(db, employee) / days, 2)
 
 
 def penalty_amount(

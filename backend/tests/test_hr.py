@@ -671,7 +671,7 @@ def test_payroll_run_computes_deductions(client, auth):
     )
     assert emp["violation_deduction"] == round(approved_amount, 2)
     assert emp["net_pay"] == round(
-        emp["basic_salary"] + emp["overtime_amount"] - emp["absence_deduction"]
+        emp["basic_salary"] + emp["allowances"] + emp["overtime_amount"] - emp["absence_deduction"]
         - emp["late_deduction"] - emp["unpaid_leave_deduction"] - emp["violation_deduction"], 2
     )
 
@@ -1213,3 +1213,70 @@ def test_backup_requires_hr_role(client, auth):
     h = {"Authorization": f"Bearer {token}"}
     assert client.get("/api/backup/download", headers=h).status_code == 403
     assert client.get("/api/backup/info", headers=h).status_code == 403
+
+
+def test_allowances_added_to_salary_and_deduction_base(client, auth):
+    """البدلات تُضاف إلى الصافي، وأجر اليوم يُحتسب من الإجمالي أو الأساسي حسب الإعداد."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9750", "full_name": "جوني بارستا", "job_title": "بارستا",
+        "basic_salary": 800, "allowances": 700}).json()
+    assert emp["allowances"] == 700 and emp["total_salary"] == 1500
+
+    first = date.today().replace(day=1)
+    previous = first - timedelta(days=1)
+    year, month = previous.year, previous.month
+
+    def slip_for(base: str) -> dict:
+        client.put("/api/settings", headers=auth, json={"payroll_deduction_base": base})
+        run = client.post(f"/api/payroll/runs?year={year}&month={month}", headers=auth)
+        assert run.status_code == 201, run.text
+        slips = client.get(f"/api/payroll/runs/{run.json()['id']}/payslips", headers=auth).json()
+        return next(s for s in slips if s["employee_code"] == "9750")
+
+    total_slip = slip_for("total")
+    assert total_slip["basic_salary"] == 800 and total_slip["allowances"] == 700
+    assert total_slip["absent_days"] > 0, "الشهر الماضي بلا بصمات: يجب أن يظهر غياب"
+    assert total_slip["absence_deduction"] == round(
+        total_slip["absent_days"] * round(1500 / 30, 4), 2
+    )
+    assert total_slip["net_pay"] == max(round(
+        800 + 700 + total_slip["overtime_amount"] - total_slip["absence_deduction"]
+        - total_slip["late_deduction"] - total_slip["unpaid_leave_deduction"]
+        - total_slip["violation_deduction"], 2), 0)
+
+    basic_slip = slip_for("basic")
+    assert basic_slip["absence_deduction"] == round(
+        basic_slip["absent_days"] * round(800 / 30, 4), 2
+    )
+    assert basic_slip["absence_deduction"] < total_slip["absence_deduction"]
+
+    client.put("/api/settings", headers=auth, json={"payroll_deduction_base": "total"})
+    assert client.put("/api/settings", headers=auth, json={
+        "payroll_deduction_base": "net"}).status_code == 400
+
+
+def test_import_employees_with_allowances_and_shifts(client, auth):
+    """ملف الاستيراد يقبل عمود البدلات ويربط الموظف بالوردية بالاسم."""
+    content = (
+        "رقم الموظف,الاسم,الإدارة,المسمى الوظيفي,الجوال,البريد,الهوية,تاريخ التعيين,"
+        "الراتب الأساسي,الوردية,البدلات\n"
+        "9800,هاني نادل,الفترة الصباحية,نادل,,,,,\"1,000\",الوردية الصباحية,\"1,000\"\n"
+        "9801,سيف معسل,الفترة المسائية,معسل,,,,,800,الوردية المسائية,1450\n"
+        "9802,موظف بلا وردية,الفترة المسائية,رنر,,,,,500,وردية غير موجودة,1500\n"
+    ).encode("utf-8")
+    report = client.post("/api/employees/import", headers=auth,
+                         files={"file": ("roster.csv", content, "text/csv")}).json()
+    assert report["created"] == 3, report
+
+    morning = client.get("/api/employees?q=9800", headers=auth).json()[0]
+    assert morning["basic_salary"] == 1000 and morning["allowances"] == 1000
+    assert morning["total_salary"] == 2000
+    assert morning["shift_name"] == "الوردية الصباحية"
+
+    evening = client.get("/api/employees?q=9801", headers=auth).json()[0]
+    assert evening["allowances"] == 1450 and evening["shift_name"] == "الوردية المسائية"
+
+    # وردية غير معرفة: يُستورد الموظف مع تنبيه واضح
+    orphan = client.get("/api/employees?q=9802", headers=auth).json()[0]
+    assert orphan["shift_id"] is None
+    assert any("وردية غير موجودة" in e for e in report["errors"])

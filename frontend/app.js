@@ -846,6 +846,8 @@ function employeeModal(emp, departments, shifts, after) {
       <div class="field"><label>موقع العمل (للبصم من التطبيق)</label><select id="fSite"><option value="">كل المواقع المعتمدة</option>${options(state.cache.sites || [], v('site_id'))}</select></div>
       <div class="field"><label>تاريخ التعيين</label><input type="date" id="fHire" value="${v('hire_date')}" /></div>
       <div class="field"><label>الراتب الأساسي</label><input type="number" id="fSalary" value="${v('basic_salary', 0)}" /></div>
+      <div class="field"><label>البدلات</label><input type="number" id="fAllow" value="${v('allowances', 0)}" />
+        <div class="help">إجمالي الراتب = الأساسي + البدلات</div></div>
       <div class="field"><label>الحالة</label><select id="fStatus">
         <option value="active" ${v('status') === 'active' ? 'selected' : ''}>على رأس العمل</option>
         <option value="suspended" ${v('status') === 'suspended' ? 'selected' : ''}>موقوف</option>
@@ -865,6 +867,7 @@ function employeeModal(emp, departments, shifts, after) {
           shift_id: el('fShift').value ? Number(el('fShift').value) : null,
           site_id: el('fSite').value ? Number(el('fSite').value) : null,
           hire_date: el('fHire').value || null, basic_salary: Number(el('fSalary').value || 0),
+          allowances: Number(el('fAllow').value || 0),
           status: el('fStatus').value,
         };
         try {
@@ -1107,12 +1110,13 @@ views.payroll = async () => {
     el('prDetail').innerHTML = `<div class="card">
       <div class="card-head"><h3>قسائم ${MONTHS[run.month - 1]} ${run.year}</h3>
         <span class="muted">صافي المسير: <b class="money">${money(run.net_total)}</b> ريال</span></div>
-      ${table(['رقم الموظف', 'الاسم', 'الأساسي', 'حضور', 'غياب', 'تأخير (د)', 'إضافي (د)',
+      ${table(['رقم الموظف', 'الاسم', 'الأساسي', 'البدلات', 'حضور', 'غياب', 'تأخير (د)', 'إضافي (د)',
                'خصم غياب', 'خصم تأخير', 'إجازة بلا راتب', 'خصم مخالفات', 'بدل إضافي',
                'إضافات', 'خصومات', 'الصافي', ''],
         slips,
         (s) => `<tr><td>${esc(s.employee_code)}</td><td>${esc(s.employee_name)}</td>
-          <td class="money">${money(s.basic_salary)}</td><td>${s.present_days}</td><td>${s.absent_days}</td>
+          <td class="money">${money(s.basic_salary)}</td><td class="money">${money(s.allowances)}</td>
+          <td>${s.present_days}</td><td>${s.absent_days}</td>
           <td>${s.late_minutes}</td><td>${s.overtime_minutes}</td>
           <td class="money">${money(s.absence_deduction)}</td><td class="money">${money(s.late_deduction)}</td>
           <td class="money">${money(s.unpaid_leave_deduction)}</td><td class="money">${money(s.violation_deduction)}</td>
@@ -1157,13 +1161,13 @@ views.payroll = async () => {
 async function myPayslipsView() {
   const slips = await api('/api/payroll/my-payslips');
   render(`<div class="card"><div class="card-head"><h3>قسائم رواتبي</h3></div>
-    ${table(['الشهر', 'الراتب الأساسي', 'أيام الحضور', 'أيام الغياب', 'خصومات', 'بدل الإضافي', 'صافي الراتب'],
+    ${table(['الشهر', 'الراتب الأساسي', 'البدلات', 'أيام الحضور', 'أيام الغياب', 'خصومات', 'بدل الإضافي', 'صافي الراتب'],
       slips,
       (s) => {
         const deductions = s.absence_deduction + s.late_deduction + s.unpaid_leave_deduction
           + s.violation_deduction + s.other_deductions;
         return `<tr><td>مسير ${s.run_id}</td><td class="money">${money(s.basic_salary)}</td>
-          <td>${s.present_days}</td><td>${s.absent_days}</td><td class="money">${money(deductions)}</td>
+          <td class="money">${money(s.allowances)}</td><td>${s.present_days}</td><td>${s.absent_days}</td><td class="money">${money(deductions)}</td>
           <td class="money">${money(s.overtime_amount)}</td><td class="money"><b>${money(s.net_pay)}</b></td></tr>`;
       },
       'لا توجد قسائم معتمدة بعد')}</div>`);
@@ -1658,6 +1662,9 @@ settingsTabs.payrollRules = async () => {
           <option value="proportional" ${st.payroll_late_deduction_mode === 'proportional' ? 'selected' : ''}>بمقدار زمن التأخير</option>
           <option value="none" ${st.payroll_late_deduction_mode === 'none' ? 'selected' : ''}>بدون خصم</option></select></div>
         <div class="field"><label>معامل خصم يوم الغياب</label><input type="number" step="0.5" id="pyAbs" value="${st.payroll_absence_multiplier}" /></div>
+        <div class="field"><label>أساس احتساب الخصم وأجر اليوم</label><select id="pyBase">
+          <option value="total" ${st.payroll_deduction_base !== 'basic' ? 'selected' : ''}>الأساسي + البدلات (الإجمالي)</option>
+          <option value="basic" ${st.payroll_deduction_base === 'basic' ? 'selected' : ''}>الأساسي فقط</option></select></div>
         <div class="field"><label>مدة محو تكرار المخالفة (يوم)</label><input type="number" id="pyReset" value="${st.violation_reset_days}" /></div>
         <div class="field"><label>التنبيه قبل انتهاء الوثيقة (يوم)</label><input type="number" id="pyDoc" value="${st.document_alert_days}" /></div>
       </div>
@@ -1673,6 +1680,7 @@ settingsTabs.payrollRules = async () => {
         payroll_overtime_multiplier: Number(el('pyOt').value),
         payroll_late_deduction_mode: el('pyLate').value,
         payroll_absence_multiplier: Number(el('pyAbs').value),
+        payroll_deduction_base: el('pyBase').value,
         violation_reset_days: Number(el('pyReset').value),
         document_alert_days: Number(el('pyDoc').value) } });
       toast('تم حفظ القواعد', 'ok');

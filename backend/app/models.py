@@ -183,6 +183,7 @@ class Employee(Base):
     manager_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id", ondelete="SET NULL"))
     hire_date: Mapped[date | None] = mapped_column(Date)
     basic_salary: Mapped[float] = mapped_column(Float, default=0.0)
+    allowances: Mapped[float] = mapped_column(Float, default=0.0)  # مجموع البدلات الشهرية
     status: Mapped[EmployeeStatus] = mapped_column(Enum(EmployeeStatus), default=EmployeeStatus.active)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -479,6 +480,7 @@ class Payslip(Base):
     run_id: Mapped[int] = mapped_column(ForeignKey("payroll_runs.id", ondelete="CASCADE"), index=True)
     employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
     basic_salary: Mapped[float] = mapped_column(Float, default=0)
+    allowances: Mapped[float] = mapped_column(Float, default=0)
     present_days: Mapped[int] = mapped_column(Integer, default=0)
     absent_days: Mapped[int] = mapped_column(Integer, default=0)
     paid_leave_days: Mapped[float] = mapped_column(Float, default=0)

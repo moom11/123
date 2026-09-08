@@ -43,6 +43,8 @@ def employee_out(emp: Employee) -> EmployeeOut:
         manager_id=emp.manager_id,
         hire_date=emp.hire_date,
         basic_salary=emp.basic_salary,
+        allowances=emp.allowances or 0,
+        total_salary=round((emp.basic_salary or 0) + (emp.allowances or 0), 2),
         status=emp.status,
         has_user=emp.user is not None,
     )
