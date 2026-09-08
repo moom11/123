@@ -213,9 +213,23 @@ const closeModal = () => { el('modalRoot').innerHTML = ''; };
 
 function table(columns, rows, renderRow, emptyText = 'لا توجد بيانات') {
   if (!rows.length) return `<div class="empty">${esc(emptyText)}</div>`;
-  return `<div class="table-wrap"><table><thead><tr>${
+  const labels = columns.map((c) => esc(c)).join('|');
+  return `<div class="table-wrap"><table class="stack" data-labels="${labels}"><thead><tr>${
     columns.map((c) => `<th>${esc(c)}</th>`).join('')
   }</tr></thead><tbody>${rows.map(renderRow).join('')}</tbody></table></div>`;
+}
+
+/** يضيف data-label لكل خلية (اسم عمودها) ليعمل عرض البطاقات على الجوال */
+function labelTableCells(root = document) {
+  root.querySelectorAll('table.stack[data-labels]').forEach((tbl) => {
+    const labels = (tbl.dataset.labels || '').split('|');
+    tbl.querySelectorAll('tbody tr').forEach((tr) => {
+      [...tr.children].forEach((td, index) => {
+        if (!td.dataset.label && labels[index]) td.dataset.label = labels[index];
+      });
+    });
+    tbl.removeAttribute('data-labels');
+  });
 }
 
 const can = (...roles) => state.user && roles.includes(state.user.role);
@@ -292,6 +306,7 @@ function startApp() {
   el('sideUser').innerHTML = `${esc(state.user.username)} — ${esc(ROLES[state.user.role])}`;
   el('topWho').textContent = state.user.employee_name || ROLES[state.user.role];
   el('selfPunchBtn').classList.toggle('hidden', !state.user.employee_id);
+  buildTabbar();
   refreshBell();
   go(pages.some((p) => p.id === state.page) ? state.page : 'dashboard');
   if (state.user.must_change_password) forcePasswordChange();
@@ -303,13 +318,23 @@ function go(page) {
   const meta = PAGES.find((p) => p.id === page);
   el('pageTitle').textContent = meta ? meta.title : (EXTRA_TITLES[page] || '');
   el('nav').querySelectorAll('a').forEach((a) => a.classList.toggle('active', a.dataset.page === page));
+  markTabbar(page);
   el('view').innerHTML = skeleton(
     page === 'dashboard' ? 'kpis' : page === 'employees' ? 'cards' : 'rows');
   const fn = views[page];
   Promise.resolve(fn ? fn() : '<div class="empty">صفحة غير متاحة</div>')
     .catch((e) => { toast(e.message, 'err'); el('view').innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
 }
-const render = (html) => { el('view').innerHTML = html; };
+const render = (html) => { el('view').innerHTML = html; labelTableCells(el('view')); };
+
+// أي جدول يُدرج لاحقاً (بعد جلب البيانات) يُوسم تلقائياً، مرة واحدة لكل إطار عرض
+let _labelPending = false;
+const _tableObserver = new MutationObserver(() => {
+  if (_labelPending) return;
+  _labelPending = true;
+  requestAnimationFrame(() => { _labelPending = false; labelTableCells(document); });
+});
+_tableObserver.observe(document.documentElement, { childList: true, subtree: true });
 
 /* ------------------------------ إشعارات الجوال ------------------------------ */
 const urlBase64ToUint8Array = (base64) => {
@@ -386,6 +411,38 @@ function toggleMini() {
   localStorage.setItem('hr_sidebar_mini', mini ? '1' : '0');
   el('collapseBtn').textContent = mini ? '⇥' : '⇤';
 }
+const TABBAR_PAGES = {
+  admin: ['dashboard', 'attendance', 'leaves', 'employees'],
+  hr: ['dashboard', 'attendance', 'leaves', 'employees'],
+  manager: ['dashboard', 'attendance', 'leaves', 'reports'],
+  employee: ['dashboard', 'attendance', 'myLeaves', 'payroll'],
+};
+
+function buildTabbar() {
+  const ids = TABBAR_PAGES[state.user.role] || TABBAR_PAGES.employee;
+  const items = ids
+    .map((id) => PAGES.find((p) => p.id === id && p.roles.includes(state.user.role)))
+    .filter(Boolean);
+  const punch = state.user.employee_id
+    ? `<a class="punch" data-action="punch"><span class="ico">🕒</span>بصمة</a>` : '';
+  el('tabbar').innerHTML =
+    items.slice(0, 2).map((p) => tabLink(p)).join('') + punch +
+    items.slice(2).map((p) => tabLink(p)).join('') +
+    `<a data-action="menu"><span class="ico">☰</span>المزيد</a>`;
+  el('tabbar').querySelectorAll('a').forEach((a) => a.onclick = () => {
+    if (a.dataset.action === 'menu') return toggleDrawer();
+    if (a.dataset.action === 'punch') return selfPunch();
+    go(a.dataset.page);
+  });
+  markTabbar(state.page);
+}
+const tabLink = (p) =>
+  `<a data-page="${p.id}"><span class="ico">${p.icon}</span>${esc(p.title.split(' ')[0])}</a>`;
+function markTabbar(page) {
+  el('tabbar').querySelectorAll('a').forEach((a) =>
+    a.classList.toggle('active', a.dataset.page === page));
+}
+
 function initShell() {
   if (localStorage.getItem('hr_sidebar_mini') === '1') {
     el('app').classList.add('mini');
