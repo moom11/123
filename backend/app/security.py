@@ -7,6 +7,7 @@ import bcrypt
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import ACCESS_TOKEN_EXPIRE_MINUTES, ALGORITHM, SECRET_KEY
@@ -74,6 +75,22 @@ def require_roles(*roles: Role):
 require_admin = require_roles(Role.admin)
 require_hr = require_roles(Role.admin, Role.hr)
 require_manager = require_roles(Role.admin, Role.hr, Role.manager)
+
+
+def visible_employee_ids(db: Session, user: User) -> list[int] | None:
+    """قائمة الموظفين المسموح للمستخدم بمشاهدتهم، أو None تعني الجميع (الإدارة والموارد البشرية)."""
+    if user.role in (Role.admin, Role.hr):
+        return None
+    if user.role == Role.manager and user.employee_id:
+        from .models import Employee  # استيراد محلي لتفادي الدوران
+
+        rows = db.scalars(
+            select(Employee.id).where(
+                (Employee.manager_id == user.employee_id) | (Employee.id == user.employee_id)
+            )
+        ).all()
+        return list(rows)
+    return [user.employee_id or 0]
 
 
 def can_view_employee(user: User, employee_id: int, db: Session) -> bool:

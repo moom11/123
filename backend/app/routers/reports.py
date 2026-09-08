@@ -23,7 +23,7 @@ from ..models import (
     User,
 )
 from ..schemas import DashboardStats, MonthlySummaryRow
-from ..security import get_current_user, require_manager
+from ..security import get_current_user, require_manager, visible_employee_ids
 from ..services import attendance as attendance_service
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
@@ -46,7 +46,12 @@ def dashboard(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    employees = db.scalars(select(Employee).where(Employee.status == EmployeeStatus.active)).all()
+    emp_stmt = select(Employee).where(Employee.status == EmployeeStatus.active)
+    allowed = visible_employee_ids(db, user)
+    if allowed is not None:
+        # الموظف يرى مؤشراته وحده، والمدير يرى فريقه
+        emp_stmt = emp_stmt.where(Employee.id.in_(allowed or [0]))
+    employees = db.scalars(emp_stmt).all()
     ids = [e.id for e in employees]
     if ids:
         attendance_service.recompute(db, day - timedelta(days=6), day, ids)
@@ -61,11 +66,15 @@ def dashboard(
     absent = sum(1 for r in rows if r.status == DayStatus.absent)
     on_leave = sum(1 for r in rows if r.status == DayStatus.leave)
 
-    pending = db.scalar(
-        select(func.count(LeaveRequest.id)).where(LeaveRequest.status == LeaveStatus.pending)
-    ) or 0
+    pending_stmt = select(func.count(LeaveRequest.id)).where(
+        LeaveRequest.status == LeaveStatus.pending
+    )
+    if allowed is not None:
+        pending_stmt = pending_stmt.where(LeaveRequest.employee_id.in_(allowed or [0]))
+    pending = db.scalar(pending_stmt) or 0
 
-    devices = db.scalars(select(Device)).all()
+    # أجهزة البصمة شأن إداري: لا تظهر لغير الإدارة والموارد البشرية
+    devices = db.scalars(select(Device)).all() if user.role in (Role.admin, Role.hr) else []
     online = sum(
         1
         for d in devices

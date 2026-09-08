@@ -1323,3 +1323,23 @@ def test_unauthorized_absence_deducts_two_days(client, auth):
     assert excused["absent_days"] == one_day["absent_days"] - 1
 
     client.put("/api/settings", headers=auth, json={"payroll_absence_multiplier": 2})
+
+
+def test_employee_dashboard_shows_only_own_data(client, auth):
+    """الموظف يرى مؤشراته وحده: لا إجمالي موظفين ولا أجهزة ولا طلبات غيره."""
+    token = client.post("/api/auth/login", data={
+        "username": "viol_emp", "password": "Aa123456"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+
+    mine = client.get("/api/reports/dashboard", headers=h).json()
+    assert mine["employees_total"] == 1
+    assert mine["devices_total"] == 0 and mine["devices_online"] == 0
+
+    admin_view = client.get("/api/reports/dashboard", headers=auth).json()
+    assert admin_view["employees_total"] > 1
+    assert mine["pending_leaves"] <= admin_view["pending_leaves"]
+
+    # طلبات الإجازة والبصمات كذلك مقصورة عليه
+    for row in client.get("/api/leave-requests", headers=h).json():
+        assert row["employee_name"] == "موظف الإشعار"
+    assert [e["code"] for e in client.get("/api/employees", headers=h).json()] == ["9301"]

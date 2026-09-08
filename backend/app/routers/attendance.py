@@ -29,7 +29,12 @@ from ..schemas import (
     SelfPunchIn,
     SelfPunchResult,
 )
-from ..security import can_view_employee, get_current_user, require_hr
+from ..security import (
+    can_view_employee,
+    get_current_user,
+    require_hr,
+    visible_employee_ids,
+)
 from ..services import attendance as attendance_service
 from ..services import audit, geo, settings_store, sheets
 
@@ -90,16 +95,7 @@ def day_out(row: AttendanceDay) -> AttendanceDayOut:
 
 def _visible_employee_ids(db: Session, user: User) -> list[int] | None:
     """يعيد قائمة الموظفين المسموح للمستخدم بمشاهدتهم، أو None يعني الجميع."""
-    if user.role in (Role.admin, Role.hr):
-        return None
-    if user.role == Role.manager and user.employee_id:
-        rows = db.scalars(
-            select(Employee.id).where(
-                (Employee.manager_id == user.employee_id) | (Employee.id == user.employee_id)
-            )
-        ).all()
-        return list(rows)
-    return [user.employee_id or 0]
+    return visible_employee_ids(db, user)
 
 
 # ------------------------------ البصمات الخام ------------------------------

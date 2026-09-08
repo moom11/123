@@ -15,8 +15,9 @@ const PAGES = [
   { id: 'dashboard',  title: 'لوحة المؤشرات', icon: '📊', roles: ['admin','hr','manager','employee'] },
   { id: 'attendance', title: 'الحضور اليومي', icon: '🕒', roles: ['admin','hr','manager','employee'] },
   { id: 'punches',    title: 'سجل البصمات',   icon: '🖐', roles: ['admin','hr','manager','employee'] },
-  { id: 'leaves',     title: 'الإجازات',       icon: '🌴', roles: ['admin','hr','manager','employee'] },
-  { id: 'balances',   title: 'أرصدة الإجازات', icon: '⚖️', roles: ['admin','hr','manager','employee'] },
+  { id: 'leaves',     title: 'الإجازات',       icon: '🌴', roles: ['admin','hr','manager'] },
+  { id: 'myLeaves',   title: 'إجازاتي',        icon: '🌴', roles: ['employee'] },
+  { id: 'balances',   title: 'أرصدة الإجازات', icon: '⚖️', roles: ['admin','hr','manager'] },
   { id: 'violations', title: 'المخالفات',      icon: '⚠️', roles: ['admin','hr','manager','employee'] },
   { id: 'payroll',    title: 'الرواتب',        icon: '💰', roles: ['admin','hr','manager','employee'] },
   { id: 'employees',  title: 'الموظفون',       icon: '👥', roles: ['admin','hr','manager'] },
@@ -423,6 +424,11 @@ const options = (items, value, key = 'id', label = 'name') =>
 /* ------------------------------ لوحة المؤشرات ------------------------------ */
 views.dashboard = async () => {
   const stats = await api('/api/reports/dashboard');
+  const mine = state.user.role === 'employee';
+  const myStatus = stats.late ? ['متأخر', 'warn']
+    : stats.on_leave ? ['في إجازة', 'info']
+    : stats.present ? ['حاضر', 'ok']
+    : stats.absent ? ['غياب', 'danger'] : ['لم تُسجَّل بصمة بعد', ''];
   const max = Math.max(1, ...stats.weekly_trend.map((d) => d.present + d.late + d.absent + d.leave));
   const bar = (d) => {
     const seg = (k, v) => v ? `<div class="seg ${k}" style="height:${(v / max) * 100}%" title="${DAY_STATUS[k] || k}: ${v}"></div>` : '';
@@ -432,17 +438,24 @@ views.dashboard = async () => {
   };
   render(`
     <div class="grid cols-4">
+      ${mine ? `
+      <div class="kpi"><div class="label">حالتي اليوم</div>
+        <div class="value ${myStatus[1]}" style="font-size:19px">${myStatus[0]}</div></div>
+      <div class="kpi"><div class="label">طلبات إجازتي المعلّقة</div><div class="value warn">${stats.pending_leaves}</div></div>
+      <div class="kpi"><div class="label">تاريخ اليوم</div><div class="value" style="font-size:19px">${stats.date}</div></div>
+      ` : `
       <div class="kpi"><div class="label">إجمالي الموظفين</div><div class="value">${stats.employees_total}</div></div>
       <div class="kpi"><div class="label">الحضور اليوم</div><div class="value ok">${stats.present}</div></div>
       <div class="kpi"><div class="label">متأخرون</div><div class="value warn">${stats.late}</div></div>
       <div class="kpi"><div class="label">غياب</div><div class="value danger">${stats.absent}</div></div>
       <div class="kpi"><div class="label">في إجازة</div><div class="value info">${stats.on_leave}</div></div>
       <div class="kpi"><div class="label">طلبات إجازة معلّقة</div><div class="value warn">${stats.pending_leaves}</div></div>
-      <div class="kpi"><div class="label">أجهزة البصمة المتصلة</div><div class="value">${stats.devices_online}/${stats.devices_total}</div></div>
+      ${can('admin','hr') ? `<div class="kpi"><div class="label">أجهزة البصمة المتصلة</div><div class="value">${stats.devices_online}/${stats.devices_total}</div></div>` : ''}
       <div class="kpi"><div class="label">تاريخ اليوم</div><div class="value" style="font-size:19px">${stats.date}</div></div>
+      `}
     </div>
     <div class="card">
-      <div class="card-head"><h3>الحضور خلال آخر ٧ أيام</h3>
+      <div class="card-head"><h3>${mine ? 'حضوري خلال آخر ٧ أيام' : 'الحضور خلال آخر ٧ أيام'}</h3>
         <div class="legend">
           <span><i style="background:#3f9d6a"></i>حاضر</span><span><i style="background:#e0a33c"></i>متأخر</span>
           <span><i style="background:#5f8fd8"></i>إجازة</span><span><i style="background:#d05a52"></i>غياب</span>
@@ -456,8 +469,8 @@ views.dashboard = async () => {
         <button class="btn ok" id="punchNow">🕒 تسجيل حضور / انصراف</button>
         <span class="help" id="locHint">يجب أن تكون داخل نطاق موقع العمل المعتمد عند التسجيل.</span>
       </div></div>` : ''}
-    <div class="card"><div class="card-head"><h3>حضور اليوم</h3>
-      <button class="btn sm ghost" onclick="go('attendance')">فتح الكشف اليومي</button></div>
+    <div class="card"><div class="card-head"><h3>${mine ? 'سجلي اليوم' : 'حضور اليوم'}</h3>
+      <button class="btn sm ghost" onclick="go('attendance')">${mine ? 'فتح سجل حضوري' : 'فتح الكشف اليومي'}</button></div>
       <div id="todayTable"><div class="empty">جارٍ التحميل…</div></div>
     </div>`);
   if (el('punchNow')) {
@@ -726,6 +739,74 @@ function leaveModal(employees, leaveTypes, after) {
     },
   });
 }
+
+/* ------------------------------ إجازاتي (واجهة الموظف) ------------------------------ */
+views.myLeaves = async () => {
+  const year = new Date().getFullYear();
+  const leaveTypes = await api('/api/leave-types');
+  render(`
+    <div class="card"><div class="card-body inline">
+      <button class="btn" id="mlNew">طلب إجازة جديد</button>
+      <span class="help">تظهر هنا طلباتك ورصيدك أنت فقط.</span>
+    </div></div>
+    <div class="card"><div class="card-head"><h3>رصيدي لعام ${year}</h3></div>
+      <div id="mlBal"><div class="empty">جارٍ التحميل…</div></div></div>
+    <div class="card"><div class="card-head"><h3>طلباتي</h3><span class="muted" id="mlCount"></span></div>
+      <div id="mlTable"><div class="empty">جارٍ التحميل…</div></div></div>`);
+
+  const load = async () => {
+    const [balances, rows] = await Promise.all([
+      api('/api/leave-balances?year=' + year),
+      api('/api/leave-requests'),
+    ]);
+    el('mlBal').innerHTML = table(
+      ['نوع الإجازة', 'المستحق', 'مرحّل', 'المستخدم', 'المتبقي'],
+      balances,
+      (b) => `<tr><td>${esc(b.leave_type_name)}</td><td>${b.entitled_days}</td>
+        <td>${b.carried_over_days}</td><td>${b.used_days}</td>
+        <td><b>${b.remaining_days}</b></td></tr>`,
+      'لا توجد أرصدة مسجّلة');
+    el('mlCount').textContent = `${rows.length} طلب`;
+    el('mlTable').innerHTML = table(
+      ['#', 'النوع', 'من', 'إلى', 'الأيام', 'الحالة', 'السبب', 'إجراءات'],
+      rows,
+      (r) => {
+        let actions = '';
+        if (r.status === 'pending') {
+          actions += `<button class="btn sm gray" onclick="cancelMyLeave(${r.id})">إلغاء</button>
+                      <button class="btn sm ghost" onclick="attachMyLeave(${r.id})">إرفاق</button> `;
+        }
+        if (r.attachment_path) actions += `<a class="btn sm ghost" href="/uploads/${encodeURIComponent(r.attachment_path)}" target="_blank">المرفق</a>`;
+        return `<tr><td>${r.id}</td><td>${esc(r.leave_type_name)}</td>
+          <td>${r.start_date}</td><td>${r.end_date}</td><td>${r.days}</td>
+          <td><span class="tag ${r.status}">${LEAVE_STATUS[r.status]}</span></td>
+          <td>${esc(r.reason || '')}</td><td>${actions}</td></tr>`;
+      },
+      'لم تقدّم أي طلب إجازة بعد');
+  };
+
+  el('mlNew').onclick = () => leaveModal([], leaveTypes, load);
+  window.cancelMyLeave = async (id) => {
+    if (!confirm('تأكيد إلغاء الطلب؟')) return;
+    try {
+      await api(`/api/leave-requests/${id}/cancel`, { method: 'POST', body: { decision_note: null } });
+      toast('تم إلغاء الطلب', 'ok'); load();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  window.attachMyLeave = (id) => {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = '.pdf,.png,.jpg,.jpeg,.webp';
+    input.onchange = async () => {
+      const fd = new FormData(); fd.append('file', input.files[0]);
+      try {
+        await api(`/api/leave-requests/${id}/attachment`, { method: 'POST', body: fd });
+        toast('تم رفع المرفق', 'ok'); load();
+      } catch (e) { toast(e.message, 'err'); }
+    };
+    input.click();
+  };
+  load();
+};
 
 /* ------------------------------ أرصدة الإجازات ------------------------------ */
 views.balances = async () => {
