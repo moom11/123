@@ -112,6 +112,7 @@ class EmployeeIn(BaseModel):
     basic_salary: float = 0
     allowances: float = 0
     weekly_rest_days: str | None = None
+    no_break: bool = False
     status: EmployeeStatus = EmployeeStatus.active
 
 
@@ -130,6 +131,7 @@ class EmployeeUpdate(BaseModel):
     basic_salary: float | None = None
     allowances: float | None = None
     weekly_rest_days: str | None = None
+    no_break: bool | None = None
     status: EmployeeStatus | None = None
 
 
@@ -153,6 +155,7 @@ class EmployeeOut(ORMModel):
     allowances: float = 0
     total_salary: float = 0
     weekly_rest_days: str | None = None
+    no_break: bool = False
     status: EmployeeStatus
     has_user: bool = False
 
@@ -356,6 +359,9 @@ class SettingsOut(BaseModel):
     early_leave_grace_minutes: int = 10
     late_grace_minutes: int = 10
     punch_debounce_seconds: int = 20
+    break_violation_enabled: bool = True
+    break_violation_after_minutes: int = 15
+    break_alert_employee: bool = True
 
 
 class SettingsIn(BaseModel):
@@ -386,6 +392,9 @@ class SettingsIn(BaseModel):
     early_leave_grace_minutes: int | None = Field(default=None, ge=0, le=240)
     late_grace_minutes: int | None = Field(default=None, ge=0, le=240)
     punch_debounce_seconds: int | None = Field(default=None, ge=0, le=300)
+    break_violation_enabled: bool | None = None
+    break_violation_after_minutes: int | None = Field(default=None, ge=1, le=240)
+    break_alert_employee: bool | None = None
 
 
 class AttendanceOverride(BaseModel):

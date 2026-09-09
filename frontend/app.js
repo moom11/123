@@ -52,7 +52,7 @@ const PENALTY_ACTIONS = { warning:'إنذار كتابي', deduction_percent_day
   deduction_days:'خصم أجر أيام', suspension:'إيقاف بدون أجر', termination:'الفصل من العمل' };
 const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
 const money = (v) => (Number(v || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const APP_VERSION = '2026.09.09c';
+const APP_VERSION = '2026.09.09d';
 
 /* يفرض تحديث عامل الخدمة فور توفر نسخة جديدة (مهم على آيفون) */
 function watchForUpdates() {
@@ -896,6 +896,160 @@ async function loadLookups(force = false) {
 const options = (items, value, key = 'id', label = 'name') =>
   items.map((i) => `<option value="${i[key]}" ${String(i[key]) === String(value) ? 'selected' : ''}>${esc(i[label])}</option>`).join('');
 
+
+
+/* ------------------------------ لوحة التعليمات الجانبية ------------------------------ */
+/* شرح مختصر لكل شاشة: ماذا تفعل هنا، وما القواعد التي يطبّقها النظام خلفك. */
+const HELP = {
+  dashboard: ['لوحة المؤشرات', `
+    <h4>${icon('dashboard')} ما هذه الشاشة</h4>
+    <p>ملخّص يومك: من حضر، ومن تأخر، ومن غاب، والطلبات التي تنتظر قرارك.</p>
+    <h4>${icon('clock')} نصيحة</h4>
+    <p>ابدأ يومك من هنا: أي رقم أحمر (غياب أو تحتاج مراجعة) اضغط عليه للانتقال إلى تفاصيله.</p>`],
+
+  attendance: ['الحضور اليومي', `
+    <h4>${icon('pulse')} الحالة الآن</h4>
+    <p>البطاقة العليا تعرض كل موظف وحالته لحظياً: <b>داخل العمل</b> أو <b>في استراحة</b> أو
+      <b>خارج العمل</b>، وتتحدّث تلقائياً كل نصف دقيقة. البطاقة الحمراء تعني تجاوز استراحة
+      أو استراحة مفتوحة تحتاج تدخّلك.</p>
+    <h4>${icon('fingerprint')} كيف يفهم النظام البصمة</h4>
+    <p>المعنى يتحدّد بحالة الموظف لا بترتيب البصمة:</p>
+    <table><tr><th>حالته قبل</th><th>البصمة تعني</th></tr>
+      <tr><td>خارج العمل</td><td>حضور</td></tr>
+      <tr><td>داخل العمل (أثناء الدوام)</td><td>بدء استراحة</td></tr>
+      <tr><td>داخل العمل (قرب نهاية الدوام)</td><td>انصراف</td></tr>
+      <tr><td>في استراحة</td><td>عودة من الاستراحة</td></tr></table>
+    <div class="hp-note">لا استراحة في آخر نصف ساعة من الدوام (قابلة للضبط): أي بصمة فيها
+      تُفهم <b>انصرافاً</b>. اضبط المدة من الإعدادات ← سياسة الحضور والاستراحة.</div>
+    <h4>${icon('coffee')} عمود الاستراحة</h4>
+    <p>يعرض إجمالي الدقائق وعدد الاستراحات. اضغط عليه لترى <b>سلسلة أحداث اليوم</b> كاملة:
+      كل بصمة ومعناها والحالة قبلها وبعدها ومن أي جهاز وصلت.</p>
+    <h4>${icon('users')} تسجيل حضور جماعي</h4>
+    <p>لملء أيام عمل ماضية للجميع دفعة واحدة حين لم تُسجَّل بصمات. لا يمسّ يوماً فيه بصمات
+      فعلية ولا الراحات ولا العطل ولا الإجازات المعتمدة.</p>`],
+
+  punches: ['سجل البصمات', `
+    <h4>${icon('fingerprint')} ما هذه الشاشة</h4>
+    <p>البصمات الخام كما وصلت من الجهاز أو التطبيق، قبل أي تفسير.</p>
+    <h4>${icon('shield')} التعديل والحذف</h4>
+    <p>كلاهما يتطلب <b>سبباً مكتوباً</b> يُحفظ في سجل التدقيق مع القيمة القديمة والجديدة
+      واسمك ووقت التعديل.</p>
+    <div class="hp-note">الحذف <b>ناعم</b>: السجل يبقى في قاعدة البيانات ويخرج من الاحتساب فقط،
+      فلا يُمحى سجل حضور نهائياً بلا أثر.</div>
+    <h4>${icon('clock')} تصحيح تفسير خاطئ</h4>
+    <p>إن فُهمت بصمة استراحةً وهي انصراف (أو العكس)، اضغط <b>تعديل</b> واختر النوع الصحيح،
+      فيعيد النظام حساب اليوم كله فوراً.</p>`],
+
+  employees: ['الموظفون', `
+    <h4>${icon('users')} حقول تؤثر على الحساب</h4>
+    <ul>
+      <li><b>الوردية</b>: تحدد أوقات الدوام والتأخير والانصراف. الموظف بلا وردية يأخذ دواماً افتراضياً.</li>
+      <li><b>أيام الراحة الأسبوعية</b>: تخصّ هذا الموظف وحده وتغلب أيام عمل الوردية.</li>
+      <li><b>الاستراحة</b>: «لا يأخذ استراحة» تعني ألا تُخصم استراحة الوردية الثابتة من ساعاته.</li>
+      <li><b>رقم الجوال</b>: بمجرد إضافته يُنشأ للموظف حساب دخول، اسم المستخدم وكلمة المرور
+        هما رقم الجوال، ويُطلب منه تغييرها أول دخول.</li>
+      <li><b>البدلات</b>: تدخل في إجمالي الراتب وتُحتسب عليها الخصومات.</li>
+    </ul>`],
+
+  leaves: ['الإجازات', `
+    <h4>${icon('leave')} الدورة</h4>
+    <p>تقديم ← اعتماد أو رفض ← إمكانية الإلغاء مع إرجاع الرصيد. الأيام تُحتسب باستثناء
+      الراحات الأسبوعية والعطل الرسمية.</p>
+    <div class="hp-tip">الغياب <b>بإذن</b> سجّله إجازة: «بدون راتب» تُخصم يوماً واحداً،
+      والمدفوعة بلا خصم. أما الغياب <b>بدون إذن</b> فيُخصم بمعامل الإعدادات (يومان افتراضياً).</div>`],
+
+  payroll: ['الرواتب', `
+    <h4>${icon('money')} كيف يُحتسب المسير</h4>
+    <p>من الحضور الفعلي: خصم الغياب والتأخير والإجازات بلا راتب وخصومات المخالفات وأقساط
+      السلف، وإضافة بدل العمل الإضافي.</p>
+    <h4>${icon('check')} الاعتماد وإلغاؤه</h4>
+    <ul>
+      <li><b>الاعتماد</b> يقفل المسير عن التعديل ويرسل القسائم للموظفين.</li>
+      <li><b>إلغاء الاعتماد</b> يعيده مسودة قابلة للتعديل، وتختفي القسائم من شاشات الموظفين
+        ويصلهم إشعار بأنها قيد المراجعة. السبب إلزامي ويُحفظ في سجل التدقيق.</li>
+    </ul>
+    <div class="hp-note">بعد أي تعديل على الحضور أو المخالفات، احذف المسير وأعد إنشاءه
+      ليُحتسب من جديد على البيانات المصححة.</div>`],
+
+  violations: ['المخالفات', `
+    <h4>${icon('alert')} كيف تعمل</h4>
+    <p>لكل نوع مخالفة سلّم جزاءات يتصاعد مع التكرار خلال ١٨٠ يوماً (قابلة للضبط):
+      إنذار ← خصم نسبة من أجر يوم ← خصم أيام ← إيقاف أو فصل.</p>
+    <h4>${icon('coffee')} مخالفة تلقائية</h4>
+    <p>تجاوز وقت الاستراحة يفتح مخالفة تلقائياً عند بلوغ الحد المضبوط، بحالة
+      <b>بانتظار إقرار الموظف</b> — فله أن يقرّ أو يتظلّم.</p>
+    <div class="hp-note">لا يُخصم شيء من الراتب إلا بعد <b>اعتمادك</b> للمخالفة.</div>`],
+
+  restDays: ['أيام الراحة', `
+    <h4>${icon('bed')} الفرق</h4>
+    <ul>
+      <li><b>الراحة الأسبوعية</b>: ثابتة، من الوردية أو من بطاقة الموظف.</li>
+      <li><b>الراحة المجدولة</b>: أيام محددة بتواريخها تُجدولها هنا شهرياً.</li>
+    </ul>
+    <p>كلاهما لا يُحتسب غياباً، والعمل فيهما يُحتسب وقتاً إضافياً كاملاً.</p>`],
+
+  devices: ['أجهزة البصمة', `
+    <h4>${icon('device')} وضعا التشغيل</h4>
+    <ul>
+      <li><b>سحب</b>: النظام يتصل بالجهاز على المنفذ 4370 ويسحب السجلات.</li>
+      <li><b>دفع (ADMS)</b>: الجهاز يرسل البصمة لحظة حدوثها — الأفضل والأسرع.</li>
+    </ul>
+    <h4>${icon('shield')} تسجيل جهاز جديد</h4>
+    <p>افتح <b>نافذة الاقتران</b> أولاً ثم اضبط الجهاز خلالها. خارج النافذة تُرفض الأجهزة
+      المجهولة حمايةً من أي جهاز غريب يرسل بصمات وهمية.</p>`],
+
+  settings: ['الإعدادات', `
+    <h4>${icon('settings')} أهم ما تضبطه</h4>
+    <ul>
+      <li><b>الورديات</b>: أوقات الدوام وأيام العمل — أساس كل الحسابات.</li>
+      <li><b>سياسة الحضور والاستراحة</b>: مدة الاستراحة، وقت السماح بالانصراف، سياسة التأخير،
+        وسياسة خاصة لكل فرع أو إدارة أو وردية.</li>
+      <li><b>قواعد الرواتب</b>: أيام الشهر، معامل الإضافي، وخصم الغياب بدون إذن.</li>
+      <li><b>هوية المنشأة</b>: الاسم والشعار — والشعار نفسه يصبح أيقونة التطبيق على الجوال.</li>
+    </ul>
+    <div class="hp-tip">أهم قيمة واحدة: <b>وقت السماح بالانصراف</b>. هي الحد الفاصل بين
+      «استراحة» و«انصراف» في فهم البصمة.</div>`],
+
+  home: ['شاشتك', `
+    <h4>${icon('fingerprint')} الزر الذكي</h4>
+    <p>الزر يتغيّر حسب حالتك: تسجيل حضور ← بدء استراحة ← إنهاء الاستراحة ← تسجيل انصراف.</p>
+    <h4>${icon('coffee')} الاستراحة</h4>
+    <p>لك أن تأخذ أكثر من استراحة في اليوم. المهم أن تسجّل <b>عودتك</b> من كل واحدة، وإلا
+      بقيت مفتوحة واحتاج يومك مراجعة من الإدارة.</p>
+    <div class="hp-note">تجاوز المدة المسموحة يصلك عليه تنبيه، وقد يُسجَّل مخالفة إن زاد
+      عن الحد. ولا استراحة في آخر نصف ساعة من دوامك.</div>
+    <h4>${icon('location')} الموقع</h4>
+    <p>إن كان مكتوباً «يتحقق من موقعك» فلا تُقبل بصمتك إلا داخل نطاق فرعك.</p>`],
+
+  myLeaves: ['طلباتي', `
+    <h4>${icon('leave')} تقديم طلب</h4>
+    <p>اختر النوع والتاريخين واكتب السبب. يصل الطلب لمديرك مباشرة، ويصلك إشعار بالقرار.</p>
+    <p>الطلب <b>قيد الاعتماد</b> يمكنك إلغاؤه، وبعد الاعتماد راجع إدارتك.</p>`],
+
+  schedule: ['جدولي', `
+    <h4>${icon('calendar')} ما تراه</h4>
+    <p>وردية اليوم، وأيام أسبوعك وراحاتك، وسجل حضورك خلال الشهر بالحالة والوقت.</p>`],
+};
+
+const HELP_DEFAULT = ['التعليمات', `
+  <h4>${icon('info')} النظام باختصار</h4>
+  <p>نظام حضور وانصراف وإجازات ورواتب، مربوط بجهاز البصمة وبتطبيق الجوال.</p>
+  <p>افتح هذه اللوحة في أي شاشة لترى شرحها والقواعد التي يطبّقها النظام فيها.</p>`];
+
+function toggleHelp(open) {
+  const panel = el('helpPanel');
+  const scrim = el('helpScrim');
+  if (!panel) return;
+  const show = open === undefined ? panel.hidden : open;
+  if (show) {
+    const [title, body] = HELP[state.page] || HELP_DEFAULT;
+    el('helpTitle').textContent = title;
+    el('helpBody').innerHTML = body;
+    I18N.apply(el('helpBody'));
+  }
+  panel.hidden = !show;
+  scrim.hidden = !show;
+}
 
 /* ------------------------------ لوحة المؤشرات ------------------------------ */
 /* ------------------------------ شاشة الموظف الرئيسية ------------------------------ */
@@ -1970,6 +2124,11 @@ function employeeModal(emp, departments, shifts, after) {
       <div class="field"><label>الراتب الأساسي</label><input type="number" id="fSalary" value="${v('basic_salary', 0)}" /></div>
       <div class="field"><label>البدلات</label><input type="number" id="fAllow" value="${v('allowances', 0)}" />
         <div class="help">إجمالي الراتب = الأساسي + البدلات</div></div>
+      <div class="field"><label>الاستراحة</label><select id="fNoBreak">
+        <option value="false" ${!v('no_break') ? 'selected' : ''}>يأخذ استراحة</option>
+        <option value="true" ${v('no_break') ? 'selected' : ''}>لا يأخذ استراحة</option></select>
+        <div class="help">«لا يأخذ استراحة» تعني ألا تُخصم استراحة الوردية الثابتة من ساعاته،
+          وأي استراحة يسجّلها تُحتسب تجاوزاً.</div></div>
       <div class="field"><label>الحالة</label><select id="fStatus">
         <option value="active" ${v('status') === 'active' ? 'selected' : ''}>على رأس العمل</option>
         <option value="suspended" ${v('status') === 'suspended' ? 'selected' : ''}>موقوف</option>
@@ -1991,6 +2150,7 @@ function employeeModal(emp, departments, shifts, after) {
           hire_date: el('fHire').value || null, basic_salary: Number(el('fSalary').value || 0),
           allowances: Number(el('fAllow').value || 0),
           weekly_rest_days: [...document.querySelectorAll('.fRest:checked')].map((c) => c.value).join(',') || null,
+          no_break: el('fNoBreak').value === 'true',
           status: el('fStatus').value,
         };
         try {
@@ -2768,8 +2928,11 @@ views.payroll = async () => {
         <td><button class="btn sm" onclick="openRun(${r.id})">عرض القسائم</button>
             <button class="btn sm ghost" onclick="printRun(${r.id})">${icon('printer')} القسائم PDF</button>
             <button class="btn sm ghost" onclick="exportRun(${r.id})">CSV</button>
-            ${r.status !== 'approved' ? `<button class="btn sm ok" onclick="approveRun(${r.id})">اعتماد</button>
-              <button class="btn sm danger" onclick="deleteRun(${r.id})">حذف</button>` : ''}</td></tr>`,
+            ${r.status !== 'approved'
+              ? `<button class="btn sm ok" onclick="approveRun(${r.id})">اعتماد</button>
+                 <button class="btn sm danger" onclick="deleteRun(${r.id})">حذف</button>`
+              : `<button class="btn sm gray" onclick="revokeRun(${r.id})">إلغاء الاعتماد</button>
+                 <button class="btn sm danger" onclick="deleteRun(${r.id}, true)">حذف</button>`}</td></tr>`,
       'لا توجد مسيّرات — اضغط «احتساب المسير»');
   };
 
@@ -2814,11 +2977,42 @@ views.payroll = async () => {
       toast('تم اعتماد المسير وإشعار الموظفين', 'ok'); loadRuns(); openRun(id); }
     catch (e) { toast(e.message, 'err'); }
   };
-  window.deleteRun = async (id) => {
-    if (!confirm('حذف المسير؟')) return;
-    try { await api('/api/payroll/runs/' + id, { method: 'DELETE' });
-      toast('تم الحذف', 'ok'); el('prDetail').innerHTML = ''; loadRuns(); }
-    catch (e) { toast(e.message, 'err'); }
+  // إلغاء اعتماد مسير معتمد: يعود مسودة قابلة للتعديل، والسبب يُحفظ في التدقيق
+  window.revokeRun = (id) => modal({
+    title: 'إلغاء اعتماد المسير',
+    body: `<div class="help" style="margin-bottom:12px">سيعود المسير <b>مسودة</b> قابلة للتعديل
+        وإعادة الاحتساب، وتختفي القسائم من شاشات الموظفين حتى تعتمده من جديد،
+        ويصلهم إشعار بأن القسيمة قيد المراجعة. السبب يُحفظ في سجل التدقيق.</div>
+      <div class="field"><label>سبب الإلغاء (إلزامي)</label>
+        <input id="rvReason" placeholder="مثال: خطأ في بدلات الفترة المسائية" /></div>`,
+    footer: '<button class="btn" id="rvSave">إلغاء الاعتماد</button><button class="btn gray" data-close>تراجع</button>',
+    onOpen: (root) => {
+      $('#rvSave', root).onclick = async () => {
+        const reason = $('#rvReason', root).value.trim();
+        if (reason.length < 3) return toast('اكتب سبب الإلغاء', 'err');
+        try {
+          await api(`/api/payroll/runs/${id}/revoke`, { method: 'POST', body: { reason } });
+          toast('أُلغي الاعتماد وعاد المسير مسودة', 'ok');
+          closeModal(); loadRuns(); openRun(id);
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    },
+  });
+  window.deleteRun = async (id, approved) => {
+    if (!approved) {
+      if (!confirm('حذف المسير؟')) return;
+      try { await api('/api/payroll/runs/' + id, { method: 'DELETE' });
+        toast('تم الحذف', 'ok'); el('prDetail').innerHTML = ''; loadRuns(); }
+      catch (e) { toast(e.message, 'err'); }
+      return;
+    }
+    const reason = prompt('المسير معتمد. اكتب سبب الحذف (يُحفظ في سجل التدقيق):');
+    if (!reason || reason.trim().length < 3) return;
+    try {
+      await api(`/api/payroll/runs/${id}?reason=${encodeURIComponent(reason.trim())}`,
+        { method: 'DELETE' });
+      toast('حُذف المسير وسُجّل الأثر', 'ok'); el('prDetail').innerHTML = ''; loadRuns();
+    } catch (e) { toast(e.message, 'err'); }
   };
   window.adjustSlip = (id, additions, deductions) => modal({
     title: 'تعديل القسيمة',
@@ -3550,7 +3744,27 @@ settingsTabs.attendanceRules = async () => {
         </div>
         <button class="btn" id="arSave">حفظ السياسة الافتراضية</button>
         <div class="help" style="margin-top:12px">تجاوز الاستراحة <b>لا يمنع</b> الموظف من تسجيل
-          العودة: يُسجَّل التجاوز ويصل تنبيه للإدارة.</div>
+          العودة: يُسجَّل التجاوز ويصل تنبيه للإدارة.<br>
+          ولا استراحة أصلاً داخل «وقت السماح بالانصراف»: أي بصمة فيه تُفهم انصرافاً.</div>
+      </div></div>
+
+    <div class="card"><div class="card-head"><h3>عند تجاوز وقت الاستراحة</h3></div>
+      <div class="card-body">
+        <div class="grid cols-3">
+          <div class="field"><label>تنبيه الموظف نفسه</label><select id="arEmpAlert">
+            <option value="true" ${st.break_alert_employee ? 'selected' : ''}>يصله تنبيه</option>
+            <option value="false" ${!st.break_alert_employee ? 'selected' : ''}>الإدارة فقط</option></select></div>
+          <div class="field"><label>تسجيل مخالفة تلقائية</label><select id="arViol">
+            <option value="true" ${st.break_violation_enabled ? 'selected' : ''}>نعم</option>
+            <option value="false" ${!st.break_violation_enabled ? 'selected' : ''}>لا</option></select></div>
+          <div class="field"><label>حد التجاوز لتسجيل المخالفة (دقيقة)</label>
+            <input type="number" min="1" id="arViolAfter" value="${st.break_violation_after_minutes}" />
+            <div class="help">التجاوز الأقل من هذا يُسجَّل وينبَّه عليه بلا مخالفة.</div></div>
+        </div>
+        <button class="btn" id="arViolSave">حفظ</button>
+        <div class="help" style="margin-top:12px">المخالفة تُسجَّل باسم «تجاوز وقت الاستراحة»
+          بحالة <b>بانتظار إقرار الموظف</b>، فله أن يقرّ أو يتظلّم، ولا تُخصم من راتبه
+          إلا بعد اعتماد الموارد البشرية — وجزاؤها يتصاعد مع التكرار كبقية المخالفات.</div>
       </div></div>
 
     <div class="card"><div class="card-head"><h3>سياسات الفروع والإدارات والورديات</h3>
@@ -3673,6 +3887,15 @@ settingsTabs.attendanceRules = async () => {
         late_grace_minutes: Number(el('arLate').value),
         punch_debounce_seconds: Number(el('arDebounce').value) } });
       toast('حُفظت السياسة الافتراضية', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  el('arViolSave').onclick = async () => {
+    try {
+      state.cache.settings = await api('/api/settings', { method: 'PUT', body: {
+        break_alert_employee: el('arEmpAlert').value === 'true',
+        break_violation_enabled: el('arViol').value === 'true',
+        break_violation_after_minutes: Number(el('arViolAfter').value) } });
+      toast('حُفظت إعدادات التجاوز', 'ok');
     } catch (e) { toast(e.message, 'err'); }
   };
 };
@@ -4093,6 +4316,13 @@ if ('serviceWorker' in navigator) {
 }
 const requestedPage = new URLSearchParams(location.search).get('page');
 if (requestedPage) state.page = requestedPage;
+el('helpBtn').insertAdjacentHTML('afterbegin', icon('info'));
+el('helpBtn').onclick = () => toggleHelp();
+el('helpClose').onclick = () => toggleHelp(false);
+el('helpScrim').onclick = () => toggleHelp(false);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !el('helpPanel').hidden) toggleHelp(false);
+});
 el('selfPunchBtn').onclick = selfPunch;
 el('bellBtn').onclick = () => openNotifications().catch((e) => toast(e.message, 'err'));
 window.go = go;

@@ -1,6 +1,7 @@
 """احتساب الحضور والانصراف من البصمات الخام وفق الورديات والإجازات والعطل."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 
 from sqlalchemy import and_, select
@@ -139,6 +140,10 @@ def compute_day(
     كلٌّ بمدتها، فتُحفظ بعدها سجلات مستقلة لكل استراحة.
     """
     policy = policy or Policy()
+    if employee.no_break:
+        # لا يأخذ استراحة: لا تُخصم استراحة الوردية الثابتة، وأي استراحة يأخذها
+        # تُحتسب تجاوزاً من أول دقيقة بعد دقائق السماح
+        policy = replace(policy, break_allowance_minutes=0, max_total_break_minutes=0)
     session = workstate.replay(punches, rules.scheduled_out(day), policy)
     check_in = session.check_in
     check_out = session.check_out
@@ -146,7 +151,8 @@ def compute_day(
     late = early = overtime = 0
     # يوم راحة مجدول (الراحة الشهرية) يعامل معاملة الراحة الأسبوعية
     is_work_day = day.weekday() in rules.work_days and not is_rest_day
-    worked = workstate.worked_minutes(session, policy, rules.break_minutes)
+    fixed_break = 0 if employee.no_break else rules.break_minutes
+    worked = workstate.worked_minutes(session, policy, fixed_break)
 
     if is_work_day and check_in:
         allowed_in = rules.scheduled_in(day) + timedelta(minutes=policy.late_grace_minutes)
@@ -321,11 +327,12 @@ ALERT_WINDOW_DAYS = 2   # لا تُنبَّه الإدارة على أيام ق�
 
 
 def _alert_break_issues(db: Session, overruns: list, open_breaks: list) -> None:
-    """تنبيه الإدارة عند تجاوز وقت الاستراحة أو بقائها مفتوحة — مرة واحدة لكل حالة."""
+    """تنبيه الإدارة والموظف عند تجاوز الاستراحة، وتسجيل مخالفة عند بلوغ الحد."""
     from ..models import Role, SentAlert
-    from . import notifications
+    from . import notifications, settings_store
 
     today = date.today()
+    notify_employee = settings_store.get_bool(db, "break_alert_employee")
     for emp, day, minutes in overruns:
         if (today - day).days > ALERT_WINDOW_DAYS:
             continue
@@ -339,6 +346,17 @@ def _alert_break_issues(db: Session, overruns: list, open_breaks: list) -> None:
             link_page="attendance",
             commit=False,
         )
+        if notify_employee:
+            notifications.notify_employee(
+                db, emp.id,
+                title="تجاوزت وقت الاستراحة",
+                body=(f"تجاوزت وقت البريك المسموح بـ {minutes} دقيقة في يوم {day}."
+                      " الرجاء الالتزام بالمدة المحددة."),
+                category="attendance",
+                link_page="dashboard",
+                commit=False,
+            )
+        _record_break_violation(db, emp, day, minutes)
     for emp, day, since in open_breaks:
         if (today - day).days > ALERT_WINDOW_DAYS:
             continue
@@ -352,6 +370,46 @@ def _alert_break_issues(db: Session, overruns: list, open_breaks: list) -> None:
             link_page="attendance",
             commit=False,
         )
+
+
+def _record_break_violation(db: Session, emp, day: date, minutes: int) -> None:
+    """يسجّل مخالفة «تجاوز وقت الاستراحة» تلقائياً عند بلوغ الحد المضبوط.
+
+    تُسجَّل بحالة «بانتظار إقرار الموظف» كأي مخالفة، فله أن يقرّ أو يتظلّم،
+    ولا تُخصم من الراتب إلا بعد اعتماد الموارد البشرية.
+    """
+    from ..models import Violation, ViolationStatus, ViolationType
+    from . import settings_store, violations as violations_service
+
+    if not settings_store.get_bool(db, "break_violation_enabled"):
+        return
+    threshold = settings_store.get_int(db, "break_violation_after_minutes", 15)
+    if threshold <= 0 or minutes < threshold:
+        return
+
+    vtype = db.scalar(select(ViolationType).where(ViolationType.code == "break_overrun"))
+    if not vtype or not vtype.is_active:
+        return
+    exists = db.scalar(
+        select(Violation).where(
+            Violation.employee_id == emp.id,
+            Violation.violation_type_id == vtype.id,
+            Violation.occurred_on == day,
+        )
+    )
+    if exists:
+        return
+
+    violation = Violation(
+        employee_id=emp.id,
+        violation_type_id=vtype.id,
+        occurred_on=day,
+        description=f"تجاوز وقت الاستراحة المسموح بـ {minutes} دقيقة (رصد تلقائي من نظام الحضور)",
+        status=ViolationStatus.pending,
+    )
+    db.add(violation)
+    db.flush()
+    violations_service.apply_penalty(db, violation)
 
 
 def _mark_once(db: Session, model, key: str) -> bool:

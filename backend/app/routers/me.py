@@ -195,13 +195,13 @@ def my_home(db: Session = Depends(get_db), user: User = Depends(get_current_user
         state = "in"
         state_label = "أنت الآن داخل العمل"
         state_detail = f"بدأت دوامك {_time_label(today_row.check_in if today_row else None)}"
-        # قرب نهاية الوردية يصبح الانصراف هو الزر الأول
+        # داخل نافذة الانصراف لا استراحة إطلاقاً: زر واحد للانصراف
         clock_out_from = rules.scheduled_out(today) - timedelta(
             minutes=max(0, policy.clock_out_from_minutes)
         )
         if now >= clock_out_from:
             action, action_label = "clock_out", "تسجيل انصراف"
-            secondary_action, secondary_label = "break_start", "بدء استراحة"
+            state_detail += f" — لا استراحة في آخر {policy.clock_out_from_minutes} دقيقة"
         else:
             action, action_label = "break_start", "بدء استراحة"
             secondary_action, secondary_label = "clock_out", "تسجيل انصراف"

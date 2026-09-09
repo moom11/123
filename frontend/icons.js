@@ -37,6 +37,8 @@ const ICON_PATHS = {
   printer: '<path d="M7 8.5V3.5h10v5"/><rect x="3.5" y="8.5" width="17" height="7.5" rx="1.8"/><rect x="7" y="14" width="10" height="6.5" rx="1.2"/>',
   refresh: '<path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 3.5V8h-4.5"/>',
   check: '<path d="M5 12.5 10 17.5 19 7"/>',
+  info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.8v.2"/>',
+  money: '<rect x="2.8" y="6" width="18.4" height="12" rx="2.2"/><circle cx="12" cy="12" r="2.6"/><path d="M6 9.5v5M18 9.5v5"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
   edit: '<path d="M4 20h4l10-10a2.4 2.4 0 0 0-3.4-3.4L4.6 16.6z"/><path d="M13.5 7.5 16.5 10.5"/>',
   trash: '<path d="M4 6.5h16M9.5 6.5V4h5v2.5M6.5 6.5l1 13a1.6 1.6 0 0 0 1.6 1.5h5.8a1.6 1.6 0 0 0 1.6-1.5l1-13"/>',

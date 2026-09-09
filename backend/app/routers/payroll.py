@@ -6,6 +6,7 @@ import io
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import BaseModel, Field
 from fastapi.responses import HTMLResponse
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
@@ -149,15 +150,71 @@ def approve_run(run_id: int, db: Session = Depends(get_db), user: User = Depends
     return run_out(db, run)
 
 
-@router.delete("/runs/{run_id}")
-def delete_run(run_id: int, db: Session = Depends(get_db), user: User = Depends(require_hr)):
+class RunRevokeIn(BaseModel):
+    """إلغاء اعتماد مسير: السبب إلزامي ويُحفظ في سجل التدقيق."""
+
+    reason: str = Field(min_length=3, max_length=255)
+
+
+@router.post("/runs/{run_id}/revoke", response_model=PayrollRunOut)
+def revoke_run(
+    run_id: int,
+    payload: RunRevokeIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_hr),
+):
+    """يعيد المسير المعتمد إلى «مسودة» ليمكن تعديله أو إعادة احتسابه.
+
+    قسائم الموظفين تختفي من شاشاتهم فور الإلغاء (لا تُعرض إلا قسائم المسير
+    المعتمد)، ويصلهم إشعار بأن القسيمة قيد المراجعة حتى لا يُفاجَؤوا.
+    """
     run = db.get(PayrollRun, run_id)
     if not run:
         raise HTTPException(status_code=404, detail="المسير غير موجود")
+    if run.status != PayrollStatus.approved:
+        raise HTTPException(status_code=400, detail="المسير غير معتمد أصلاً")
+
+    run.status = PayrollStatus.draft
+    run.approved_at = None
+    db.flush()
+    audit.log(
+        db, user, "update", "payroll", run.id,
+        f"إلغاء اعتماد مسير {run.month}/{run.year} — السبب: {payload.reason}",
+        commit=False,
+    )
+    for slip in db.scalars(select(Payslip).where(Payslip.run_id == run.id)).all():
+        notifications.notify_employee(
+            db, slip.employee_id,
+            f"قسيمة راتب {run.month}/{run.year} قيد المراجعة",
+            body="أُلغي اعتماد المسير لمراجعته، وستصلك القسيمة النهائية بعد إعادة الاعتماد.",
+            category="payroll", link_page="payroll", commit=False,
+        )
+    db.commit()
+    db.refresh(run)
+    return run_out(db, run)
+
+
+@router.delete("/runs/{run_id}")
+def delete_run(
+    run_id: int,
+    reason: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_hr),
+):
+    """حذف مسير. المعتمد لا يُحذف إلا بسبب مكتوب يُحفظ في سجل التدقيق."""
+    run = db.get(PayrollRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="المسير غير موجود")
+    if run.status == PayrollStatus.approved and not (reason or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="المسير معتمد — اكتب سبب الحذف، أو ألغِ اعتماده أولاً",
+        )
+    label = f"مسير {run.month}/{run.year}"
     if run.status == PayrollStatus.approved:
-        raise HTTPException(status_code=400, detail="لا يمكن حذف مسير معتمد")
+        label += f" (كان معتمداً) — السبب: {reason}"
     db.delete(run)
-    audit.log(db, user, "delete", "payroll", run_id, commit=False)
+    audit.log(db, user, "delete", "payroll", run_id, label, commit=False)
     db.commit()
     return {"ok": True}
 

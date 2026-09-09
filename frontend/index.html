@@ -87,6 +87,7 @@
         <div class="topbar-actions">
           <span class="who" id="topWho"></span>
           <button class="btn sm ghost hidden" id="installBtn" onclick="installApp()">تثبيت التطبيق</button>
+          <button class="icon-btn" id="helpBtn" title="التعليمات" aria-label="التعليمات"></button>
           <button class="icon-btn" id="themeBtn" title="الوضع الفاتح / الداكن"></button>
           <button class="icon-btn" id="langBtn" title="English / العربية"></button>
           <button class="bell" id="bellBtn" title="الإشعارات"><span class="badge hidden" id="bellCount">0</span></button>
@@ -97,6 +98,13 @@
       <nav class="tabbar" id="tabbar"></nav>
     </main>
   </div>
+
+  <aside class="helppanel" id="helpPanel" hidden aria-label="لوحة التعليمات">
+    <div class="hp-head"><h3 id="helpTitle">التعليمات</h3>
+      <button class="icon-btn" id="helpClose" title="إغلاق" aria-label="إغلاق">&times;</button></div>
+    <div class="hp-body" id="helpBody"></div>
+  </aside>
+  <div class="helpscrim" id="helpScrim" hidden></div>
 
   <div id="modalRoot"></div>
   <div class="toast-wrap" id="toasts"></div>

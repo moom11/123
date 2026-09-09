@@ -1944,8 +1944,11 @@ def test_employee_home_screen(client, auth):
     assert after["state"] == "in" and after["state_label"] == "أنت الآن داخل العمل"
     # داخل العمل: الزر الأول استراحة أو انصراف حسب قربنا من نهاية الوردية،
     # والثاني هو الآخر — فكلاهما متاح دائماً
-    actions = {after["action"], after["secondary_action"]}
-    assert actions == {"break_start", "clock_out"}
+    if after["secondary_action"]:
+        assert {after["action"], after["secondary_action"]} == {"break_start", "clock_out"}
+    else:
+        # داخل آخر نصف ساعة من الوردية لا استراحة: زر الانصراف وحده
+        assert after["action"] == "clock_out"
     assert after["check_in"] is not None
     assert after["last_punch_site"] == "فرع التجربة"
 
@@ -2272,9 +2275,14 @@ def test_live_status_board_and_employee_home_states(client, auth):
     site = client.post("/api/sites", headers=auth, json={
         "name": "فرع الحالة الحيّة", "latitude": 24.8, "longitude": 46.8,
         "radius_meters": 300}).json()
+    # وردية تمتد إلى آخر اليوم ونافذة انصراف صفر، فلا تتعلق النتيجة بساعة تشغيل الاختبار
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية الحالة الحيّة", "start_time": "00:00:00", "end_time": "23:59:00",
+        "work_days": "0,1,2,3,4,5,6"}).json()
+    client.put("/api/settings", headers=auth, json={"clock_out_from_minutes": 0})
     emp = client.post("/api/employees", headers=auth, json={
         "code": "9314", "full_name": "موظف الحالة الحيّة", "phone": "0539998877",
-        "site_id": site["id"]}).json()
+        "site_id": site["id"], "shift_id": shift["id"]}).json()
     token = client.post("/api/auth/login", data={
         "username": "0539998877", "password": "0539998877"}).json()["access_token"]
     h = {"Authorization": f"Bearer {token}"}
@@ -2312,7 +2320,8 @@ def test_live_status_board_and_employee_home_states(client, auth):
                        json={**here, "intent": "break_end"})
     assert back.json()["kind"] == "عودة من الاستراحة" and back.json()["state"] == "in"
     assert live()["state"] == "in"
-    client.put("/api/settings", headers=auth, json={"punch_debounce_seconds": 20})
+    client.put("/api/settings", headers=auth, json={
+        "punch_debounce_seconds": 20, "clock_out_from_minutes": 30})
 
 
 def test_punch_edit_and_delete_leave_an_audit_trail(client, auth):
@@ -2479,3 +2488,156 @@ def test_device_push_updates_state_immediately(client, auth):
         "CLOCK_IN", "BREAK_START", "BREAK_END", "CLOCK_OUT"]
     assert all(e["source"] == "device_push" for e in events)
     assert all(e["device_name"] for e in events)
+
+
+# --------------------------- إلغاء اعتماد المسير ---------------------------
+
+def test_revoke_approved_payroll_run(client, auth):
+    """المسير المعتمد يمكن إلغاء اعتماده فيعود مسودة، ويُحفظ السبب في التدقيق."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9320", "full_name": "موظف المسير", "basic_salary": 4000}).json()
+    created = client.post("/api/payroll/runs?year=2025&month=11", headers=auth)
+    assert created.status_code == 201, created.text
+    run = created.json()
+    assert run["status"] == "draft"
+
+    approved = client.post(f"/api/payroll/runs/{run['id']}/approve", headers=auth).json()
+    assert approved["status"] == "approved" and approved["approved_at"]
+
+    # المسير المعتمد لا يُعدَّل ولا يُحذف بلا سبب
+    slips = client.get(f"/api/payroll/runs/{run['id']}/payslips", headers=auth).json()
+    if slips:
+        assert client.patch(f"/api/payroll/payslips/{slips[0]['id']}", headers=auth,
+                            json={"adjustments": 100}).status_code == 400
+    assert client.delete(f"/api/payroll/runs/{run['id']}", headers=auth).status_code == 400
+
+    # السبب إلزامي عند الإلغاء
+    assert client.post(f"/api/payroll/runs/{run['id']}/revoke", headers=auth,
+                       json={}).status_code == 422
+
+    back = client.post(f"/api/payroll/runs/{run['id']}/revoke", headers=auth,
+                       json={"reason": "خطأ في بدلات الفترة المسائية"})
+    assert back.status_code == 200, back.text
+    assert back.json()["status"] == "draft" and back.json()["approved_at"] is None
+
+    # وصار قابلاً للتعديل من جديد
+    if slips:
+        assert client.patch(f"/api/payroll/payslips/{slips[0]['id']}", headers=auth,
+                            json={"adjustments": 100}).status_code == 200
+    # ولا يُلغى اعتماده مرتين
+    assert client.post(f"/api/payroll/runs/{run['id']}/revoke", headers=auth,
+                       json={"reason": "مرة أخرى"}).status_code == 400
+
+    logs = client.get("/api/audit-logs?entity=payroll", headers=auth).json()
+    assert any("إلغاء اعتماد" in (r["detail"] or "") and "بدلات الفترة المسائية" in (r["detail"] or "")
+               for r in logs)
+
+    # وقسيمة الموظف اختفت من شاشته لأن المسير لم يعد معتمداً
+    assert client.delete(f"/api/payroll/runs/{run['id']}", headers=auth).status_code == 200
+
+
+def test_break_overrun_alerts_employee_and_opens_violation(client, auth):
+    """التجاوز: تنبيه للإدارة وللموظف، ومخالفة تلقائية بانتظار إقراره."""
+    from app import security_extra
+
+    security_extra.reset_all()
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية المخالفة", "start_time": "08:00:00", "end_time": "17:00:00",
+        "work_days": "0,1,2,3,4,5,6"}).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9321", "full_name": "موظف التجاوز التلقائي", "phone": "0537776655",
+        "shift_id": shift["id"], "basic_salary": 3000}).json()
+    token = client.post("/api/auth/login", data={
+        "username": "0537776655", "password": "0537776655"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+
+    day = "2026-09-14"
+    # استراحة 90 دقيقة والمسموح 60 + سماح 5 → تجاوز 25 دقيقة (فوق حد المخالفة 15)
+    for when in ("08:00:00", "11:00:00", "12:30:00", "16:45:00"):
+        _punch(client, auth, emp["id"], f"{day}T{when}")
+
+    row = client.get(f"/api/attendance/employee/{emp['id']}?date_from={day}&date_to={day}",
+                     headers=auth).json()[0]
+    assert row["break_minutes"] == 90 and row["break_overrun_minutes"] == 25
+
+    # مخالفة تلقائية بانتظار إقرار الموظف — لا تُخصم قبل الاعتماد
+    violations = client.get(f"/api/violations?employee_id={emp['id']}", headers=auth).json()
+    hit = next(v for v in violations if v["occurred_on"] == day)
+    assert "تجاوز وقت الاستراحة" in hit["violation_type_name"]
+    assert hit["status"] == "pending" and "25 دقيقة" in hit["description"]
+
+    # الموظف نفسه أُشعر
+    mine = client.get("/api/notifications", headers=h).json()
+    assert any("تجاوزت وقت الاستراحة" in n["title"] for n in mine)
+
+    # إعادة الاحتساب لا تكرّر المخالفة ولا الإشعار
+    client.post(f"/api/attendance/recompute?date_from={day}&date_to={day}", headers=auth)
+    again = client.get(f"/api/violations?employee_id={emp['id']}", headers=auth).json()
+    assert len([v for v in again if v["occurred_on"] == day]) == 1
+
+
+def test_employee_without_break_keeps_full_hours(client, auth):
+    """من لا يأخذ استراحة: لا تُخصم استراحة الوردية الثابتة من ساعاته."""
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية باستراحة ثابتة", "start_time": "08:00:00", "end_time": "17:00:00",
+        "break_minutes": 60, "work_days": "0,1,2,3,4,5,6"}).json()
+    taker = client.post("/api/employees", headers=auth, json={
+        "code": "9322", "full_name": "موظف يأخذ استراحة", "shift_id": shift["id"]}).json()
+    skipper = client.post("/api/employees", headers=auth, json={
+        "code": "9323", "full_name": "موظف بلا استراحة", "shift_id": shift["id"],
+        "no_break": True}).json()
+    assert skipper["no_break"] is True
+
+    day = "2026-09-15"
+    for emp_id in (taker["id"], skipper["id"]):
+        for when in ("08:00:00", "17:00:00"):
+            _punch(client, auth, emp_id, f"{day}T{when}")
+
+    def sheet(emp_id):
+        return client.get(f"/api/attendance/employee/{emp_id}?date_from={day}&date_to={day}",
+                          headers=auth).json()[0]
+
+    # من يأخذ استراحة تُخصم منه استراحة الوردية الثابتة رغم عدم بصمه لها
+    assert sheet(taker["id"])["worked_minutes"] == 540 - 60
+    # ومن لا يأخذها تُحتسب ساعاته كاملة
+    assert sheet(skipper["id"])["worked_minutes"] == 540
+
+
+def test_no_break_in_the_clock_out_window(client, auth):
+    """لا استراحة في آخر نصف ساعة: البصمة انصراف، وزر الاستراحة يُرفض."""
+    from app import security_extra
+
+    security_extra.reset_all()
+    site = client.post("/api/sites", headers=auth, json={
+        "name": "فرع نافذة الانصراف", "latitude": 24.9, "longitude": 46.9,
+        "radius_meters": 300}).json()
+    # وردية انتهت قبل قليل، فنحن الآن داخل نافذة الانصراف
+    now = datetime.now()
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية انتهت الآن", "start_time": "00:00:00",
+        "end_time": f"{now.hour:02d}:{now.minute:02d}:00",
+        "work_days": "0,1,2,3,4,5,6"}).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9324", "full_name": "موظف نافذة الانصراف", "phone": "0536665544",
+        "shift_id": shift["id"], "site_id": site["id"]}).json()
+    token = client.post("/api/auth/login", data={
+        "username": "0536665544", "password": "0536665544"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+    here = {"latitude": 24.9, "longitude": 46.9, "accuracy_meters": 10}
+    client.put("/api/settings", headers=auth, json={"punch_debounce_seconds": 0})
+
+    client.post("/api/attendance/self-punch", headers=h, json=here)   # حضور
+    home = client.get("/api/me/home", headers=h).json()
+    assert home["state"] == "in"
+    assert home["action"] == "clock_out" and home["secondary_action"] is None
+    assert "لا استراحة" in home["state_detail"]
+
+    # ضغط زر الاستراحة مرفوض برسالة واضحة
+    denied = client.post("/api/attendance/self-punch", headers=h,
+                         json={**here, "intent": "break_start"})
+    assert denied.status_code == 400 and "لا استراحة في آخر" in denied.json()["detail"]
+
+    # والبصمة العادية في هذه النافذة انصراف لا استراحة
+    out = client.post("/api/attendance/self-punch", headers=h, json=here)
+    assert out.json()["kind"] == "انصراف" and out.json()["state"] == "out"
+    client.put("/api/settings", headers=auth, json={"punch_debounce_seconds": 20})

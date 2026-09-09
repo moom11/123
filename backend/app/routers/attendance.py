@@ -328,7 +328,24 @@ def self_punch(
     )
 
     now = datetime.now().replace(microsecond=0)
-    debounce = max(0, policies.resolve(db, emp).debounce_seconds)
+    policy = policies.resolve(db, emp)
+    if data.intent == "break_start":
+        rules = attendance_service.ShiftRules(emp.shift, emp.weekly_rest_days)
+        window_start = rules.scheduled_out(now.date()) - timedelta(
+            minutes=max(0, policy.clock_out_from_minutes)
+        )
+        if now >= window_start:
+            raise HTTPException(
+                status_code=400,
+                detail=f"لا استراحة في آخر {policy.clock_out_from_minutes} دقيقة من الدوام"
+                       " — سجّل انصرافك",
+            )
+        if emp.no_break:
+            raise HTTPException(
+                status_code=400,
+                detail="حسابك مضبوط على «بلا استراحة» — راجع الموارد البشرية",
+            )
+    debounce = max(0, policy.debounce_seconds)
     recent = db.scalar(
         select(Punch)
         .where(

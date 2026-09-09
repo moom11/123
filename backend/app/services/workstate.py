@@ -132,9 +132,15 @@ def classify(
     policy: Policy,
 ) -> EventType:
     """يحدّد معنى البصمة من حالة الموظف ووقت الوردية وسياسة الانصراف."""
+    # داخل نافذة الانصراف لا وجود لاستراحة: أي بصمة من «داخل العمل» انصراف
+    in_clock_out_window = punch.punch_time >= scheduled_out - timedelta(
+        minutes=max(0, policy.clock_out_from_minutes)
+    )
+
     intent = INTENT_EVENTS.get((punch.intent or "").strip().lower())
     if intent is not None and intent in ALLOWED_FROM[state]:
-        return intent
+        if not (intent is EventType.break_start and in_clock_out_window):
+            return intent
 
     if state is WorkState.out:
         return EventType.clock_in
@@ -143,10 +149,7 @@ def classify(
         return EventType.break_end
 
     # داخل العمل: انصراف فقط ضمن وقت الانصراف المعتمد، وإلا فهي استراحة
-    clock_out_from = scheduled_out - timedelta(minutes=max(0, policy.clock_out_from_minutes))
-    if punch.punch_time >= clock_out_from:
-        return EventType.clock_out
-    return EventType.break_start
+    return EventType.clock_out if in_clock_out_window else EventType.break_start
 
 
 def replay(

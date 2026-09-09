@@ -46,6 +46,7 @@ def employee_out(emp: Employee) -> EmployeeOut:
         allowances=emp.allowances or 0,
         total_salary=round((emp.basic_salary or 0) + (emp.allowances or 0), 2),
         weekly_rest_days=emp.weekly_rest_days,
+        no_break=bool(emp.no_break),
         status=emp.status,
         has_user=emp.user is not None,
     )

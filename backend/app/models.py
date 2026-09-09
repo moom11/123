@@ -223,6 +223,9 @@ class Employee(Base):
     allowances: Mapped[float] = mapped_column(Float, default=0.0)  # مجموع البدلات الشهرية
     # أيام الراحة الأسبوعية الخاصة بالموظف (0=الاثنين … 6=الأحد)، فارغة = حسب الوردية
     weekly_rest_days: Mapped[str | None] = mapped_column(String(20))
+    # موظف لا يأخذ استراحة: لا تُخصم استراحة الوردية الثابتة من ساعاته،
+    # وأي استراحة يأخذها تُحتسب تجاوزاً من أول دقيقة بعد السماح
+    no_break: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[EmployeeStatus] = mapped_column(Enum(EmployeeStatus), default=EmployeeStatus.active)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
