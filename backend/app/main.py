@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -11,6 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import ADMIN_PASSWORD, AUTO_SYNC_MINUTES, FRONTEND_DIR, TIMEZONE_NAME, UPLOAD_DIR
+from .security_extra import SecurityHeadersMiddleware
 from .database import SessionLocal
 from .routers import (
     attendance,
@@ -26,6 +28,7 @@ from .routers import (
     me,
     payroll,
     push,
+    rest_days,
     reports,
     sheets,
     sites,
@@ -101,13 +104,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(SecurityHeadersMiddleware)
+
+# CORS: النظام والواجهة على نفس النطاق، فلا يُسمح بنطاقات خارجية إلا بضبط صريح
+_cors_origins = [o.strip() for o in os.getenv("HR_CORS_ORIGINS", "").split(",") if o.strip()]
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
 
 for router in (
     auth.router,
@@ -122,6 +130,7 @@ for router in (
     loans.router,
     me.router,
     push.router,
+    rest_days.router,
     branding.router,
     backup.router,
     hr_extra.router,

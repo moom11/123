@@ -532,6 +532,22 @@ class EmployeeLoan(Base):
     employee: Mapped[Employee] = relationship()
 
 
+class RestDay(Base):
+    """يوم راحة مجدول لموظف (الراحة الشهرية أو تعويض يوم عمل)."""
+
+    __tablename__ = "rest_days"
+    __table_args__ = (UniqueConstraint("employee_id", "rest_date", name="uq_rest_day"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    rest_date: Mapped[date] = mapped_column(Date, index=True)
+    note: Mapped[str | None] = mapped_column(String(160))
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    employee: Mapped[Employee] = relationship()
+
+
 class PushSubscription(Base):
     """اشتراك متصفح/جوال في إشعارات الويب (Web Push)."""
 

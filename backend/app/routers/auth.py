@@ -1,7 +1,7 @@
 """تسجيل الدخول وإدارة الحساب الشخصي."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -10,6 +10,7 @@ from ..database import get_db
 from ..models import Employee, User
 from ..schemas import PasswordChange, Token, UserOut
 from ..security import create_access_token, get_current_user, hash_password, verify_password
+from ..security_extra import clear_failures, login_block_seconds, password_problem, register_failure
 from ..services import audit
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -52,15 +53,33 @@ def find_login_user(db: Session, identifier: str) -> User | None:
 
 
 @router.post("/login", response_model=Token)
-def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+def login(
+    request: Request,
+    form: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+):
+    client_ip = request.client.host if request.client else "-"
+    blocked = login_block_seconds(form.username, client_ip)
+    if blocked:
+        raise HTTPException(
+            status_code=429,
+            detail=f"تجاوزت عدد المحاولات المسموحة، حاول بعد {max(1, blocked // 60)} دقيقة",
+        )
+
     user = find_login_user(db, form.username)
     if not user or not verify_password(form.password, user.password_hash):
+        tries = register_failure(form.username, client_ip)
+        audit.log(
+            db, None, "login_failed", "user", None,
+            f"محاولة فاشلة لـ «{form.username}» من {client_ip} (رقم {tries})",
+        )
         raise HTTPException(
             status_code=401, detail="اسم المستخدم أو رقم الجوال أو كلمة المرور غير صحيحة"
         )
     if not user.is_active:
         raise HTTPException(status_code=403, detail="الحساب موقوف، راجع مدير النظام")
-    audit.log(db, user, "login", "user", user.id, f"دخول {user.username}")
+    clear_failures(form.username, client_ip)
+    audit.log(db, user, "login", "user", user.id, f"دخول {user.username} من {client_ip}")
     return Token(access_token=create_access_token(user), user=user_out(user))
 
 
@@ -79,6 +98,12 @@ def change_password(
         raise HTTPException(status_code=400, detail="كلمة المرور الحالية غير صحيحة")
     if payload.new_password == payload.current_password:
         raise HTTPException(status_code=400, detail="اختر كلمة مرور مختلفة عن الحالية")
+    problem = password_problem(
+        payload.new_password, user.username,
+        user.employee.phone if user.employee else "",
+    )
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
     user.password_hash = hash_password(payload.new_password)
     user.must_change_password = False
     audit.log(db, user, "password", "user", user.id, "تغيير كلمة المرور الذاتية", commit=False)

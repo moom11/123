@@ -15,6 +15,7 @@ from ..models import (
     LeaveRequest,
     LeaveStatus,
     Punch,
+    RestDay,
     Shift,
 )
 
@@ -106,6 +107,18 @@ def _approved_leaves(db: Session, employee_ids: list[int], start: date, end: dat
     return result
 
 
+def _rest_days(db: Session, employee_ids: list[int], start: date, end: date) -> set[tuple[int, date]]:
+    """أيام الراحة المجدولة (الراحة الشهرية) لكل موظف ضمن المدى."""
+    rows = db.scalars(
+        select(RestDay).where(
+            RestDay.employee_id.in_(employee_ids),
+            RestDay.rest_date >= start,
+            RestDay.rest_date <= end,
+        )
+    ).all()
+    return {(row.employee_id, row.rest_date) for row in rows}
+
+
 def compute_day(
     employee: Employee,
     day: date,
@@ -113,6 +126,7 @@ def compute_day(
     rules: ShiftRules,
     holiday_name: str | None,
     leave: LeaveRequest | None,
+    is_rest_day: bool = False,
 ) -> dict:
     """يحسب ملخص يوم واحد لموظف واحد ويعيد قاموساً بالقيم."""
     punches = sorted(punches, key=lambda p: p.punch_time)
@@ -120,7 +134,8 @@ def compute_day(
     check_out = punches[-1].punch_time if len(punches) > 1 else None
 
     worked = late = early = overtime = 0
-    is_work_day = day.weekday() in rules.work_days
+    # يوم راحة مجدول (الراحة الشهرية) يعامل معاملة الراحة الأسبوعية
+    is_work_day = day.weekday() in rules.work_days and not is_rest_day
 
     if check_in and check_out:
         worked = int((check_out - check_in).total_seconds() // 60) - rules.break_minutes
@@ -156,6 +171,8 @@ def compute_day(
         status = DayStatus.absent
 
     note = None
+    if status == DayStatus.weekend and is_rest_day:
+        note = "يوم راحة مجدول"
     if status == DayStatus.holiday:
         note = holiday_name
     elif status == DayStatus.leave and leave is not None:
@@ -198,6 +215,7 @@ def recompute(
     ids = [e.id for e in employees]
     holidays = _holidays(db, start, end)
     leaves = _approved_leaves(db, ids, start, end)
+    rest_days = _rest_days(db, ids, start, end)
 
     # كل البصمات في المدى (مع هامش يوم للورديات الليلية)
     punch_rows = db.scalars(
@@ -234,7 +252,8 @@ def recompute(
             win_start, win_end = rules.window(day)
             day_punches = [p for p in emp_punches if win_start <= p.punch_time < win_end]
             data = compute_day(
-                emp, day, day_punches, rules, holidays.get(day), leaves.get((emp.id, day))
+                emp, day, day_punches, rules, holidays.get(day), leaves.get((emp.id, day)),
+                is_rest_day=(emp.id, day) in rest_days,
             )
             row = existing.get((emp.id, day))
             if row is None:

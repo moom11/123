@@ -15,6 +15,7 @@ const PAGES = [
   { id: 'dashboard',  title: 'لوحة المؤشرات', icon: '📊', group: 'عام',      roles: ['admin','hr','manager','employee'] },
   { id: 'attendance', title: 'الحضور اليومي', icon: '🕒', group: 'الحضور',   roles: ['admin','hr','manager','employee'] },
   { id: 'punches',    title: 'سجل البصمات',   icon: '🖐', group: 'الحضور',   roles: ['admin','hr','manager','employee'] },
+  { id: 'restDays',   title: 'أيام الراحة',    icon: '🛌', group: 'الحضور',   roles: ['admin','hr','manager'] },
   { id: 'leaves',     title: 'الإجازات',       icon: '🌴', group: 'الإجازات', roles: ['admin','hr','manager'] },
   { id: 'myLeaves',   title: 'إجازاتي',        icon: '🌴', group: 'الإجازات', roles: ['employee'] },
   { id: 'balances',   title: 'أرصدة الإجازات', icon: '⚖️', group: 'الإجازات', roles: ['admin','hr','manager'] },
@@ -1242,8 +1243,10 @@ function leaveModal(employees, leaveTypes, after) {
       const preview = async () => {
         try {
           const r = await api('/api/leave-requests/preview', { method: 'POST', body: payload() });
-          el('lrPreview').innerHTML = `عدد الأيام المحتسبة: <b>${r.days}</b> — الرصيد الحالي: <b>${r.remaining_days}</b>` +
-            (r.after_request !== null ? ` — المتبقي بعد الطلب: <b>${r.after_request}</b>` : ' — (لا يخصم من الرصيد)');
+          el('lrPreview').innerHTML = r.remaining_days === null || r.remaining_days === undefined
+            ? `عدد الأيام المحتسبة: <b>${r.days}</b>`
+            : `عدد الأيام المحتسبة: <b>${r.days}</b> — الرصيد الحالي: <b>${r.remaining_days}</b>` +
+              (r.after_request !== null ? ` — المتبقي بعد الطلب: <b>${r.after_request}</b>` : ' — (لا يخصم من الرصيد)');
         } catch (e) { el('lrPreview').textContent = e.message; }
       };
       ['lrType', 'lrFrom', 'lrTo', 'lrEmp'].forEach((id) => { if (el(id)) el(id).onchange = preview; });
@@ -1267,23 +1270,27 @@ views.myLeaves = async () => {
       راجع الموارد البشرية لربط الحساب باسمك في قائمة الموظفين.</div></div></div>`);
     return;
   }
-  const leaveTypes = await api('/api/leave-types');
+  const [leaveTypes, settings] = await Promise.all([
+    api('/api/leave-types'),
+    api('/api/settings').catch(() => ({ show_leave_balance_to_employee: false })),
+  ]);
+  const showBalance = !!settings.show_leave_balance_to_employee;
   render(`
     <div class="card"><div class="card-body inline">
       <button class="btn" id="mlNew">طلب إجازة جديد</button>
-      <span class="help">تظهر هنا طلباتك ورصيدك أنت فقط.</span>
+      <span class="help">تظهر هنا طلباتك أنت فقط.</span>
     </div></div>
-    <div class="card"><div class="card-head"><h3>رصيدي لعام ${year}</h3></div>
-      <div id="mlBal"><div class="empty">جارٍ التحميل…</div></div></div>
+    ${showBalance ? `<div class="card"><div class="card-head"><h3>رصيدي لعام ${year}</h3></div>
+      <div id="mlBal"><div class="empty">جارٍ التحميل…</div></div></div>` : ''}
     <div class="card"><div class="card-head"><h3>طلباتي</h3><span class="muted" id="mlCount"></span></div>
       <div id="mlTable"><div class="empty">جارٍ التحميل…</div></div></div>`);
 
   const load = async () => {
     const [balances, rows] = await Promise.all([
-      api('/api/leave-balances?year=' + year),
+      showBalance ? api('/api/leave-balances?year=' + year) : Promise.resolve([]),
       api('/api/leave-requests'),
     ]);
-    el('mlBal').innerHTML = balances.length
+    if (el('mlBal')) el('mlBal').innerHTML = balances.length
       ? `<div class="card-body">${balances.map((b) => {
           const total = b.entitled_days + b.carried_over_days;
           const pct = total ? (b.remaining_days / total) * 100 : 0;
@@ -1719,6 +1726,99 @@ views.loans = async () => {
   load();
 };
 
+/* ------------------------------ أيام الراحة الشهرية ------------------------------ */
+views.restDays = async () => {
+  const { employees } = await loadLookups();
+  const now = new Date();
+  render(`
+    <div class="card"><div class="card-body inline">
+      <div class="field"><label>الموظف</label><select id="rdEmp">${options(employees, '', 'id', 'full_name')}</select></div>
+      <div class="field"><label>الشهر</label><select id="rdMonth">${
+        MONTHS.map((m, i) => `<option value="${i + 1}" ${i === now.getMonth() ? 'selected' : ''}>${m}</option>`).join('')
+      }</select></div>
+      <div class="field"><label>السنة</label><input type="number" id="rdYear" value="${now.getFullYear()}" /></div>
+      <button class="btn" id="rdLoad">عرض</button>
+      <span class="help">اضغط على أي يوم في التقويم لتحديده يوم راحة أو لإلغائه.</span>
+    </div></div>
+    <div class="grid cols-4 stagger" id="rdKpis"></div>
+    <div class="card"><div class="card-head"><h3 id="rdTitle">تقويم الراحة</h3></div>
+      <div class="card-body" id="rdCal"><div class="sk tall"></div></div></div>
+    <div class="card"><div class="card-head"><h3>ملخص الشهر لكل الموظفين</h3></div>
+      <div id="rdSummary"><div class="sk-rows">${'<div class="sk line"></div>'.repeat(4)}</div></div></div>`);
+
+  let current = { rows: [], quota: 0 };
+  const load = async () => {
+    const year = Number(el('rdYear').value);
+    const month = Number(el('rdMonth').value);
+    const employeeId = Number(el('rdEmp').value);
+    const [rows, summary, settings] = await Promise.all([
+      api(`/api/rest-days?year=${year}&month=${month}&employee_id=${employeeId}`),
+      api(`/api/rest-days/summary?year=${year}&month=${month}`),
+      api('/api/settings'),
+    ]);
+    current = { rows, quota: settings.monthly_rest_quota || 0 };
+    const mine = summary.find((r) => r.employee_id === employeeId) || { used: rows.length, quota: current.quota, remaining: 0 };
+    el('rdTitle').textContent = `تقويم الراحة — ${MONTHS[month - 1]} ${year}`;
+    el('rdKpis').innerHTML = `
+      <div class="kpi primary"><div class="label">رصيد الشهر<span class="ico">🛌</span></div>
+        <div class="value">${mine.quota}</div><div class="foot">أيام لكل موظف</div></div>
+      <div class="kpi ok"><div class="label">المستخدم<span class="ico">✅</span></div>
+        <div class="value ok">${mine.used}</div></div>
+      <div class="kpi warn"><div class="label">المتبقي<span class="ico">⏳</span></div>
+        <div class="value warn">${mine.remaining}</div></div>
+      <div class="kpi info"><div class="label">إجمالي أيام الراحة المجدولة<span class="ico">📆</span></div>
+        <div class="value info">${summary.reduce((t, r) => t + r.used, 0)}</div>
+        <div class="foot">لكل الموظفين هذا الشهر</div></div>`;
+
+    // تقويم قابل للنقر
+    const restMap = {};
+    rows.forEach((r) => { restMap[r.rest_date] = r.id; });
+    const first = new Date(year, month - 1, 1);
+    const days = new Date(year, month, 0).getDate();
+    let cells = '';
+    for (let i = 0; i < first.getDay(); i++) cells += '<div class="day blank"></div>';
+    for (let d = 1; d <= days; d++) {
+      const iso = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      const restId = restMap[iso];
+      cells += `<div class="day ${restId ? 'weekend' : ''}" style="cursor:pointer"
+          onclick="toggleRest('${iso}', ${restId || 0})" title="${iso}">
+          <span class="n">${d}</span><span class="s">${restId ? '🛌 راحة' : ''}</span></div>`;
+    }
+    el('rdCal').innerHTML =
+      `<div class="calendar">${CAL_DOW.map((x) => `<div class="dow">${x}</div>`).join('')}${cells}</div>`;
+
+    el('rdSummary').innerHTML = table(
+      ['الموظف', 'المستخدم', 'الرصيد', 'المتبقي', 'التواريخ'],
+      summary,
+      (r) => `<tr>
+        <td><div style="display:flex;align-items:center;gap:9px">${avatar(r.employee_name, 'sm')}
+          <div><div style="font-weight:600">${esc(r.employee_name)}</div>
+          <div class="muted" style="font-size:11.5px">${esc(r.employee_code)}</div></div></div></td>
+        <td>${r.used}</td><td>${r.quota}</td>
+        <td><span class="tag ${r.remaining > 0 ? 'on' : 'off'}">${r.remaining}</span></td>
+        <td>${r.dates.map((d) => esc(d)).join('، ') || '—'}</td></tr>`,
+      'لا توجد أيام راحة مجدولة هذا الشهر');
+  };
+
+  window.toggleRest = async (iso, restId) => {
+    try {
+      if (restId) {
+        await api('/api/rest-days/' + restId, { method: 'DELETE' });
+        toast('أُلغي يوم الراحة', 'ok');
+      } else {
+        await api('/api/rest-days', { method: 'POST', body: {
+          employee_id: Number(el('rdEmp').value), rest_date: iso } });
+        toast('تم تحديد يوم الراحة', 'ok');
+      }
+      load();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  el('rdLoad').onclick = () => load().catch((e) => toast(e.message, 'err'));
+  ['rdEmp', 'rdMonth', 'rdYear'].forEach((id) =>
+    el(id).onchange = () => load().catch((e) => toast(e.message, 'err')));
+  load();
+};
+
 /* ------------------------------ بياناتي (تحديث ذاتي) ------------------------------ */
 views.myProfile = async () => {
   if (!state.user.employee_id) {
@@ -2020,6 +2120,8 @@ views.devices = async () => {
       <button class="btn ok" id="dNew">إضافة جهاز</button>
       <button class="btn" id="dSyncAll">مزامنة كل الأجهزة</button>
       <button class="btn ghost" id="dLoad">تحديث</button>
+      <button class="btn gray" id="dPair">🔓 فتح إقران جهاز جديد (٣٠ دقيقة)</button>
+      <span class="help" id="dPairState"></span>
     </div></div>
     <div class="card"><div class="card-head"><h3>الأجهزة</h3></div><div id="dTable"><div class="empty">جارٍ التحميل…</div></div></div>
     <div class="card"><div class="card-head"><h3>كيف تربط جهاز ZKTeco فعلياً؟</h3></div><div class="card-body help">
@@ -2053,6 +2155,29 @@ views.devices = async () => {
     state.cache.devices = rows;
   };
   el('dLoad').onclick = () => load().catch((e) => toast(e.message, 'err'));
+
+  const pairingState = async () => {
+    try {
+      const info = await api('/api/devices/pairing');
+      el('dPairState').innerHTML = info.open
+        ? `<span class="tag on">الإقران مفتوح</span> — أي جهاز جديد يتصل الآن سيُسجَّل تلقائياً
+           ${info.until ? `(حتى ${esc(info.until.replace('T', ' '))})` : ''}`
+        : '<span class="tag off">الإقران مغلق</span> — لا يُقبل أي جهاز غير مسجّل (حماية من إرسال بصمات مزيّفة)';
+      el('dPair').textContent = info.open ? '🔒 إغلاق الإقران' : '🔓 فتح إقران جهاز جديد (٣٠ دقيقة)';
+      el('dPair').dataset.open = info.open ? '1' : '';
+    } catch (e) { el('dPairState').textContent = ''; }
+  };
+  el('dPair').onclick = async () => {
+    try {
+      const open = el('dPair').dataset.open === '1';
+      const res = open
+        ? await api('/api/devices/pairing', { method: 'DELETE' })
+        : await api('/api/devices/pairing?minutes=30', { method: 'POST' });
+      toast(res.message, 'ok');
+      pairingState();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  pairingState();
   el('dNew').onclick = () => deviceModal(null, load);
   el('dSyncAll').onclick = async () => {
     toast('جارٍ مزامنة الأجهزة…');
@@ -2496,6 +2621,20 @@ settingsTabs.alerts = async () => {
         قائمة من لم يبصم ومن تأخر، إلى الموارد البشرية ومدير الإدارة (وللموظف نفسه عند التفعيل).</div>
     </div></div>
     <div class="card">
+      <div class="card-head"><h3>الإجازات والراحة الشهرية</h3></div>
+      <div class="card-body">
+        <div class="grid cols-3">
+          <div class="field"><label>أيام الراحة الشهرية لكل موظف</label>
+            <input type="number" id="alRest" min="0" max="15" value="${st.monthly_rest_quota}" /></div>
+          <div class="field"><label>إظهار رصيد الإجازات للموظف</label><select id="alBal">
+            <option value="false" ${st.show_leave_balance_to_employee ? '' : 'selected'}>مخفي</option>
+            <option value="true" ${st.show_leave_balance_to_employee ? 'selected' : ''}>ظاهر</option></select></div>
+        </div>
+        <button class="btn" id="alLeaveSave">حفظ</button>
+        <div class="help">عند الإخفاء لا يرى الموظف الأيام المتبقية لا في «إجازاتي» ولا عند تقديم الطلب،
+          وتبقى ظاهرة كاملة للموارد البشرية.</div>
+      </div></div>
+    <div class="card">
       <div class="card-head"><h3>حسابات دخول الموظفين</h3></div>
       <div class="card-body">
         <div class="field" style="max-width:320px"><label>إنشاء حساب تلقائياً عند إضافة رقم الجوال</label>
@@ -2529,6 +2668,14 @@ settingsTabs.alerts = async () => {
         attendance_alert_notify_employee: el('alEmp').value === 'true',
       } });
       toast('تم حفظ إعدادات التنبيه', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  el('alLeaveSave').onclick = async () => {
+    try {
+      await api('/api/settings', { method: 'PUT', body: {
+        monthly_rest_quota: Number(el('alRest').value),
+        show_leave_balance_to_employee: el('alBal').value === 'true' } });
+      toast('تم الحفظ', 'ok');
     } catch (e) { toast(e.message, 'err'); }
   };
   el('alAutoSave').onclick = async () => {

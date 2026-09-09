@@ -275,6 +275,8 @@ class SettingsOut(BaseModel):
     document_alert_days: int = 30
     push_enabled: bool = True
     auto_account_on_phone: bool = True
+    monthly_rest_quota: int = 4
+    show_leave_balance_to_employee: bool = False
     attendance_alert_enabled: bool = True
     attendance_alert_after_minutes: int = 60
     attendance_alert_notify_employee: bool = True
@@ -294,6 +296,8 @@ class SettingsIn(BaseModel):
     document_alert_days: int | None = Field(default=None, ge=1, le=365)
     push_enabled: bool | None = None
     auto_account_on_phone: bool | None = None
+    monthly_rest_quota: int | None = Field(default=None, ge=0, le=15)
+    show_leave_balance_to_employee: bool | None = None
     attendance_alert_enabled: bool | None = None
     attendance_alert_after_minutes: int | None = Field(default=None, ge=5, le=600)
     attendance_alert_notify_employee: bool | None = None
@@ -745,6 +749,31 @@ class MyProfileOut(ORMModel):
     basic_salary: float = 0
     allowances: float = 0
     total_salary: float = 0
+
+
+class RestDayIn(BaseModel):
+    employee_id: int
+    rest_date: date
+    note: str | None = None
+
+
+class RestDayOut(ORMModel):
+    id: int
+    employee_id: int
+    employee_name: str | None = None
+    employee_code: str | None = None
+    rest_date: date
+    note: str | None = None
+
+
+class RestSummaryRow(BaseModel):
+    employee_id: int
+    employee_code: str
+    employee_name: str
+    used: int = 0
+    quota: int = 0
+    remaining: int = 0
+    dates: list[date] = []
 
 
 class PushSubscriptionIn(BaseModel):

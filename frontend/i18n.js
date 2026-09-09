@@ -185,6 +185,21 @@ const I18N_EN = {
   'يجب أن تكون داخل نطاق موقع العمل المعتمد عند التسجيل.':
     'You must be inside the approved work site when punching.',
 
+  'أيام الراحة': 'Rest days', 'تقويم الراحة': 'Rest calendar', 'رصيد الشهر': 'Monthly quota',
+  'المستخدم': 'Used', 'الرصيد': 'Quota', 'التواريخ': 'Dates', 'راحة': 'Rest',
+  'يوم راحة مجدول': 'Scheduled rest day', 'ملخص الشهر لكل الموظفين': 'Monthly summary — all employees',
+  'إجمالي أيام الراحة المجدولة': 'Scheduled rest days', 'لكل الموظفين هذا الشهر': 'All employees this month',
+  'اضغط على أي يوم في التقويم لتحديده يوم راحة أو لإلغائه.':
+    'Tap any day in the calendar to set or clear a rest day.',
+  'تم تحديد يوم الراحة': 'Rest day set', 'أُلغي يوم الراحة': 'Rest day cleared',
+  'لا توجد أيام راحة مجدولة هذا الشهر': 'No rest days scheduled this month',
+  'تظهر هنا طلباتك أنت فقط.': 'Only your own requests appear here.',
+  'الإقران مفتوح': 'Pairing open', 'الإقران مغلق': 'Pairing closed',
+  'الإجازات والراحة الشهرية': 'Leaves & monthly rest',
+  'أيام الراحة الشهرية لكل موظف': 'Monthly rest days per employee',
+  'إظهار رصيد الإجازات للموظف': 'Show leave balance to employee',
+  'مخفي': 'Hidden', 'ظاهر': 'Visible',
+
   // ------- الأيام والأشهر -------
   'الأحد': 'Sunday', 'الاثنين': 'Monday', 'الثلاثاء': 'Tuesday', 'الأربعاء': 'Wednesday',
   'الخميس': 'Thursday', 'الجمعة': 'Friday', 'السبت': 'Saturday',

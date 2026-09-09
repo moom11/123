@@ -35,7 +35,7 @@ from ..schemas import (
 )
 from ..security import can_view_employee, get_current_user, require_hr, require_manager
 from ..services import attendance as attendance_service
-from ..services import audit, notifications, sheets
+from ..services import audit, notifications, settings_store, sheets
 from ..services import leave as leave_service
 
 router = APIRouter(prefix="/api", tags=["leaves"])
@@ -174,6 +174,9 @@ def preview_days(payload: LeaveRequestIn, db: Session = Depends(get_db), user: U
     days = leave_service.count_leave_days(db, emp, lt, payload.start_date, payload.end_date)
     balance = leave_service.get_or_create_balance(db, emp.id, lt, payload.start_date.year)
     db.commit()
+    if user.role == Role.employee and not settings_store.get_bool(db, "show_leave_balance_to_employee"):
+        # سياسة المنشأة: لا تُعرض الأرصدة المتبقية للموظف
+        return {"days": days, "remaining_days": None, "after_request": None}
     return {
         "days": days,
         "remaining_days": leave_service.remaining_days(balance),
@@ -321,6 +324,8 @@ def list_balances(
         # الموظف يرى رصيده وحده، وإن لم يكن حسابه مرتبطاً بملف موظف فلا رصيد له
         if not user.employee_id:
             return []
+        if not settings_store.get_bool(db, "show_leave_balance_to_employee"):
+            return []   # سياسة المنشأة: الأرصدة لا تظهر للموظفين
         target = user.employee_id
     if target and not can_view_employee(user, target, db):
         raise HTTPException(status_code=403, detail="لا تملك صلاحية عرض هذا الموظف")

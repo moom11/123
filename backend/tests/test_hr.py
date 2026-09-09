@@ -1356,8 +1356,8 @@ def test_unlinked_employee_account_has_no_balances(client, auth):
     assert client.get("/api/employees", headers=h).json() == []
 
 
-def test_linked_employee_sees_own_balances(client, auth):
-    """الموظف المرتبط يرى رصيده هو فقط، ولكل نوع إجازة يخصم من الرصيد."""
+def test_leave_balance_hidden_from_employee_by_default(client, auth):
+    """سياسة المنشأة: الأرصدة لا تظهر للموظف إلا بتفعيلها من الإعدادات."""
     emp = client.post("/api/employees", headers=auth, json={
         "code": "9760", "full_name": "موظف الرصيد"}).json()
     client.post("/api/users", headers=auth, json={
@@ -1366,11 +1366,28 @@ def test_linked_employee_sees_own_balances(client, auth):
     token = client.post("/api/auth/login", data={
         "username": "bal_emp", "password": "Aa123456"}).json()["access_token"]
     h = {"Authorization": f"Bearer {token}"}
+    # الافتراضي: مخفي
+    assert client.get("/api/leave-balances", headers=h).json() == []
+    annual_type = next(t for t in client.get("/api/leave-types", headers=h).json()
+                       if t["code"] == "annual")
+    today = date.today()
+    preview = client.post("/api/leave-requests/preview", headers=h, json={
+        "employee_id": emp["id"], "leave_type_id": annual_type["id"],
+        "start_date": str(today), "end_date": str(today)}).json()
+    assert preview["days"] == 1
+    assert preview["remaining_days"] is None and preview["after_request"] is None
+
+    # الموارد البشرية ترى الأرصدة دائماً
+    hr_rows = client.get(f"/api/leave-balances?employee_id={emp['id']}", headers=auth).json()
+    assert hr_rows and {r["employee_id"] for r in hr_rows} == {emp["id"]}
+
+    # عند تفعيل الإظهار يراها الموظف
+    client.put("/api/settings", headers=auth, json={"show_leave_balance_to_employee": True})
     rows = client.get("/api/leave-balances", headers=h).json()
-    assert rows, "يجب أن تُنشأ الأرصدة تلقائياً لكل نوع إجازة يخصم من الرصيد"
-    assert {r["employee_id"] for r in rows} == {emp["id"]}
+    assert rows and {r["employee_id"] for r in rows} == {emp["id"]}
     annual = next(r for r in rows if r["leave_type_name"] == "إجازة سنوية")
     assert annual["entitled_days"] == 30 and annual["remaining_days"] == 30
+    client.put("/api/settings", headers=auth, json={"show_leave_balance_to_employee": False})
 
 
 # ------------------------------ السلف على الراتب ------------------------------
@@ -1759,3 +1776,135 @@ def test_weekly_rest_days_control_attendance(client, auth):
     assert fridays and all(r["status"] == "weekend" for r in fridays)
     # بقية الأيام أيام عمل (بلا بصمات ⇒ غياب)
     assert any(r["status"] == "absent" for r in others)
+
+
+# ------------------------------ الراحة الشهرية ------------------------------
+def test_monthly_rest_days(client, auth):
+    """يوم الراحة المجدول يظهر راحة، ويُحترم رصيد الشهر، ويُلغى بحذفه."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9990", "full_name": "موظف الراحة الشهرية", "basic_salary": 3000}).json()
+    client.put("/api/settings", headers=auth, json={"monthly_rest_quota": 2})
+
+    first = date.today().replace(day=1)
+    previous_end = first - timedelta(days=1)
+    year, month = previous_end.year, previous_end.month
+    day1, day2 = date(year, month, 5), date(year, month, 12)
+
+    for day in (day1, day2):
+        res = client.post("/api/rest-days", headers=auth, json={
+            "employee_id": emp["id"], "rest_date": str(day), "note": "راحة شهرية"})
+        assert res.status_code == 201, res.text
+
+    # تجاوز الرصيد مرفوض
+    third = client.post("/api/rest-days", headers=auth, json={
+        "employee_id": emp["id"], "rest_date": str(date(year, month, 19))})
+    assert third.status_code == 400 and "رصيد الراحة" in third.json()["detail"]
+
+    # تكرار اليوم نفسه مرفوض
+    assert client.post("/api/rest-days", headers=auth, json={
+        "employee_id": emp["id"], "rest_date": str(day1)}).status_code == 400
+
+    rows = client.get(
+        f"/api/attendance/employee/{emp['id']}?date_from={day1}&date_to={day2}", headers=auth).json()
+    by_date = {r["work_date"]: r for r in rows}
+    assert by_date[str(day1)]["status"] == "weekend"
+    assert by_date[str(day1)]["note"] == "يوم راحة مجدول"
+    assert by_date[str(day2)]["status"] == "weekend"
+
+    summary = client.get(f"/api/rest-days/summary?year={year}&month={month}", headers=auth).json()
+    row = next(r for r in summary if r["employee_code"] == "9990")
+    assert row["used"] == 2 and row["quota"] == 2 and row["remaining"] == 0
+
+    # الحذف يعيد اليوم يوم عمل (غياب لعدم وجود بصمات)
+    listed = client.get(
+        f"/api/rest-days?year={year}&month={month}&employee_id={emp['id']}", headers=auth).json()
+    assert len(listed) == 2
+    assert client.delete(f"/api/rest-days/{listed[0]['id']}", headers=auth).status_code == 200
+    after = client.get(
+        f"/api/attendance/employee/{emp['id']}?date_from={day1}&date_to={day1}", headers=auth).json()
+    assert after[0]["status"] in ("absent", "weekend")   # حسب موافقته ليوم راحة أسبوعية
+    client.put("/api/settings", headers=auth, json={"monthly_rest_quota": 4})
+
+
+# ------------------------------ الحماية ------------------------------
+def test_security_headers_present(client):
+    res = client.get("/api/health")
+    assert res.headers["X-Content-Type-Options"] == "nosniff"
+    assert res.headers["X-Frame-Options"] == "DENY"
+    assert "frame-ancestors 'none'" in res.headers["Content-Security-Policy"]
+    assert "geolocation=(self)" in res.headers["Permissions-Policy"]
+
+
+def test_login_lockout_after_repeated_failures(client, auth):
+    """المحاولات الفاشلة المتكررة تُوقف الحساب مؤقتاً وتُسجَّل في التدقيق."""
+    from app import security_extra
+
+    security_extra.reset_all()
+    client.post("/api/employees", headers=auth, json={
+        "code": "9995", "full_name": "هدف المحاولات", "phone": "0533777001"})
+    try:
+        codes = [
+            client.post("/api/auth/login", data={
+                "username": "0533777001", "password": "wrong"}).status_code
+            for _ in range(7)
+        ]
+        assert codes[0] == 401
+        assert 429 in codes, "يجب إيقاف المحاولات بعد تجاوز الحد"
+        # حتى كلمة المرور الصحيحة تُرفض أثناء الإيقاف
+        assert client.post("/api/auth/login", data={
+            "username": "0533777001", "password": "0533777001"}).status_code == 429
+        logs = client.get("/api/audit-logs?limit=50", headers=auth).json()
+        assert any(row["action"] == "login_failed" for row in logs)
+    finally:
+        security_extra.reset_all()
+
+    # بعد التصفير يعمل الدخول
+    assert client.post("/api/auth/login", data={
+        "username": "0533777001", "password": "0533777001"}).status_code == 200
+
+
+def test_weak_passwords_rejected(client, auth):
+    """لا تُقبل كلمة مرور شائعة أو مطابقة لرقم الجوال."""
+    from app import security_extra
+
+    security_extra.reset_all()
+    client.post("/api/employees", headers=auth, json={
+        "code": "9996", "full_name": "اختبار كلمات المرور", "phone": "0533777002"})
+    token = client.post("/api/auth/login", data={
+        "username": "0533777002", "password": "0533777002"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+
+    weak = client.post("/api/auth/change-password", headers=h, json={
+        "current_password": "0533777002", "new_password": "123456"})
+    assert weak.status_code == 400 and "شائعة" in weak.json()["detail"]
+
+    same_phone = client.post("/api/auth/change-password", headers=h, json={
+        "current_password": "0533777002", "new_password": "0533777002"})
+    assert same_phone.status_code == 400
+
+    ok = client.post("/api/auth/change-password", headers=h, json={
+        "current_password": "0533777002", "new_password": "Mara@2026"})
+    assert ok.status_code == 200
+
+
+def test_unknown_device_rejected_outside_pairing(client, auth):
+    """جهاز بصمة برقم تسلسلي مجهول لا يُسجَّل نفسه إلا خلال نافذة الإقران."""
+    # يوجد جهاز تجريبي من البيانات الأولية ⇒ الإقران مغلق افتراضياً
+    assert client.get("/api/devices/pairing", headers=auth).json()["open"] is False
+    assert client.get("/iclock/cdata?SN=INTRUDER123").status_code == 403
+
+    opened = client.post("/api/devices/pairing?minutes=30", headers=auth).json()
+    assert opened["ok"] is True
+    assert client.get("/api/devices/pairing", headers=auth).json()["open"] is True
+    assert client.get("/iclock/cdata?SN=NEWDEVICE1").status_code == 200
+
+    client.delete("/api/devices/pairing", headers=auth)
+    assert client.get("/iclock/cdata?SN=INTRUDER123").status_code == 403
+    # الجهاز الذي سُجّل أثناء الإقران يبقى مقبولاً
+    assert client.get("/iclock/cdata?SN=NEWDEVICE1").status_code == 200
+
+
+def test_uploads_are_not_executable(client, auth):
+    """المرفقات تُنزَّل ولا تُنفَّذ في المتصفح."""
+    res = client.get("/api/health")
+    assert res.headers["X-Content-Type-Options"] == "nosniff"

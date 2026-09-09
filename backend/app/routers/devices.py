@@ -1,7 +1,7 @@
 """إدارة أجهزة البصمة ZKTeco: الاتصال، المزامنة، ومستخدمو الجهاز."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select
@@ -18,7 +18,7 @@ from ..schemas import (
     SyncResult,
 )
 from ..security import get_current_user, require_hr
-from ..services import audit, zk_service
+from ..services import audit, settings_store, zk_service
 from ..zk import driver
 from ..zk.driver import DeviceError
 
@@ -28,6 +28,37 @@ router = APIRouter(prefix="/api/devices", tags=["devices"], dependencies=[Depend
 @router.get("", response_model=list[DeviceOut])
 def list_devices(db: Session = Depends(get_db)):
     return db.scalars(select(Device).order_by(Device.id)).all()
+
+
+@router.get("/pairing")
+def pairing_status(db: Session = Depends(get_db), _: User = Depends(require_hr)):
+    """حالة نافذة إقران الأجهزة الجديدة."""
+    from .iclock import pairing_is_open
+
+    until = settings_store.get(db, "device_pairing_until")
+    return {"open": pairing_is_open(db), "until": until or None}
+
+
+@router.post("/pairing")
+def open_pairing(
+    minutes: int = 30, db: Session = Depends(get_db), user: User = Depends(require_hr)
+):
+    """يفتح نافذة زمنية يُسمح خلالها بتسجيل جهاز بصمة جديد."""
+    minutes = max(5, min(minutes, 240))
+    until = (datetime.now() + timedelta(minutes=minutes)).isoformat(timespec="seconds")
+    settings_store.set_many(db, {"device_pairing_until": until})
+    audit.log(db, user, "settings", "device", None, f"فتح إقران الأجهزة {minutes} دقيقة")
+    return {
+        "ok": True, "until": until,
+        "message": f"يمكن تسجيل جهاز جديد خلال {minutes} دقيقة — اضبط الجهاز الآن",
+    }
+
+
+@router.delete("/pairing")
+def close_pairing(db: Session = Depends(get_db), user: User = Depends(require_hr)):
+    settings_store.set_many(db, {"device_pairing_until": ""})
+    audit.log(db, user, "settings", "device", None, "إغلاق إقران الأجهزة")
+    return {"ok": True, "message": "أُغلقت نافذة الإقران"}
 
 
 @router.post("", response_model=DeviceOut, status_code=201)

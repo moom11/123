@@ -8,16 +8,19 @@
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import Device, DeviceCommand, DeviceMode, PunchSource
-from ..services import zk_service
+from ..services import settings_store, zk_service
 from ..zk.driver import AttendanceRecord
+
+logger = logging.getLogger("hr")
 
 router = APIRouter(prefix="/iclock", tags=["iclock"], include_in_schema=True)
 
@@ -26,9 +29,30 @@ def _plain(text: str) -> Response:
     return Response(content=text, media_type="text/plain; charset=utf-8")
 
 
+def pairing_is_open(db: Session) -> bool:
+    """هل يُسمح بتسجيل جهاز جديد الآن؟
+
+    مفتوح تلقائياً ما دام لا يوجد أي جهاز مسجّل (التركيب الأول)، وبعد ذلك
+    لا يُقبل رقم تسلسلي جديد إلا خلال نافذة إقران تفتحها الموارد البشرية.
+    """
+    if not db.scalars(select(Device.id).limit(1)).all():
+        return True
+    until = settings_store.get(db, "device_pairing_until")
+    if not until:
+        return False
+    try:
+        return datetime.fromisoformat(until) > datetime.now()
+    except ValueError:
+        return False
+
+
 def _get_or_register_device(db: Session, sn: str) -> Device:
+    """يعيد الجهاز المسجّل، ويرفض الأجهزة المجهولة خارج نافذة الإقران."""
     device = db.scalar(select(Device).where(Device.serial_number == sn))
     if device is None:
+        if not pairing_is_open(db):
+            logger.warning("رُفض جهاز غير مسجّل بالرقم التسلسلي %s", sn)
+            raise HTTPException(status_code=403, detail="جهاز غير معتمد")
         device = Device(
             name=f"جهاز {sn}",
             mode=DeviceMode.push,
