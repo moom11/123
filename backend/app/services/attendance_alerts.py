@@ -23,7 +23,7 @@ logger = logging.getLogger("hr")
 
 def _shift_start(employee: Employee) -> datetime | None:
     """بداية وردية الموظف اليوم، أو None إذا كان اليوم راحة له."""
-    rules = attendance_service.ShiftRules(employee.shift)
+    rules = attendance_service.ShiftRules(employee.shift, employee.weekly_rest_days)
     today = date.today()
     if today.weekday() not in rules.work_days:
         return None

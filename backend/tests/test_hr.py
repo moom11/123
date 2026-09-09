@@ -1700,3 +1700,62 @@ def test_employee_prints_only_own_approved_payslip(client, auth):
     other = next(s for s in others if s["employee_id"] != mine[0]["employee_id"])
     assert client.get(f"/api/payroll/payslips/{other['id']}/print", headers=h).status_code == 403
     assert client.get(f"/api/payroll/runs/{mine[0]['run_id']}/print", headers=h).status_code == 403
+
+
+# ------------------------------ بياناتي والراحة الأسبوعية ------------------------------
+def test_employee_updates_own_profile(client, auth):
+    """الموظف يحدّث هويته وجواله وبريده فقط، ولا يمس راتبه ولا وظيفته."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9980", "full_name": "موظف البيانات", "phone": "0533444001",
+        "job_title": "نادل", "basic_salary": 1000}).json()
+    token = client.post("/api/auth/login", data={
+        "username": "0533444001", "password": "0533444001"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+    client.post("/api/auth/change-password", headers=h, json={
+        "current_password": "0533444001", "new_password": "Data@2026"})
+
+    profile = client.get("/api/me/profile", headers=h).json()
+    assert profile["full_name"] == "موظف البيانات" and profile["code"] == "9980"
+    assert profile["total_salary"] == 1000
+
+    updated = client.put("/api/me/profile", headers=h, json={
+        "national_id": "2412345678", "email": "nadel@example.com",
+        "phone": "0533444002"}).json()
+    assert updated["national_id"] == "2412345678"
+    assert updated["email"] == "nadel@example.com"
+    assert updated["phone"] == "0533444002"
+
+    # الراتب والمسمى لا يتغيران عبر هذا المسار
+    assert updated["basic_salary"] == 1000 and updated["job_title"] == "نادل"
+
+    # رقم مسجّل لموظف آخر يُرفض
+    client.post("/api/employees", headers=auth, json={
+        "code": "9981", "full_name": "زميل", "phone": "0533444009"})
+    conflict = client.put("/api/me/profile", headers=h, json={"phone": "0533444009"})
+    assert conflict.status_code == 400
+
+    # الموارد البشرية تُشعَر بالتحديث
+    notes = client.get("/api/notifications?limit=50", headers=auth).json()
+    assert any("حدّث بياناته" in n["title"] for n in notes)
+
+
+def test_weekly_rest_days_control_attendance(client, auth):
+    """يوم الراحة الأسبوعي الخاص بالموظف يظهر «راحة» ولا يُحتسب غياباً."""
+    from datetime import date as _date
+
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9982", "full_name": "موظف الراحة", "basic_salary": 3000,
+        "weekly_rest_days": "4"}).json()          # 4 = الجمعة
+    assert emp["weekly_rest_days"] == "4"
+
+    first = _date.today().replace(day=1)
+    previous_end = first - timedelta(days=1)
+    start = previous_end.replace(day=1)
+    rows = client.get(
+        f"/api/attendance/employee/{emp['id']}?date_from={start}&date_to={previous_end}",
+        headers=auth).json()
+    fridays = [r for r in rows if _date.fromisoformat(r["work_date"]).weekday() == 4]
+    others = [r for r in rows if _date.fromisoformat(r["work_date"]).weekday() != 4]
+    assert fridays and all(r["status"] == "weekend" for r in fridays)
+    # بقية الأيام أيام عمل (بلا بصمات ⇒ غياب)
+    assert any(r["status"] == "absent" for r in others)

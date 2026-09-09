@@ -111,6 +111,7 @@ class EmployeeIn(BaseModel):
     hire_date: date | None = None
     basic_salary: float = 0
     allowances: float = 0
+    weekly_rest_days: str | None = None
     status: EmployeeStatus = EmployeeStatus.active
 
 
@@ -128,6 +129,7 @@ class EmployeeUpdate(BaseModel):
     hire_date: date | None = None
     basic_salary: float | None = None
     allowances: float | None = None
+    weekly_rest_days: str | None = None
     status: EmployeeStatus | None = None
 
 
@@ -150,6 +152,7 @@ class EmployeeOut(ORMModel):
     basic_salary: float = 0
     allowances: float = 0
     total_salary: float = 0
+    weekly_rest_days: str | None = None
     status: EmployeeStatus
     has_user: bool = False
 
@@ -716,6 +719,32 @@ class LoanOut(ORMModel):
     remaining_amount: float = 0
     last_installment: str | None = None
     created_at: datetime | None = None
+
+
+class MyProfileIn(BaseModel):
+    """ما يسمح للموظف بتحديثه في بياناته بنفسه."""
+
+    national_id: str | None = Field(default=None, max_length=32)
+    phone: str | None = Field(default=None, max_length=32)
+    email: str | None = Field(default=None, max_length=160)
+
+
+class MyProfileOut(ORMModel):
+    employee_id: int
+    code: str
+    full_name: str
+    job_title: str | None = None
+    department_name: str | None = None
+    shift_name: str | None = None
+    site_name: str | None = None
+    hire_date: date | None = None
+    national_id: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    weekly_rest_days: str | None = None
+    basic_salary: float = 0
+    allowances: float = 0
+    total_salary: float = 0
 
 
 class PushSubscriptionIn(BaseModel):

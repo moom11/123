@@ -194,6 +194,8 @@ class Employee(Base):
     hire_date: Mapped[date | None] = mapped_column(Date)
     basic_salary: Mapped[float] = mapped_column(Float, default=0.0)
     allowances: Mapped[float] = mapped_column(Float, default=0.0)  # مجموع البدلات الشهرية
+    # أيام الراحة الأسبوعية الخاصة بالموظف (0=الاثنين … 6=الأحد)، فارغة = حسب الوردية
+    weekly_rest_days: Mapped[str | None] = mapped_column(String(20))
     status: Mapped[EmployeeStatus] = mapped_column(Enum(EmployeeStatus), default=EmployeeStatus.active)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 

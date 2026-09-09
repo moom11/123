@@ -21,6 +21,7 @@ NEW_COLUMNS: list[tuple[str, str, str]] = [
     ("payslips", "allowances", "FLOAT DEFAULT 0"),
     ("payslips", "loan_deduction", "FLOAT DEFAULT 0"),
     ("users", "must_change_password", "BOOLEAN DEFAULT 0"),
+    ("employees", "weekly_rest_days", "VARCHAR(20)"),
 ]
 
 

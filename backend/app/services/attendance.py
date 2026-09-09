@@ -23,10 +23,23 @@ DEFAULT_SHIFT_END = time(16, 0)
 DEFAULT_WORK_DAYS = [6, 0, 1, 2, 3]  # الأحد إلى الخميس (ترقيم بايثون: 0=الاثنين)
 
 
-class ShiftRules:
-    """قواعد الوردية المستخدمة في الاحتساب (مع قيم افتراضية إن لم تُسند وردية)."""
+def parse_rest_days(value: str | None) -> set[int] | None:
+    """يقرأ أيام الراحة الأسبوعية «4,5» ويعيد None إن لم تُحدَّد."""
+    if value is None:
+        return None
+    days = {int(part) for part in str(value).split(",") if part.strip().isdigit()}
+    days = {day for day in days if 0 <= day <= 6}
+    return days if days else None
 
-    def __init__(self, shift: Shift | None):
+
+class ShiftRules:
+    """قواعد الوردية المستخدمة في الاحتساب (مع قيم افتراضية إن لم تُسند وردية).
+
+    إن كانت للموظف أيام راحة أسبوعية خاصة به فهي التي تحدد أيام عمله،
+    فيمكن أن تختلف راحة كل موظف داخل الوردية نفسها.
+    """
+
+    def __init__(self, shift: Shift | None, rest_days: str | None = None):
         if shift:
             self.start = shift.start_time
             self.end = shift.end_time
@@ -43,6 +56,10 @@ class ShiftRules:
             self.break_minutes = 0
             self.work_days = DEFAULT_WORK_DAYS
             self.is_night = False
+
+        rest = parse_rest_days(rest_days)
+        if rest is not None:
+            self.work_days = [day for day in range(7) if day not in rest]
 
     def scheduled_in(self, day: date) -> datetime:
         return datetime.combine(day, self.start)
@@ -207,7 +224,7 @@ def recompute(
 
     count = 0
     for emp in employees:
-        rules = ShiftRules(emp.shift)
+        rules = ShiftRules(emp.shift, emp.weekly_rest_days)
         emp_punches = by_employee.get(emp.id, [])
         day = start
         while day <= end:

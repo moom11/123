@@ -26,6 +26,7 @@ const PAGES = [
   { id: 'devices',    title: 'أجهزة البصمة',   icon: '📟', group: 'الإدارة',  roles: ['admin','hr'] },
   { id: 'reports',    title: 'التقارير',       icon: '📑', group: 'الإدارة',  roles: ['admin','hr','manager'] },
   { id: 'settings',   title: 'الإعدادات',      icon: '⚙️', group: 'الإدارة',  roles: ['admin','hr'] },
+  { id: 'myProfile',  title: 'بياناتي',        icon: '🪪', group: 'شؤون الموظفين', roles: ['employee','manager','hr','admin'] },
   { id: 'account',    title: 'حسابي',          icon: '🔑', group: 'الإدارة',  roles: ['admin','hr','manager','employee'] },
 ];
 const NAV_GROUPS = ['عام', 'الحضور', 'الإجازات', 'شؤون الموظفين', 'الإدارة'];
@@ -1459,6 +1460,15 @@ function employeeModal(emp, departments, shifts, after) {
       <div class="field"><label>المسمى الوظيفي</label><input id="fTitle" value="${esc(v('job_title'))}" /></div>
       <div class="field"><label>الإدارة</label><select id="fDep"><option value="">—</option>${options(departments, v('department_id'))}</select></div>
       <div class="field"><label>الوردية</label><select id="fShift"><option value="">—</option>${options(shifts, v('shift_id'))}</select></div>
+      <div class="field" style="grid-column:1/-1"><label>أيام الراحة الأسبوعية (خاصة بهذا الموظف)</label>
+        <div class="inline" style="gap:6px">${WEEK_DAYS.map(([d, name]) => {
+          const rest = String(v('weekly_rest_days', '') || '').split(',').filter(Boolean);
+          return `<label class="chip" style="cursor:pointer;gap:6px">
+            <input type="checkbox" class="fRest" value="${d}" style="width:auto;margin:0"
+              ${rest.includes(d) ? 'checked' : ''} /> ${name}</label>`;
+        }).join('')}</div>
+        <div class="help">اتركها فارغة ليتبع الموظف أيام عمل الوردية. تحديد يوم راحة يعني أنه يعمل بقية الأيام.</div>
+      </div>
       <div class="field"><label>موقع العمل (للبصم من التطبيق)</label><select id="fSite"><option value="">كل المواقع المعتمدة</option>${options(state.cache.sites || [], v('site_id'))}</select></div>
       <div class="field"><label>تاريخ التعيين</label><input type="date" id="fHire" value="${v('hire_date')}" /></div>
       <div class="field"><label>الراتب الأساسي</label><input type="number" id="fSalary" value="${v('basic_salary', 0)}" /></div>
@@ -1484,6 +1494,7 @@ function employeeModal(emp, departments, shifts, after) {
           site_id: el('fSite').value ? Number(el('fSite').value) : null,
           hire_date: el('fHire').value || null, basic_salary: Number(el('fSalary').value || 0),
           allowances: Number(el('fAllow').value || 0),
+          weekly_rest_days: [...document.querySelectorAll('.fRest:checked')].map((c) => c.value).join(',') || null,
           status: el('fStatus').value,
         };
         try {
@@ -1664,6 +1675,80 @@ views.loans = async () => {
       toast('تم الحذف', 'ok'); load(); } catch (e) { toast(e.message, 'err'); }
   };
   load();
+};
+
+/* ------------------------------ بياناتي (تحديث ذاتي) ------------------------------ */
+views.myProfile = async () => {
+  if (!state.user.employee_id) {
+    render(`<div class="card"><div class="card-body"><div class="empty">
+      حسابك غير مرتبط بملف موظف — راجع الموارد البشرية.</div></div></div>`);
+    return;
+  }
+  const me = await api('/api/me/profile');
+  const restNames = String(me.weekly_rest_days || '').split(',').filter(Boolean)
+    .map((d) => (WEEK_DAYS.find(([k]) => k === d) || [null, d])[1]).join('، ');
+
+  render(`
+    <div class="card"><div class="card-body">
+      <div class="profile-head">
+        ${avatar(me.full_name, 'lg')}
+        <div class="who" style="flex:1;min-width:200px">
+          <h2>${esc(me.full_name)}</h2>
+          <div class="sub"><span>${esc(me.job_title || '—')}</span>·
+            <span>${esc(me.department_name || '—')}</span>·<span>رقم ${esc(me.code)}</span></div>
+        </div>
+      </div>
+    </div></div>
+
+    <div class="grid cols-2">
+      <div class="card" style="margin:0">
+        <div class="card-head"><h3>🪪 بياناتي الشخصية</h3></div>
+        <div class="card-body">
+          <div class="help" style="margin-bottom:12px">
+            حدّث بياناتك هنا وستصل الموارد البشرية مباشرة. الحقول الأخرى (الراتب، الوردية،
+            تاريخ التعيين) تُعدّلها الموارد البشرية فقط.</div>
+          <div class="field"><label>رقم الهوية / الإقامة</label>
+            <input id="mpNid" inputmode="numeric" value="${esc(me.national_id || '')}"
+              placeholder="مثال: 2412345678" /></div>
+          <div class="field"><label>رقم الجوال</label>
+            <input id="mpPhone" inputmode="tel" value="${esc(me.phone || '')}"
+              placeholder="مثال: 0501112233" />
+            <div class="help">رقم جوالك هو اسم المستخدم عند الدخول.</div></div>
+          <div class="field"><label>البريد الإلكتروني</label>
+            <input id="mpEmail" inputmode="email" value="${esc(me.email || '')}"
+              placeholder="name@example.com" /></div>
+          <button class="btn" id="mpSave">حفظ بياناتي</button>
+        </div></div>
+
+      <div class="card" style="margin:0">
+        <div class="card-head"><h3>بيانات وظيفتي</h3></div>
+        <div class="card-body">
+          <div class="kv">
+            <div><div class="k">رقم الموظف</div><div class="v">${esc(me.code)}</div></div>
+            <div><div class="k">المسمى الوظيفي</div><div class="v">${esc(me.job_title || '—')}</div></div>
+            <div><div class="k">الإدارة</div><div class="v">${esc(me.department_name || '—')}</div></div>
+            <div><div class="k">الوردية</div><div class="v">${esc(me.shift_name || '—')}</div></div>
+            <div><div class="k">موقع العمل</div><div class="v">${esc(me.site_name || '—')}</div></div>
+            <div><div class="k">تاريخ التعيين</div><div class="v">${me.hire_date || '—'}</div></div>
+            <div><div class="k">أيام الراحة الأسبوعية</div><div class="v">${esc(restNames || 'حسب الوردية')}</div></div>
+            <div><div class="k">مدة الخدمة</div><div class="v">${esc(serviceLength(me.hire_date))}</div></div>
+            <div><div class="k">الراتب الكامل</div><div class="v money">${money(me.total_salary)} ريال</div></div>
+          </div>
+          <div class="help">للاستفسار عن الراتب أو الوردية راجع الموارد البشرية.</div>
+        </div></div>
+    </div>`);
+
+  el('mpSave').onclick = async () => {
+    try {
+      await api('/api/me/profile', { method: 'PUT', body: {
+        national_id: el('mpNid').value.trim() || null,
+        phone: el('mpPhone').value.trim() || null,
+        email: el('mpEmail').value.trim() || null,
+      } });
+      toast('تم حفظ بياناتك', 'ok');
+      views.myProfile();
+    } catch (e) { toast(e.message, 'err'); }
+  };
 };
 
 /* ------------------------------ ملف الموظف ------------------------------ */
