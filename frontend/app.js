@@ -1176,6 +1176,7 @@ views.attendance = async () => {
       <button class="btn ghost" id="attExport">تصدير CSV</button>
       ${isHR() ? '<button class="btn gray" id="attRecompute">إعادة احتساب</button>' : ''}
       ${isHR() ? '<button class="btn ok" id="attManual">بصمة يدوية</button>' : ''}
+      ${isHR() ? '<button class="btn gray" id="attBulk">تسجيل حضور جماعي</button>' : ''}
     </div></div>
     <div class="grid cols-4 stagger" id="attKpis"></div>
     <div class="card"><div class="card-head"><h3>كشف الحضور</h3><span class="muted" id="attCount"></span></div>
@@ -1226,6 +1227,7 @@ views.attendance = async () => {
     toast(r.message, 'ok'); load();
   };
   if (el('attManual')) el('attManual').onclick = () => manualPunchModal(employees, load);
+  if (el('attBulk')) el('attBulk').onclick = () => bulkPresentModal(employees, load);
 
   el('empLoad').onclick = async () => {
     const id = el('empSel').value;
@@ -1265,6 +1267,48 @@ function manualPunchModal(employees, after) {
             employee_id: Number(el('mpEmp').value), punch_time: el('mpTime').value + ':00', note: el('mpNote').value || null } });
           toast('تمت إضافة البصمة', 'ok'); closeModal(); if (after) after();
         } catch (e) { toast(e.message, 'err'); }
+      };
+    },
+  });
+}
+
+/** تسجيل حضور جماعي: يملأ أيام العمل ببصمات بمواعيد الوردية لمن لا بصمة له */
+function bulkPresentModal(employees, after) {
+  modal({
+    title: 'تسجيل حضور جماعي',
+    body: `<div class="help" style="margin-bottom:12px">يسجّل الموظفين حاضرين بمواعيد ورديّاتهم
+        في أيام العمل ضمن المدى. لا يُمس يوم فيه بصمات فعلية، ولا أيام الراحة الأسبوعية
+        والمجدولة ولا العطل الرسمية ولا الإجازات المعتمدة.</div>
+      <div class="inline">
+        <div class="field"><label>من تاريخ</label><input type="date" id="bpFrom" value="${monthStart()}" /></div>
+        <div class="field"><label>إلى تاريخ</label><input type="date" id="bpTo" value="${today()}" /></div>
+      </div>
+      <div class="field"><label>الموظفون</label><select id="bpScope">
+        <option value="all">كل الموظفين النشطين</option>
+        <option value="one">موظف واحد</option></select></div>
+      <div class="field hidden" id="bpEmpWrap"><label>الموظف</label>
+        <select id="bpEmp">${options(employees, '', 'id', 'full_name')}</select></div>
+      <div id="bpResult"></div>`,
+    footer: `<button class="btn" id="bpSave">تسجيل الحضور</button><button class="btn gray" data-close>إلغاء</button>`,
+    onOpen: (root) => {
+      $('#bpScope', root).onchange = (e) =>
+        $('#bpEmpWrap', root).classList.toggle('hidden', e.target.value !== 'one');
+      $('#bpSave', root).onclick = async () => {
+        const btn = $('#bpSave', root);
+        btn.disabled = true;
+        try {
+          const body = { date_from: $('#bpFrom', root).value, date_to: $('#bpTo', root).value };
+          if ($('#bpScope', root).value === 'one') body.employee_ids = [Number($('#bpEmp', root).value)];
+          const r = await api('/api/attendance/mark-present', { method: 'POST', body });
+          $('#bpResult', root).innerHTML = `<div class="help" style="margin-top:12px;line-height:2">
+            <b>${esc(r.message)}</b><br>
+            تُخطّي: ${r.skipped_existing} يوم فيه بصمات، ${r.skipped_rest} يوم راحة،
+            ${r.skipped_holiday} عطلة رسمية، ${r.skipped_leave} يوم إجازة معتمدة،
+            ${r.skipped_before_hire} قبل التعيين.</div>`;
+          toast(r.message, 'ok');
+          if (after) after();
+        } catch (e) { toast(e.message, 'err'); }
+        btn.disabled = false;
       };
     },
   });

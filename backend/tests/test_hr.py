@@ -2029,3 +2029,94 @@ def test_uploaded_logo_becomes_the_app_icon(client, auth):
     assert not generated.exists()
     assert client.get("/app/icons/icon-192.png").status_code == 200  # الأيقونة المدمجة
     client.put("/api/branding", headers=auth, json={"app_icon_bg": "#000000"})
+
+
+# --------------------------- تسجيل حضور جماعي ---------------------------
+
+def test_mark_present_fills_working_days_only(client, auth):
+    """يملأ أيام العمل ببصمات الوردية، ويترك الراحة والعطلة والإجازة والبصمات الفعلية."""
+    from datetime import date as _date
+
+    from app.models import Holiday, LeaveRequest, LeaveStatus, LeaveType, PunchSource
+
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9772", "full_name": "موظف الحضور الجماعي", "basic_salary": 3000,
+        "hire_date": "2026-08-01", "weekly_rest_days": "4,5",   # الجمعة والسبت راحة
+    })
+    assert emp.status_code == 201, emp.text
+    emp = emp.json()
+
+    # عطلة رسمية يوم 2026-09-03 (الخميس)، وإجازة معتمدة يوم 2026-09-07 (الاثنين)
+    with SessionLocal() as db:
+        db.add(Holiday(name="يوم وطني تجريبي", holiday_date=_date(2026, 9, 3)))
+        lt = db.query(LeaveType).first()
+        db.add(LeaveRequest(
+            employee_id=emp["id"], leave_type_id=lt.id, start_date=_date(2026, 9, 7),
+            end_date=_date(2026, 9, 7), days=1, status=LeaveStatus.approved, reason="اختبار",
+        ))
+        db.commit()
+
+    # بصمة فعلية يوم 2026-09-01 يجب ألا تُمس
+    client.post("/api/attendance/punches", headers=auth, json={
+        "employee_id": emp["id"], "punch_time": "2026-09-01T09:37:00", "note": "بصمة حقيقية"})
+
+    res = client.post("/api/attendance/mark-present", headers=auth, json={
+        "date_from": "2026-09-01", "date_to": "2026-09-08", "employee_ids": [emp["id"]]})
+    assert res.status_code == 200, res.text
+    body = res.json()
+
+    # 1..8 سبتمبر 2026: الثلاثاء..الثلاثاء. الجمعة 4 والسبت 5 راحة،
+    # الخميس 3 عطلة، الاثنين 7 إجازة، والثلاثاء 1 فيه بصمة → تبقى 2 و6 و8
+    assert body["days_marked"] == 3
+    assert body["punches_created"] == 6
+    assert body["skipped_existing"] == 1
+    assert body["skipped_rest"] == 2
+    assert body["skipped_holiday"] == 1
+    assert body["skipped_leave"] == 1
+    assert body["employees"] == 1
+
+    rows = client.get(
+        f"/api/attendance/employee/{emp['id']}?date_from=2026-09-01&date_to=2026-09-08",
+        headers=auth).json()
+    by_date = {r["work_date"]: r for r in rows}
+    for day in ("2026-09-02", "2026-09-06", "2026-09-08"):
+        assert by_date[day]["status"] == "present", (day, by_date[day])
+        assert by_date[day]["late_minutes"] == 0
+    assert by_date["2026-09-03"]["status"] == "holiday"
+    assert by_date["2026-09-04"]["status"] == "weekend"
+    assert by_date["2026-09-07"]["status"] == "leave"
+    # اليوم ذو البصمة الحقيقية بقي على حاله: بصمة واحدة فقط
+    assert by_date["2026-09-01"]["punches_count"] == 1
+
+    with SessionLocal() as db:
+        from app.models import Punch
+
+        created = db.query(Punch).filter_by(
+            employee_id=emp["id"], source=PunchSource.manual).all()
+        assert {p.note for p in created} == {"بصمة حقيقية", "تسجيل حضور جماعي"}
+
+
+def test_mark_present_is_idempotent_and_guarded(client, auth):
+    """إعادة التشغيل لا تضاعف البصمات، والمدى الطويل مرفوض، وغير المخوَّل ممنوع."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9773", "full_name": "موظف التكرار", "basic_salary": 3000}).json()
+
+    first = client.post("/api/attendance/mark-present", headers=auth, json={
+        "date_from": "2026-09-01", "date_to": "2026-09-08", "employee_ids": [emp["id"]]}).json()
+    assert first["days_marked"] > 0
+
+    again = client.post("/api/attendance/mark-present", headers=auth, json={
+        "date_from": "2026-09-01", "date_to": "2026-09-08", "employee_ids": [emp["id"]]}).json()
+    assert again["days_marked"] == 0
+    assert again["skipped_existing"] == first["days_marked"]
+
+    # أيام لم تأتِ بعد لا تُسجَّل حضوراً
+    future = client.post("/api/attendance/mark-present", headers=auth, json={
+        "date_from": "2099-01-01", "date_to": "2099-01-05", "employee_ids": [emp["id"]]}).json()
+    assert future["days_marked"] == 0 and future["skipped_future"] == 5
+
+    assert client.post("/api/attendance/mark-present", headers=auth, json={
+        "date_from": "2026-01-01", "date_to": "2026-09-08"}).status_code == 400
+
+    assert client.post("/api/attendance/mark-present", json={
+        "date_from": "2026-09-01", "date_to": "2026-09-02"}).status_code == 401

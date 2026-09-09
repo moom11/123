@@ -6,6 +6,7 @@ import io
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -36,6 +37,7 @@ from ..security import (
     visible_employee_ids,
 )
 from ..services import attendance as attendance_service
+from ..services import bulk_attendance
 from ..services import audit, geo, settings_store, sheets
 
 router = APIRouter(prefix="/api/attendance", tags=["attendance"])
@@ -347,6 +349,38 @@ def recompute_range(
     )
     audit.log(db, user, "recompute", "attendance_day", None, f"{date_from} → {date_to} ({count} يوم)")
     return {"ok": True, "days": count, "message": f"تمت إعادة احتساب {count} يوم"}
+
+
+class MarkPresentIn(BaseModel):
+    """تسجيل حضور جماعي لمدى تواريخ."""
+
+    date_from: date
+    date_to: date
+    employee_ids: list[int] | None = None
+
+
+@router.post("/mark-present")
+def mark_present(
+    payload: MarkPresentIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_hr),
+):
+    """يسجّل الموظفين حاضرين بمواعيد وردياتهم في أيام العمل ضمن المدى.
+
+    لا يمسّ يوماً فيه بصمات فعلية، ولا أيام الراحة والعطل والإجازات المعتمدة.
+    """
+    span = (payload.date_to - payload.date_from).days
+    if abs(span) > 92:
+        raise HTTPException(status_code=400, detail="المدى أطول من ثلاثة أشهر")
+    result = bulk_attendance.mark_present(
+        db, payload.date_from, payload.date_to, payload.employee_ids
+    )
+    audit.log(
+        db, user, "create", "attendance_day", None,
+        f"تسجيل حضور جماعي {payload.date_from} → {payload.date_to}:"
+        f" {result.days_marked} يوم لـ {result.employees} موظف",
+    )
+    return result.as_dict()
 
 
 @router.post("/alerts/scan")
