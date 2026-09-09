@@ -31,7 +31,10 @@
 html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--text);
   font-family:"Tajawal","Cairo","Segoe UI",Tahoma,Arial,sans-serif;font-size:15px;
-  -webkit-font-smoothing:antialiased}
+  -webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent;
+  overscroll-behavior-y:contain;text-size-adjust:100%}
+/* iOS: تمرير سلس، وارتفاع يراعي شريط سفاري المتغيّر */
+.table-wrap,.nav,.sub-tabs,.modal{-webkit-overflow-scrolling:touch}
 button,input,select,textarea{font-family:inherit;font-size:14px}
 a{color:var(--primary);text-decoration:none}
 .hidden{display:none !important}
@@ -43,7 +46,7 @@ a{color:var(--primary);text-decoration:none}
 *::-webkit-scrollbar-track{background:transparent}
 
 /* ------------------------------ شاشة الدخول ------------------------------ */
-.login-wrap{min-height:100vh;display:grid;place-items:center;padding:20px;position:relative;
+.login-wrap{min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding:20px;position:relative;
   background:radial-gradient(1200px 600px at 80% -10%, #17877d 0%, transparent 60%),
              linear-gradient(140deg,#0f766e 0%,#134e4a 55%,#0a3330 100%)}
 .login-wrap::after{content:"";position:absolute;inset:0;opacity:.35;pointer-events:none;
@@ -63,7 +66,7 @@ a{color:var(--primary);text-decoration:none}
   border-radius:var(--radius-sm);font-size:12.5px;color:var(--muted);line-height:1.9}
 
 /* ------------------------------ الهيكل ------------------------------ */
-.layout{display:flex;min-height:100vh}
+.layout{display:flex;min-height:100vh;min-height:100dvh}
 .sidebar{width:var(--sidebar-w);background:linear-gradient(180deg,#10333a 0%,#0c262c 100%);
   color:#d7e5e3;display:flex;flex-direction:column;position:sticky;top:0;height:100vh;
   overflow:hidden;transition:width var(--normal) var(--ease);z-index:40}
@@ -377,6 +380,10 @@ code{background:var(--surface-2);padding:2px 6px;border-radius:5px;font-size:12.
   direction:ltr;display:inline-block}
 .money{font-variant-numeric:tabular-nums;font-weight:600}
 .total-row td{background:var(--surface-2);font-weight:700}
+.ios-hint{margin:0 0 14px;padding:12px 14px;border-radius:var(--radius);
+  background:linear-gradient(135deg,var(--primary-soft),#eef4f6);border:1px solid #cfe3e0;
+  display:flex;gap:10px;align-items:flex-start;font-size:13px;line-height:1.9}
+.ios-hint .x{margin-inline-start:auto}
 .install-hint{background:var(--primary-soft);border:1px solid #cfe3e0;border-radius:var(--radius-sm);
   padding:10px 14px;font-size:13px;display:flex;justify-content:space-between;align-items:center;
   gap:10px;margin-bottom:14px}
@@ -405,6 +412,34 @@ code{background:var(--surface-2);padding:2px 6px;border-radius:5px;font-size:12.
     transition-duration:.001ms !important}
 }
 
+/* ------------------------------ الوضع الإنجليزي (LTR) ------------------------------ */
+html[dir="ltr"] th,
+html[dir="ltr"] td{text-align:left}
+html[dir="ltr"] td.num,
+html[dir="ltr"] th.num,
+html[dir="ltr"] .meta{text-align:right}
+html[dir="ltr"] .login-card .quote{border-right:none;border-left:3px solid var(--primary)}
+html[dir="ltr"] .notif.unread{border-right:none;border-left:3px solid var(--primary)}
+html[dir="ltr"] .nav a.active::before{right:auto;left:-10px}
+html[dir="ltr"] .toast{border-right:none;border-left:3px solid rgba(255,255,255,.35)}
+html[dir="ltr"] .timeline{padding:4px 4px 4px 26px}
+html[dir="ltr"] .timeline::before{right:auto;left:9px}
+html[dir="ltr"] .timeline li::before{right:auto;left:-21px}
+html[dir="ltr"] .legend i{margin-left:0;margin-right:5px}
+html[dir="ltr"] .kpi .ico,
+html[dir="ltr"] .bars .cap{direction:ltr}
+html[dir="ltr"] .bell .badge{left:auto;right:-7px}
+html[dir="ltr"] .sidebar{order:-1}
+html[dir="ltr"] .layout.mini .nav a::after{right:auto;left:calc(100% + 10px);transform:translateX(-6px)}
+@media(max-width:900px){
+  html[dir="ltr"] .sidebar{right:auto;left:0;transform:translateX(-100%)}
+  html[dir="ltr"] .layout.drawer-open .sidebar{transform:none}
+}
+@media(max-width:640px){
+  html[dir="ltr"] table.stack td{text-align:right}
+  html[dir="ltr"] table.stack td::before{text-align:left}
+}
+
 /* ------------------------------ شريط التنقل السفلي (الجوال) ------------------------------ */
 .tabbar{display:none}
 @media(max-width:900px){
@@ -431,7 +466,7 @@ code{background:var(--surface-2);padding:2px 6px;border-radius:5px;font-size:12.
   .btn{padding:10px 16px;font-size:14px}
   .btn.sm{padding:7px 12px;font-size:13px}
   .icon-btn,.bell{width:40px;height:38px}
-  .sidebar{position:fixed;right:0;top:0;height:100vh;transform:translateX(100%);
+  .sidebar{position:fixed;right:0;top:0;height:100vh;height:100dvh;transform:translateX(100%);
     transition:transform var(--normal) var(--ease);box-shadow:var(--shadow-3)}
   .layout.drawer-open .sidebar{transform:none}
   .layout.mini .sidebar{width:var(--sidebar-w)}

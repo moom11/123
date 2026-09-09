@@ -1,10 +1,11 @@
 /* عامل الخدمة: يجعل النظام قابلاً للتثبيت كتطبيق ويسرّع فتحه.
    ملاحظة: طلبات الـ API لا تُخزَّن إطلاقاً حتى تبقى بيانات الحضور والرواتب صحيحة دائماً. */
-const CACHE = 'hr-shell-v5';
+const CACHE = 'hr-shell-v6';
 const SHELL = [
   '/app/index.html',
   '/app/styles.css',
   '/app/app.js',
+  '/app/i18n.js',
   '/app/manifest.json',
   '/app/assets/icon-192.png',
   '/app/assets/icon-512.png',

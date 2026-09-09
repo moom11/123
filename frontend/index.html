@@ -8,10 +8,20 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="/app/styles.css" />
+<script>
+  // اللغة والاتجاه قبل الرسم لتفادي وميض الاتجاه
+  (function () {
+    var lang = localStorage.getItem('hr_lang') || 'ar';
+    document.documentElement.lang = lang;
+    document.documentElement.dir = lang === 'en' ? 'ltr' : 'rtl';
+  })();
+</script>
 <link rel="manifest" href="/app/manifest.json" />
 <meta name="theme-color" content="#0f766e" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="format-detection" content="telephone=no" />
 <meta name="apple-mobile-web-app-title" content="الموارد البشرية" />
 <link rel="apple-touch-icon" href="/app/assets/icon-192.png" />
 <link rel="icon" href="/app/assets/icon-192.png" />
@@ -34,6 +44,8 @@
         <input id="password" type="password" autocomplete="current-password" required />
       </div>
       <button class="btn" style="width:100%;justify-content:center" type="submit">دخول</button>
+      <button type="button" class="btn ghost" id="loginLang"
+        style="width:100%;justify-content:center;margin-top:10px">English / العربية</button>
       <div class="demo-note hidden" id="loginHint">
         لم تُغيَّر كلمة مرور مدير النظام بعد. ادخل بالحساب الافتراضي
         <code>admin</code> ثم غيّر كلمة المرور فوراً من صفحة «حسابي»
@@ -69,6 +81,7 @@
         <div class="topbar-actions">
           <span class="who" id="topWho"></span>
           <button class="btn sm ghost hidden" id="installBtn" onclick="installApp()">تثبيت التطبيق</button>
+          <button class="icon-btn" id="langBtn" title="English / العربية">🌐</button>
           <button class="bell" id="bellBtn" title="الإشعارات">🔔<span class="badge hidden" id="bellCount">0</span></button>
           <button class="btn sm" id="selfPunchBtn">🕒 تسجيل بصمة</button>
         </div>
@@ -80,6 +93,7 @@
 
   <div id="modalRoot"></div>
   <div class="toast-wrap" id="toasts"></div>
+  <script src="/app/i18n.js"></script>
   <script src="/app/app.js"></script>
 </body>
 </html>

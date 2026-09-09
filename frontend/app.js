@@ -304,7 +304,8 @@ function startApp() {
     el('app').classList.remove('drawer-open');
     closeScrim();
   });
-  el('sideUser').innerHTML = `${esc(state.user.username)} — ${esc(ROLES[state.user.role])}`;
+  el('sideUser').innerHTML =
+    `${esc(state.user.username)} — <span>${esc(ROLES[state.user.role])}</span>`;
   el('topWho').textContent = state.user.employee_name || ROLES[state.user.role];
   el('selfPunchBtn').classList.toggle('hidden', !state.user.employee_id);
   buildTabbar();
@@ -326,16 +327,45 @@ function go(page) {
   Promise.resolve(fn ? fn() : '<div class="empty">صفحة غير متاحة</div>')
     .catch((e) => { toast(e.message, 'err'); el('view').innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
 }
-const render = (html) => { el('view').innerHTML = html; labelTableCells(el('view')); };
+const render = (html) => {
+  el('view').innerHTML = html;
+  labelTableCells(el('view'));
+  I18N.apply(el('view'));
+};
 
 // أي جدول يُدرج لاحقاً (بعد جلب البيانات) يُوسم تلقائياً، مرة واحدة لكل إطار عرض
 let _labelPending = false;
 const _tableObserver = new MutationObserver(() => {
   if (_labelPending) return;
   _labelPending = true;
-  requestAnimationFrame(() => { _labelPending = false; labelTableCells(document); });
+  requestAnimationFrame(() => {
+    _labelPending = false;
+    labelTableCells(document);
+    I18N.apply(document.body);
+  });
 });
 _tableObserver.observe(document.documentElement, { childList: true, subtree: true });
+
+/* ------------------------------ آيفون: التثبيت والإشعارات ------------------------------ */
+const isIOS = () => /iP(hone|ad|od)/.test(navigator.userAgent)
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches
+  || navigator.standalone === true;
+
+/** لافتة إرشاد لمستخدمي آيفون: التطبيق والإشعارات تتطلب الإضافة إلى الشاشة الرئيسية */
+function iosInstallHint() {
+  if (!isIOS() || isStandalone() || localStorage.getItem('hr_ios_hint') === 'off') return '';
+  return `<div class="ios-hint" id="iosHint">
+      <span style="font-size:18px">📲</span>
+      <div>لتشغيله كتطبيق مستقل وتصلك الإشعارات بنغمة: اضغط زر المشاركة في سفاري ثم «إضافة إلى الشاشة الرئيسية».</div>
+      <button class="x" onclick="dismissIosHint()" title="إخفاء">×</button>
+    </div>`;
+}
+window.dismissIosHint = () => {
+  localStorage.setItem('hr_ios_hint', 'off');
+  const node = el('iosHint');
+  if (node) node.remove();
+};
 
 /* ------------------------------ إشعارات الجوال ------------------------------ */
 const urlBase64ToUint8Array = (base64) => {
@@ -346,7 +376,18 @@ const urlBase64ToUint8Array = (base64) => {
 
 async function pushState() {
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-    return { supported: false, reason: 'المتصفح لا يدعم إشعارات الويب' };
+    return {
+      supported: false,
+      reason: isIOS() && !isStandalone()
+        ? 'على آيفون: أضف النظام إلى الشاشة الرئيسية أولاً (المشاركة ← إضافة إلى الشاشة الرئيسية) ثم افتحه من الأيقونة وفعّل الإشعارات'
+        : 'المتصفح لا يدعم إشعارات الويب',
+    };
+  }
+  if (isIOS() && !isStandalone()) {
+    return {
+      supported: false,
+      reason: 'على آيفون تعمل الإشعارات فقط بعد إضافة النظام إلى الشاشة الرئيسية وفتحه من أيقونته',
+    };
   }
   if (!window.isSecureContext) return { supported: false, reason: 'الإشعارات تتطلب HTTPS' };
   const reg = await navigator.serviceWorker.ready;
@@ -788,6 +829,7 @@ views.dashboard = async () => {
   }
 
   render(`
+    ${iosInstallHint()}
     <div class="grid cols-4 stagger">
       ${mine ? `
         ${kpi('حالتي اليوم', `<span style="font-size:19px">${myStatus[0]}</span>`, myStatus[1], myStatus[2])}
@@ -853,7 +895,7 @@ views.dashboard = async () => {
 
   const rows = await api('/api/attendance/daily?work_date=' + today());
   el('todayTable').innerHTML = table(
-    ['الموظف', 'الحضور', 'الانصراف', 'ساعات', 'التأخير (د)', 'الحالة'],
+    ['الموظف', 'وقت الحضور', 'وقت الانصراف', 'ساعات', 'التأخير (د)', 'الحالة'],
     rows,
     (r) => `<tr><td><div style="display:flex;align-items:center;gap:9px">${avatar(r.employee_name, 'sm')}
         <div><div style="font-weight:600">${esc(r.employee_name)}</div>
@@ -921,7 +963,7 @@ views.attendance = async () => {
       <div class="kpi info"><div class="label">إجازة / عطلة<span class="ico">🌴</span></div>
         <div class="value info">${count('leave', 'holiday', 'weekend')}</div></div>`;
     el('attTable').innerHTML = table(
-      ['الموظف', 'الحضور', 'الانصراف', 'ساعات', 'تأخير (د)', 'خروج مبكر (د)', 'إضافي (د)', 'الحالة', 'ملاحظة'],
+      ['الموظف', 'وقت الحضور', 'وقت الانصراف', 'ساعات', 'تأخير (د)', 'خروج مبكر (د)', 'إضافي (د)', 'الحالة', 'ملاحظة'],
       rows,
       (r) => `<tr>
         <td><div style="display:flex;align-items:center;gap:9px">${avatar(r.employee_name, 'sm')}
@@ -956,7 +998,7 @@ views.attendance = async () => {
           <div class="card-body">${calendarMonth(rows, y, m)}</div></div>`
       : '';
     el('empTable').innerHTML = calendar + table(
-      ['التاريخ', 'الحضور', 'الانصراف', 'ساعات', 'تأخير (د)', 'إضافي (د)', 'الحالة', 'ملاحظة'],
+      ['التاريخ', 'وقت الحضور', 'وقت الانصراف', 'ساعات', 'تأخير (د)', 'إضافي (د)', 'الحالة', 'ملاحظة'],
       rows,
       (r) => `<tr><td>${r.work_date}</td><td>${fmtTime(r.check_in)}</td><td>${fmtTime(r.check_out)}</td>
         <td>${hours(r.worked_minutes)}</td><td>${r.late_minutes || 0}</td><td>${r.overtime_minutes || 0}</td>
@@ -1894,7 +1936,7 @@ views.profile = async () => {
           <span><i style="background:#e7f0fd"></i>إجازة</span></div></div>
         <div class="card-body">${calendarMonth(attendance, year, now.getMonth() + 1)}</div></div>
       <div class="card"><div class="card-head"><h3>تفصيل أيام الشهر</h3></div>
-        ${table(['التاريخ', 'الحضور', 'الانصراف', 'ساعات', 'تأخير (د)', 'إضافي (د)', 'الحالة'], attendance,
+        ${table(['التاريخ', 'وقت الحضور', 'وقت الانصراف', 'ساعات', 'تأخير (د)', 'إضافي (د)', 'الحالة'], attendance,
           (r) => `<tr><td>${r.work_date}</td><td>${fmtTime(r.check_in)}</td><td>${fmtTime(r.check_out)}</td>
             <td>${hours(r.worked_minutes)}</td><td>${r.late_minutes || 0}</td><td>${r.overtime_minutes || 0}</td>
             <td><span class="tag ${r.status}">${DAY_STATUS[r.status]}</span></td></tr>`,
@@ -2393,7 +2435,7 @@ views.reports = async () => {
   el('xLoad').onclick = async () => {
     const rows = await api(`/api/reports/exceptions?date_from=${el('xFrom').value}&date_to=${el('xTo').value}`);
     el('xTable').innerHTML = table(
-      ['التاريخ', 'رقم الموظف', 'الاسم', 'الحالة', 'الحضور', 'الانصراف', 'تأخير (د)', 'خروج مبكر (د)'],
+      ['التاريخ', 'رقم الموظف', 'الاسم', 'الحالة', 'وقت الحضور', 'وقت الانصراف', 'تأخير (د)', 'خروج مبكر (د)'],
       rows,
       (r) => `<tr><td>${r.work_date}</td><td>${esc(r.employee_code)}</td><td>${esc(r.employee_name)}</td>
         <td><span class="tag ${r.status === 'غائب' ? 'absent' : r.status === 'متأخر' ? 'late' : 'missing_out'}">${esc(r.status)}</span></td><td>${esc(r.check_in || '—')}</td><td>${esc(r.check_out || '—')}</td>
@@ -3244,6 +3286,9 @@ views.account = async () => {
 /* ------------------------------ الإقلاع ------------------------------ */
 el('loginForm').onsubmit = login;
 el('logoutBtn').onclick = logout;
+el('langBtn').onclick = () => I18N.set(I18N.isEnglish() ? 'ar' : 'en');
+el('loginLang').onclick = () => I18N.set(I18N.isEnglish() ? 'ar' : 'en');
+I18N.apply(document.body);
 initShell();
 
 // فتح الصفحة المطلوبة عند الضغط على إشعار الجوال
