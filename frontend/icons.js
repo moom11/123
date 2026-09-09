@@ -6,6 +6,9 @@ const ICON_PATHS = {
   // ------- التنقل -------
   dashboard: '<rect x="3" y="3" width="7.5" height="8.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="5.5" rx="1.6"/><rect x="3" y="14.5" width="7.5" height="6.5" rx="1.6"/><rect x="13.5" y="11.5" width="7.5" height="9.5" rx="1.6"/>',
   clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  coffee: '<path d="M4 8.5h12v6a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4z"/><path d="M16 10h1.8a2.7 2.7 0 0 1 0 5.4H16"/><path d="M7 3.2v2.2M11 3.2v2.2"/>',
+  play: '<circle cx="12" cy="12" r="8.5"/><path d="M10.2 8.8l5 3.2-5 3.2z"/>',
+  pulse: '<path d="M3.5 12h4l2.5-6 3.5 12 2.5-6h4.5"/>',
   fingerprint: '<path d="M12 4.5a7.5 7.5 0 0 0-7.5 7.5v2"/><path d="M19.5 12a7.5 7.5 0 0 0-7.5-7.5"/><path d="M12 8.5A3.5 3.5 0 0 0 8.5 12v4"/><path d="M15.5 12A3.5 3.5 0 0 0 12 8.5"/><path d="M12 12v6"/><path d="M15.5 12v3.5"/><path d="M19 14.5c0 2-.4 3.6-1 5"/><path d="M5 18.5c-.4-1.4-.5-2.6-.5-4"/>',
   leave: '<rect x="3.5" y="5" width="17" height="15.5" rx="2.2"/><path d="M3.5 9.5h17M8 3.5v3M16 3.5v3"/><path d="M9 14.5l2 2 4-4"/>',
   balance: '<path d="M12 4.5v15M6.5 19.5h11"/><path d="M4 8.5h16M7 8.5l-3 5.5h6zM17 8.5l-3 5.5h6z"/>',

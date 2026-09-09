@@ -39,6 +39,16 @@ const I18N_EN = {
 
   // ------- الحالات -------
   'حاضر': 'Present', 'متأخر': 'Late', 'غائب': 'Absent', 'غياب': 'Absent', 'إجازة': 'Leave',
+  // حالات الموظف والاستراحات
+  'داخل العمل': 'At work', 'في استراحة': 'On break', 'خارج العمل': 'Off duty',
+  'أنت الآن داخل العمل': 'You are at work', 'أنت الآن في استراحة': 'You are on break',
+  'أنت الآن خارج العمل': 'You are off duty', 'تحتاج مراجعة': 'Needs review',
+  'حضور': 'Clock in', 'انصراف': 'Clock out',
+  'بدء استراحة': 'Start break', 'عودة من الاستراحة': 'End break',
+  'إنهاء الاستراحة': 'End break', 'الاستراحات': 'Breaks', 'استراحة': 'Break',
+  'تجاوز الاستراحة': 'Break overrun', 'استراحة مفتوحة': 'Open break',
+  'الحالة الآن': 'Live status', 'في المقر': 'On site', 'ساعات فعلية': 'Net hours',
+  'سياسة الحضور والاستراحة': 'Attendance & break policy',
   'عطلة رسمية': 'Public holiday', 'راحة أسبوعية': 'Weekly rest', 'انصراف ناقص': 'Missing out',
   'لم يحن بعد': 'Upcoming', 'قيد الاعتماد': 'Pending', 'معتمدة': 'Approved', 'مرفوضة': 'Rejected',
   'ملغاة': 'Cancelled', 'على رأس العمل': 'Active', 'موقوف': 'Suspended',

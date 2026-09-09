@@ -22,6 +22,15 @@ NEW_COLUMNS: list[tuple[str, str, str]] = [
     ("payslips", "loan_deduction", "FLOAT DEFAULT 0"),
     ("users", "must_change_password", "BOOLEAN DEFAULT 0"),
     ("employees", "weekly_rest_days", "VARCHAR(20)"),
+    ("punches", "intent", "VARCHAR(20)"),
+    ("punches", "deleted_at", "DATETIME"),
+    ("punches", "deleted_by_id", "INTEGER"),
+    ("punches", "delete_reason", "VARCHAR(255)"),
+    ("attendance_days", "presence_minutes", "INTEGER DEFAULT 0"),
+    ("attendance_days", "break_minutes", "INTEGER DEFAULT 0"),
+    ("attendance_days", "break_count", "INTEGER DEFAULT 0"),
+    ("attendance_days", "break_overrun_minutes", "INTEGER DEFAULT 0"),
+    ("attendance_days", "open_break", "BOOLEAN DEFAULT 0"),
 ]
 
 

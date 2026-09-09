@@ -56,6 +56,32 @@ class PunchSource(str, enum.Enum):
     web = "web"                   # تسجيل ذاتي من الويب
 
 
+class WorkState(str, enum.Enum):
+    """حالة الموظف الآن. تتغيّر مباشرة بعد كل بصمة مقبولة."""
+
+    out = "out"        # خارج العمل
+    working = "in"     # داخل العمل
+    on_break = "break"  # في استراحة
+
+
+class EventType(str, enum.Enum):
+    """معنى البصمة كما حدّدته آلة الحالات، لا كما يوحي ترتيبها."""
+
+    clock_in = "CLOCK_IN"
+    break_start = "BREAK_START"
+    break_end = "BREAK_END"
+    clock_out = "CLOCK_OUT"
+
+
+class PolicyScope(str, enum.Enum):
+    """نطاق سياسة الحضور: الأخص يغلب الأعم."""
+
+    default = "default"
+    site = "site"
+    department = "department"
+    shift = "shift"
+
+
 class LoanStatus(str, enum.Enum):
     """حالة السلفة."""
 
@@ -73,6 +99,7 @@ class DayStatus(str, enum.Enum):
     weekend = "weekend"
     missing_out = "missing_out"
     scheduled = "scheduled"   # يوم عمل لم يحن بعد (لا يُحتسب غياباً)
+    needs_review = "needs_review"  # استراحة لم تُغلق حتى نهاية الوردية
 
 
 class PenaltyAction(str, enum.Enum):
@@ -252,6 +279,12 @@ class Punch(Base):
     site_id: Mapped[int | None] = mapped_column(ForeignKey("work_sites.id", ondelete="SET NULL"))
     distance_meters: Mapped[float | None] = mapped_column(Float)
     note: Mapped[str | None] = mapped_column(String(255))
+    # نية صريحة من تطبيق الموظف (break_start/break_end/clock_out) تسبق استنتاج آلة الحالات
+    intent: Mapped[str | None] = mapped_column(String(20))
+    # حذف ناعم: السجل يبقى في القاعدة ويُستبعد من الاحتساب، ولا يُمحى أثره أبداً
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime)
+    deleted_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    delete_reason: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     employee: Mapped[Employee | None] = relationship()
@@ -276,11 +309,107 @@ class AttendanceDay(Base):
     overtime_minutes: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[DayStatus] = mapped_column(Enum(DayStatus), default=DayStatus.absent)
     punches_count: Mapped[int] = mapped_column(Integer, default=0)
+    # ------------------------- الاستراحات -------------------------
+    presence_minutes: Mapped[int] = mapped_column(Integer, default=0)      # من الحضور إلى الانصراف
+    break_minutes: Mapped[int] = mapped_column(Integer, default=0)         # إجمالي وقت الاستراحات
+    break_count: Mapped[int] = mapped_column(Integer, default=0)
+    break_overrun_minutes: Mapped[int] = mapped_column(Integer, default=0)  # التجاوز عن المسموح
+    open_break: Mapped[bool] = mapped_column(Boolean, default=False)       # استراحة بلا عودة
     leave_request_id: Mapped[int | None] = mapped_column(ForeignKey("leave_requests.id", ondelete="SET NULL"))
     note: Mapped[str | None] = mapped_column(String(255))
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
     employee: Mapped[Employee] = relationship()
+
+
+class AttendanceEvent(Base):
+    """حدث حضور مُفسَّر: ماذا تعني هذه البصمة، وما حالة الموظف قبلها وبعدها.
+
+    يُبنى من البصمات الخام بإعادة تشغيل آلة الحالات، فيبقى مطابقاً لها دائماً
+    ولا يخترع شيئاً. البصمة الخام لا تُحذف ولا تُستبدل.
+    """
+
+    __tablename__ = "attendance_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    employee_name: Mapped[str] = mapped_column(String(160))       # لقطة وقت الحدث
+    employee_code: Mapped[str] = mapped_column(String(32), index=True)
+    punch_id: Mapped[int | None] = mapped_column(ForeignKey("punches.id", ondelete="CASCADE"), index=True)
+    work_date: Mapped[date] = mapped_column(Date, index=True)     # يوم الوردية لا يوم التقويم
+    event_time: Mapped[datetime] = mapped_column(DateTime, index=True)
+    received_at: Mapped[datetime | None] = mapped_column(DateTime)  # متى استلم النظام البصمة
+    event_type: Mapped[EventType] = mapped_column(Enum(EventType))
+    state_before: Mapped[WorkState] = mapped_column(Enum(WorkState))
+    state_after: Mapped[WorkState] = mapped_column(Enum(WorkState))
+    source: Mapped[PunchSource] = mapped_column(Enum(PunchSource), default=PunchSource.device_pull)
+    device_id: Mapped[int | None] = mapped_column(ForeignKey("devices.id", ondelete="SET NULL"))
+    device_name: Mapped[str | None] = mapped_column(String(120))
+    site_id: Mapped[int | None] = mapped_column(ForeignKey("work_sites.id", ondelete="SET NULL"))
+    site_name: Mapped[str | None] = mapped_column(String(120))    # الفرع
+    shift_id: Mapped[int | None] = mapped_column(ForeignKey("shifts.id", ondelete="SET NULL"))
+    shift_name: Mapped[str | None] = mapped_column(String(120))
+    note: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    employee: Mapped[Employee] = relationship()
+
+
+class BreakPeriod(Base):
+    """استراحة واحدة داخل يوم عمل: بدايتها ونهايتها ومدتها.
+
+    كل استراحة سجل مستقل، ولا حدّ لعددها في اليوم إلا إن حدّدته السياسة.
+    """
+
+    __tablename__ = "break_periods"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    work_date: Mapped[date] = mapped_column(Date, index=True)
+    sequence: Mapped[int] = mapped_column(Integer, default=1)     # رقم الاستراحة في اليوم
+    start_at: Mapped[datetime] = mapped_column(DateTime)
+    end_at: Mapped[datetime | None] = mapped_column(DateTime)     # فارغ = استراحة مفتوحة
+    minutes: Mapped[int] = mapped_column(Integer, default=0)
+    is_open: Mapped[bool] = mapped_column(Boolean, default=False)
+    alerted: Mapped[bool] = mapped_column(Boolean, default=False)  # نُبِّهت الإدارة عن تجاوزها
+
+    employee: Mapped[Employee] = relationship()
+
+
+class SentAlert(Base):
+    """أثر تنبيه أُرسل مرة واحدة، حتى لا يتكرر مع كل إعادة احتساب."""
+
+    __tablename__ = "sent_alerts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class AttendancePolicy(Base):
+    """سياسة حضور واستراحة. الحقول الفارغة تُورَّث من السياسة الأعم.
+
+    الترتيب من الأعم إلى الأخص: الافتراضية ← الفرع ← الإدارة ← الوردية.
+    """
+
+    __tablename__ = "attendance_policies"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    scope: Mapped[PolicyScope] = mapped_column(Enum(PolicyScope), default=PolicyScope.default)
+    scope_id: Mapped[int | None] = mapped_column(Integer, index=True)  # معرّف الفرع/الإدارة/الوردية
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    break_allowance_minutes: Mapped[int | None] = mapped_column(Integer)   # المسموح يومياً
+    break_grace_minutes: Mapped[int | None] = mapped_column(Integer)       # دقائق السماح
+    max_break_count: Mapped[int | None] = mapped_column(Integer)           # 0 = بلا حد
+    max_total_break_minutes: Mapped[int | None] = mapped_column(Integer)   # 0 = المسموح نفسه
+    deduct_breaks: Mapped[bool | None] = mapped_column(Boolean)            # خصم الاستراحة من ساعات العمل
+    clock_out_from_minutes: Mapped[int | None] = mapped_column(Integer)    # قبل نهاية الوردية بكم دقيقة يُعد البصم انصرافاً
+    early_leave_grace_minutes: Mapped[int | None] = mapped_column(Integer)
+    late_grace_minutes: Mapped[int | None] = mapped_column(Integer)
+    debounce_seconds: Mapped[int | None] = mapped_column(Integer)          # تجاهل التكرار خلال هذه الثواني
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 class LeaveType(Base):

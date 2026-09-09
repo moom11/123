@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import (
     AttendanceDay,
+    AttendanceEvent,
     DayStatus,
     Employee,
     LeaveRequest,
@@ -18,10 +19,11 @@ from ..models import (
     RestDay,
     Role,
     User,
+    WorkState,
 )
 from ..schemas import HomeDay, MyHomeOut, MyProfileIn, MyProfileOut
 from ..security import get_current_user
-from ..services import accounts, audit, notifications, settings_store
+from ..services import accounts, audit, notifications, policies, settings_store
 from ..services import attendance as attendance_service
 
 router = APIRouter(prefix="/api/me", tags=["me"])
@@ -165,15 +167,64 @@ def my_home(db: Session = Depends(get_db), user: User = Depends(get_current_user
     today_row = rows.get(today)
     is_workday = today.weekday() in rules.work_days and today not in rest_dates
 
-    # حالة الموظف الآن
-    if today_row and today_row.check_in and not today_row.check_out:
-        state, state_label, action, action_label = "in", "داخل الدوام", "out", "تسجيل انصراف"
+    # ------------------------- حالة الموظف الآن -------------------------
+    # تُقرأ من آخر حدث فسّرته آلة الحالات، لا من ترتيب البصمات
+    policy = policies.resolve(db, employee)
+    last_event = db.scalar(
+        select(AttendanceEvent)
+        .where(AttendanceEvent.employee_id == employee.id, AttendanceEvent.work_date == today)
+        .order_by(AttendanceEvent.event_time.desc(), AttendanceEvent.id.desc())
+        .limit(1)
+    )
+    work_state = last_event.state_after if last_event else WorkState.out
+    now = datetime.now()
+
+    break_started_at = None
+    break_elapsed = 0
+    secondary_action = secondary_label = None
+    state_detail = ""
+
+    if work_state is WorkState.on_break:
+        break_started_at = last_event.event_time
+        break_elapsed = max(0, int((now - break_started_at).total_seconds() // 60))
+        state = "break"
+        state_label = "أنت الآن في استراحة"
+        state_detail = f"بدأت {_time_label(break_started_at)} — مضى {break_elapsed} دقيقة"
+        action, action_label = "break_end", "إنهاء الاستراحة"
+    elif work_state is WorkState.working:
+        state = "in"
+        state_label = "أنت الآن داخل العمل"
+        state_detail = f"بدأت دوامك {_time_label(today_row.check_in if today_row else None)}"
+        # قرب نهاية الوردية يصبح الانصراف هو الزر الأول
+        clock_out_from = rules.scheduled_out(today) - timedelta(
+            minutes=max(0, policy.clock_out_from_minutes)
+        )
+        if now >= clock_out_from:
+            action, action_label = "clock_out", "تسجيل انصراف"
+            secondary_action, secondary_label = "break_start", "بدء استراحة"
+        else:
+            action, action_label = "break_start", "بدء استراحة"
+            secondary_action, secondary_label = "clock_out", "تسجيل انصراف"
     elif today_row and today_row.check_in and today_row.check_out:
-        state, state_label, action, action_label = "done", "أنهيت دوام اليوم", "in", "تسجيل حضور جديد"
+        state = "done"
+        state_label = "أنت الآن خارج العمل"
+        state_detail = f"آخر انصراف {_time_label(today_row.check_out)}"
+        action, action_label = "clock_in", "تسجيل حضور جديد"
     elif not is_workday:
-        state, state_label, action, action_label = "off", "اليوم راحتك", "in", "تسجيل حضور"
+        state, state_label = "off", "اليوم راحتك"
+        action, action_label = "clock_in", "تسجيل حضور"
     else:
-        state, state_label, action, action_label = "out", "خارج الدوام", "in", "تسجيل حضور"
+        state = "out"
+        state_label = "أنت الآن خارج العمل"
+        last_out = db.scalar(
+            select(AttendanceDay)
+            .where(AttendanceDay.employee_id == employee.id, AttendanceDay.check_out.isnot(None))
+            .order_by(AttendanceDay.work_date.desc())
+            .limit(1)
+        )
+        if last_out and last_out.check_out:
+            state_detail = f"آخر انصراف {_time_label(last_out.check_out)} — {last_out.work_date}"
+        action, action_label = "clock_in", "تسجيل حضور"
 
     last_punch = db.scalar(
         select(Punch)
@@ -226,8 +277,17 @@ def my_home(db: Session = Depends(get_db), user: User = Depends(get_current_user
         job_title=employee.job_title,
         state=state,
         state_label=state_label,
+        state_detail=state_detail,
         action=action,
         action_label=action_label,
+        secondary_action=secondary_action,
+        secondary_action_label=secondary_label,
+        break_started_at=break_started_at,
+        break_elapsed_minutes=break_elapsed,
+        break_minutes=today_row.break_minutes if today_row else 0,
+        break_count=today_row.break_count if today_row else 0,
+        break_allowance_minutes=policy.break_allowance_minutes,
+        break_overrun_minutes=today_row.break_overrun_minutes if today_row else 0,
         today_status=today_row.status if today_row else None,
         check_in=today_row.check_in if today_row else None,
         check_out=today_row.check_out if today_row else None,

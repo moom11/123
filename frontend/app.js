@@ -36,7 +36,12 @@ const NAV_GROUPS = ['عام', 'الحضور', 'الإجازات', 'شؤون ال
 const DAY_STATUS = {
   present: 'حاضر', late: 'متأخر', absent: 'غائب', leave: 'إجازة',
   holiday: 'عطلة رسمية', weekend: 'راحة أسبوعية', missing_out: 'انصراف ناقص',
-  scheduled: 'لم يحن بعد',
+  scheduled: 'لم يحن بعد', needs_review: 'تحتاج مراجعة',
+};
+const WORK_STATES = { in: 'داخل العمل', break: 'في استراحة', out: 'خارج العمل' };
+const EVENT_LABELS = {
+  CLOCK_IN: 'حضور', BREAK_START: 'بدء استراحة',
+  BREAK_END: 'عودة من الاستراحة', CLOCK_OUT: 'انصراف',
 };
 const LEAVE_STATUS = { pending:'قيد الاعتماد', approved:'معتمدة', rejected:'مرفوضة', cancelled:'ملغاة' };
 const ROLES = { admin:'مدير النظام', hr:'موارد بشرية', manager:'مدير إدارة', employee:'موظف' };
@@ -47,7 +52,7 @@ const PENALTY_ACTIONS = { warning:'إنذار كتابي', deduction_percent_day
   deduction_days:'خصم أجر أيام', suspension:'إيقاف بدون أجر', termination:'الفصل من العمل' };
 const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
 const money = (v) => (Number(v || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const APP_VERSION = '2026.09.09b';
+const APP_VERSION = '2026.09.09c';
 
 /* يفرض تحديث عامل الخدمة فور توفر نسخة جديدة (مهم على آيفون) */
 function watchForUpdates() {
@@ -894,7 +899,11 @@ const options = (items, value, key = 'id', label = 'name') =>
 
 /* ------------------------------ لوحة المؤشرات ------------------------------ */
 /* ------------------------------ شاشة الموظف الرئيسية ------------------------------ */
-const HOME_STATE_TONE = { in: 'in', out: '', done: '', off: 'off' };
+const HOME_STATE_TONE = { in: 'in', break: 'break', out: '', done: '', off: 'off' };
+const ACTION_ICONS = {
+  clock_in: 'fingerprint', clock_out: 'logout',
+  break_start: 'coffee', break_end: 'play',
+};
 
 /** شاشة نجاح مختصرة بعد البصمة: الوقت والموقع */
 function punchSuccess(result) {
@@ -923,8 +932,8 @@ views.home = async () => {
       <div class="who">${avatar(home.employee_name)}
         <div><b>${esc(home.employee_name)}</b>
           <span>${esc(home.job_title || '')}</span></div></div>
-      <div class="state">أنت الآن</div>
       <div class="state-value">${esc(home.state_label)}</div>
+      ${home.state_detail ? `<div class="state-detail">${esc(home.state_detail)}</div>` : ''}
       <div class="meta">
         <span>${icon('clock')} ${esc(home.shift_label || '')}</span>
         ${home.site_name ? `<span>${icon('location')} ${esc(home.site_name)}</span>` : ''}
@@ -932,8 +941,11 @@ views.home = async () => {
           home.requires_location ? 'يتحقق من موقعك' : 'بلا تحقق موقع'}</span>
       </div>
       ${home.punch_enabled
-        ? `<button class="punch-btn" id="homePunch">${icon(home.action === 'out' ? 'logout' : 'fingerprint')}
-             ${esc(home.action_label)}</button>
+        ? `<button class="punch-btn" id="homePunch" data-intent="${esc(home.action)}">${
+             icon(ACTION_ICONS[home.action] || 'fingerprint')} ${esc(home.action_label)}</button>
+           ${home.secondary_action ? `<button class="punch-btn second" id="homePunch2"
+             data-intent="${esc(home.secondary_action)}">${icon(ACTION_ICONS[home.secondary_action]
+             || 'fingerprint')} ${esc(home.secondary_action_label)}</button>` : ''}
            <div class="hint" id="homeHint">${home.requires_location
              ? 'يجب أن تكون داخل نطاق موقع العمل عند التسجيل.' : 'اضغط الزر لتسجيل بصمتك.'}</div>`
         : '<div class="hint">تسجيل الحضور من التطبيق معطّل حالياً</div>'}
@@ -952,6 +964,14 @@ views.home = async () => {
       ${home.late_minutes ? `<div class="row-item"><span class="ri">${icon('alert')}</span>
         <div class="rt"><b>تأخير</b><span>يُحتسب في المسير</span></div>
         <div class="rv">${home.late_minutes} دقيقة</div></div>` : ''}
+      <div class="row-item"><span class="ri">${icon('coffee')}</span>
+        <div class="rt"><b>الاستراحات</b><span>${home.break_count
+          ? home.break_count + ' استراحة من أصل ' + home.break_allowance_minutes + ' دقيقة مسموحة'
+          : 'المسموح ' + home.break_allowance_minutes + ' دقيقة يومياً'}</span></div>
+        <div class="rv ${home.break_overrun_minutes ? 'danger' : ''}">${home.break_minutes} دقيقة</div></div>
+      ${home.break_overrun_minutes ? `<div class="row-item"><span class="ri">${icon('alert')}</span>
+        <div class="rt"><b>تجاوز الاستراحة</b><span>سُجّل للإدارة</span></div>
+        <div class="rv danger">${home.break_overrun_minutes} دقيقة</div></div>` : ''}
     </div>
 
     <div class="card"><div class="card-head"><h3>آخر عملية حضور</h3></div>
@@ -977,26 +997,42 @@ views.home = async () => {
           </div>`).join('')}</div>
       </div></div>`);
 
-  const button = el('homePunch');
-  if (button) {
-    button.onclick = async () => {
-      button.disabled = true;
-      const hint = el('homeHint');
-      try {
-        let body = {};
-        if (home.requires_location) {
-          if (hint) hint.textContent = 'جارٍ تحديد موقعك…';
-          body = await currentPosition();
-        }
-        const result = await api('/api/attendance/self-punch', { method: 'POST', body });
-        punchSuccess(result);
-        setTimeout(() => views.home(), 1800);
-      } catch (e) {
-        toast(e.message, 'err');
-        if (hint) hint.textContent = e.message;
-        button.disabled = false;
+  const punch = async (button) => {
+    button.disabled = true;
+    const hint = el('homeHint');
+    try {
+      let body = {};
+      if (home.requires_location) {
+        if (hint) hint.textContent = 'جارٍ تحديد موقعك…';
+        body = await currentPosition();
       }
-    };
+      // النية الصريحة من الزر؛ لو تعذّرت يستنتجها النظام من حالة الموظف
+      const intent = button.dataset.intent;
+      if (intent && intent !== 'none') body.intent = intent;
+      const result = await api('/api/attendance/self-punch', { method: 'POST', body });
+      punchSuccess(result);
+      setTimeout(() => views.home(), 1800);
+    } catch (e) {
+      toast(e.message, 'err');
+      if (hint) hint.textContent = e.message;
+      button.disabled = false;
+    }
+  };
+  ['homePunch', 'homePunch2'].forEach((id) => {
+    const button = el(id);
+    if (button) button.onclick = () => punch(button);
+  });
+
+  // مدة الاستراحة الجارية تُحدَّث كل دقيقة أمام الموظف
+  clearInterval(state.breakTimer);
+  if (home.state === 'break' && home.break_started_at) {
+    const started = new Date(home.break_started_at);
+    state.breakTimer = setInterval(() => {
+      const box = document.querySelector('.status-card .state-detail');
+      if (!box) return clearInterval(state.breakTimer);
+      const minutes = Math.max(0, Math.floor((Date.now() - started) / 60000));
+      box.textContent = `بدأت ${fmtTime(home.break_started_at)} — مضى ${minutes} دقيقة`;
+    }, 30000);
   }
 };
 
@@ -1179,6 +1215,9 @@ views.attendance = async () => {
       ${isHR() ? '<button class="btn gray" id="attBulk">تسجيل حضور جماعي</button>' : ''}
     </div></div>
     <div class="grid cols-4 stagger" id="attKpis"></div>
+    <div class="card"><div class="card-head"><h3>الحالة الآن</h3>
+      <span class="muted" id="liveCount">جارٍ التحميل…</span></div>
+      <div class="card-body"><div class="live-grid" id="liveGrid"></div></div></div>
     <div class="card"><div class="card-head"><h3>كشف الحضور</h3><span class="muted" id="attCount"></span></div>
       <div id="attTable"><div class="empty">اختر التاريخ ثم اضغط «عرض»</div></div></div>
     <div class="card"><div class="card-head"><h3>كشف موظف لفترة</h3></div><div class="card-body">
@@ -1208,16 +1247,47 @@ views.attendance = async () => {
       <div class="kpi info"><div class="label">إجازة / عطلة<span class="ico">${icon('leave')}</span></div>
         <div class="value info">${count('leave', 'holiday', 'weekend')}</div></div>`;
     el('attTable').innerHTML = table(
-      ['الموظف', 'وقت الحضور', 'وقت الانصراف', 'ساعات', 'تأخير (د)', 'خروج مبكر (د)', 'إضافي (د)', 'الحالة', 'ملاحظة'],
+      ['الموظف', 'وقت الحضور', 'وقت الانصراف', 'في المقر', 'استراحة', 'ساعات فعلية',
+       'تأخير (د)', 'خروج مبكر (د)', 'إضافي (د)', 'الحالة', 'ملاحظة'],
       rows,
-      (r) => `<tr>
+      (r) => `<tr${r.status === 'needs_review' || r.break_overrun_minutes ? ' class="warn-row"' : ''}>
         <td><div style="display:flex;align-items:center;gap:9px">${avatar(r.employee_name, 'sm')}
           <div><div style="font-weight:600">${esc(r.employee_name)}</div>
           <div class="muted" style="font-size:11.5px">${esc(r.employee_code)}</div></div></div></td>
-        <td>${fmtTime(r.check_in)}</td><td>${fmtTime(r.check_out)}</td><td>${hours(r.worked_minutes)}</td>
+        <td>${fmtTime(r.check_in)}</td><td>${fmtTime(r.check_out)}</td>
+        <td>${hours(r.presence_minutes)}</td>
+        <td>${breakCell(r)}</td>
+        <td>${hours(r.worked_minutes)}</td>
         <td>${r.late_minutes || 0}</td><td>${r.early_leave_minutes || 0}</td><td>${r.overtime_minutes || 0}</td>
         <td><span class="tag ${r.status}">${DAY_STATUS[r.status]}</span></td><td>${esc(r.note || '')}</td></tr>`);
+    el('attTable').querySelectorAll('[data-events]').forEach((cell) => {
+      cell.onclick = () => dayEventsSheet(Number(cell.dataset.emp), cell.dataset.day, cell.dataset.name);
+    });
   };
+
+  const loadLive = async () => {
+    try {
+      const rows = await api('/api/attendance/live');
+      const count = (st) => rows.filter((r) => r.state === st).length;
+      el('liveCount').textContent =
+        `${count('in')} داخل العمل · ${count('break')} في استراحة · ${count('out')} خارج العمل`;
+      el('liveGrid').innerHTML = rows.length ? rows.map((r) => `
+        <div class="live-card ${r.state}${r.needs_review || r.break_overrun_minutes ? ' alarm' : ''}">
+          <span class="dot"></span>
+          <div class="lt"><b>${esc(r.employee_name)}</b>
+            <span>${esc(r.state_label)}${r.since_minutes ? ' — منذ ' + r.since_minutes + ' دقيقة' : ''}</span>
+            ${r.break_overrun_minutes ? `<span class="danger">تجاوز الاستراحة ${r.break_overrun_minutes} دقيقة</span>` : ''}
+            ${r.needs_review ? '<span class="danger">استراحة مفتوحة — تحتاج مراجعة</span>' : ''}</div>
+          <div class="lv">${r.check_in ? fmtTime(r.check_in) : '—'}
+            <small>${r.break_count ? r.break_count + ' استراحة' : 'بلا استراحة'}</small></div>
+        </div>`).join('') : '<div class="empty">لا يوجد موظفون</div>';
+    } catch (e) { el('liveCount').textContent = e.message; }
+  };
+  loadLive();
+  clearInterval(state.liveTimer);
+  state.liveTimer = setInterval(() => {
+    if (state.page === 'attendance') loadLive(); else clearInterval(state.liveTimer);
+  }, 30000);
   el('attLoad').onclick = () => load().catch((e) => toast(e.message, 'err'));
   el('attExport').onclick = () => downloadCsv(
     `/api/attendance/export.csv?date_from=${el('attDate').value}&date_to=${el('attDate').value}`, 'attendance.csv');
@@ -1269,6 +1339,43 @@ function manualPunchModal(employees, after) {
         } catch (e) { toast(e.message, 'err'); }
       };
     },
+  });
+}
+
+/** خلية الاستراحة في كشف اليوم: المجموع والعدد، وتُفتح على تفاصيل الأحداث */
+function breakCell(row) {
+  const label = row.break_count
+    ? `${row.break_minutes} د · ${row.break_count}`
+    : '—';
+  const flag = row.break_overrun_minutes
+    ? `<span class="tag late" title="تجاوز المسموح">+${row.break_overrun_minutes}</span>`
+    : (row.open_break ? '<span class="tag pending">مفتوحة</span>' : '');
+  return `<span data-events data-emp="${row.employee_id}" data-day="${row.work_date}"
+    data-name="${esc(row.employee_name || '')}" style="cursor:pointer;text-decoration:underline dotted"
+    >${label}</span> ${flag}`;
+}
+
+/** سلسلة أحداث يوم واحد لموظف: ماذا كانت كل بصمة وما الحالة بعدها */
+async function dayEventsSheet(employeeId, day, name) {
+  let events = [];
+  try {
+    events = await api(
+      `/api/attendance/events?employee_id=${employeeId}&date_from=${day}&date_to=${day}`);
+  } catch (e) { return toast(e.message, 'err'); }
+  events.reverse();   // الأقدم أولاً
+  modal({
+    title: `أحداث ${name || ''} — ${day}`,
+    body: events.length ? `<div class="timeline">${events.map((e) => `
+        <div class="ev ${e.event_type}">
+          <b>${fmtTime(e.event_time)} — ${esc(e.event_label || EVENT_LABELS[e.event_type] || '')}</b>
+          <span>${esc(WORK_STATES[e.state_before] || '')} ← ${esc(e.state_after_label || '')}</span>
+          <div class="muted" style="font-size:11.5px;margin-top:3px">
+            ${esc(SOURCES[e.source] || e.source)}${e.device_name ? ' · ' + esc(e.device_name) : ''}${
+              e.site_name ? ' · ' + esc(e.site_name) : ''}${
+              e.received_at ? ' · استُلمت ' + fmtDateTime(e.received_at) : ''}</div>
+        </div>`).join('')}</div>`
+      : '<div class="empty">لا أحداث في هذا اليوم</div>',
+    footer: '<button class="btn gray" data-close>إغلاق</button>',
   });
 }
 
@@ -1372,10 +1479,12 @@ views.punches = async () => {
     </div></div>
     <div class="card"><div class="card-head"><h3>البصمات الخام</h3><span class="muted" id="pCount"></span></div>
       <div id="pTable"><div class="empty">جارٍ التحميل…</div></div></div>`);
+  let rowsCache = [];
   const load = async () => {
     const q = new URLSearchParams({ date_from: el('pFrom').value, date_to: el('pTo').value, limit: 500 });
     if (el('pEmp').value) q.set('employee_id', el('pEmp').value);
     const rows = await api('/api/attendance/punches?' + q);
+    rowsCache = rows;
     el('pCount').textContent = `${rows.length} بصمة`;
     el('pTable').innerHTML = table(
       ['الوقت', 'رقم الموظف', 'الاسم', 'المصدر', 'الجهاز / الموقع', 'المسافة', 'الخريطة', 'ملاحظة', ''],
@@ -1386,15 +1495,66 @@ views.punches = async () => {
         <td>${r.distance_meters !== null && r.distance_meters !== undefined ? Math.round(r.distance_meters) + ' م' : '—'}</td>
         <td>${r.latitude ? `<a href="https://www.openstreetmap.org/?mlat=${r.latitude}&mlon=${r.longitude}#map=18/${r.latitude}/${r.longitude}" target="_blank" rel="noopener">عرض</a>` : '—'}</td>
         <td>${esc(r.note || '')}</td>
-        <td>${isHR() ? `<button class="btn sm danger" onclick="deletePunch(${r.id})">حذف</button>` : ''}</td></tr>`,
+        <td>${isHR() ? `<button class="btn sm ghost" onclick="editPunch(${r.id})">تعديل</button>
+          <button class="btn sm danger" onclick="deletePunch(${r.id})">حذف</button>` : ''}</td></tr>`,
       'لا توجد بصمات في هذه الفترة');
   };
   el('pLoad').onclick = () => load().catch((e) => toast(e.message, 'err'));
   if (el('pManual')) el('pManual').onclick = () => manualPunchModal(employees, load);
-  window.deletePunch = async (id) => {
-    if (!confirm('حذف هذه البصمة؟')) return;
-    try { await api('/api/attendance/punches/' + id, { method: 'DELETE' }); toast('تم الحذف', 'ok'); load(); }
-    catch (e) { toast(e.message, 'err'); }
+  // التعديل والحذف يتطلبان سبباً يُحفظ في سجل التدقيق مع القيمة القديمة والجديدة
+  window.editPunch = (id) => {
+    const row = rowsCache.find((r) => r.id === id);
+    if (!row) return;
+    modal({
+      title: 'تعديل بصمة',
+      body: `<div class="help" style="margin-bottom:12px">يُحفظ في سجل التدقيق: من عدّل،
+          ومتى، والقيمة القديمة والجديدة، والسبب.</div>
+        <div class="field"><label>الوقت</label>
+          <input type="datetime-local" id="epTime" value="${esc(String(row.punch_time).slice(0, 16))}" /></div>
+        <div class="field"><label>نوع الحدث (اتركه تلقائياً ليحدّده النظام من الحالة)</label>
+          <select id="epIntent">
+            <option value="auto">تلقائي حسب الحالة</option>
+            <option value="clock_in">حضور</option>
+            <option value="break_start">بدء استراحة</option>
+            <option value="break_end">عودة من الاستراحة</option>
+            <option value="clock_out">انصراف</option></select></div>
+        <div class="field"><label>سبب التعديل (إلزامي)</label>
+          <input id="epReason" placeholder="مثال: الجهاز كان متأخراً 35 دقيقة" /></div>`,
+      footer: '<button class="btn" id="epSave">حفظ</button><button class="btn gray" data-close>إلغاء</button>',
+      onOpen: (root) => {
+        $('#epSave', root).onclick = async () => {
+          const reason = $('#epReason', root).value.trim();
+          if (reason.length < 3) return toast('اكتب سبب التعديل', 'err');
+          try {
+            await api('/api/attendance/punches/' + id, { method: 'PATCH', body: {
+              punch_time: $('#epTime', root).value + ':00',
+              intent: $('#epIntent', root).value,
+              reason } });
+            toast('عُدّلت البصمة وسُجّل الأثر', 'ok'); closeModal(); load();
+          } catch (e) { toast(e.message, 'err'); }
+        };
+      },
+    });
+  };
+  window.deletePunch = (id) => {
+    modal({
+      title: 'حذف بصمة',
+      body: `<div class="help" style="margin-bottom:12px">لا يُمحى السجل من قاعدة البيانات:
+          يُستبعد من الاحتساب ويبقى أثره كاملاً في سجل التدقيق.</div>
+        <div class="field"><label>سبب الحذف (إلزامي)</label>
+          <input id="dpReason" placeholder="مثال: بصمة خاطئة لموظف آخر" /></div>`,
+      footer: '<button class="btn danger" id="dpSave">حذف</button><button class="btn gray" data-close>إلغاء</button>',
+      onOpen: (root) => {
+        $('#dpSave', root).onclick = async () => {
+          const reason = $('#dpReason', root).value.trim();
+          if (reason.length < 3) return toast('اكتب سبب الحذف', 'err');
+          try {
+            await api('/api/attendance/punches/' + id, { method: 'DELETE', body: { reason } });
+            toast('حُذفت البصمة وسُجّل الأثر', 'ok'); closeModal(); load();
+          } catch (e) { toast(e.message, 'err'); }
+        };
+      },
+    });
   };
   load();
 };
@@ -2869,6 +3029,7 @@ views.settings = async () => {
       <button data-tab="holidays">العطل الرسمية</button>
       <button data-tab="sites">مواقع العمل والبصم الذاتي</button>
       <button data-tab="violationTypes">المخالفات والجزاءات</button>
+      <button data-tab="attendanceRules">سياسة الحضور والاستراحة</button>
       <button data-tab="payrollRules">قواعد الرواتب</button>
       <button data-tab="alerts">التنبيهات وإشعارات الجوال</button>
       <button data-tab="branding">هوية المنشأة</button>
@@ -3349,6 +3510,169 @@ settingsTabs.payrollRules = async () => {
         violation_reset_days: Number(el('pyReset').value),
         document_alert_days: Number(el('pyDoc').value) } });
       toast('تم حفظ القواعد', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+  };
+};
+
+const POLICY_SCOPES = { default: 'افتراضية (كل الموظفين)', site: 'فرع', department: 'إدارة', shift: 'وردية' };
+
+settingsTabs.attendanceRules = async () => {
+  const [st, policies, sites, departments, shifts] = await Promise.all([
+    api('/api/settings'), api('/api/attendance-policies'),
+    api('/api/sites'), api('/api/departments'), api('/api/shifts'),
+  ]);
+  state.cache.settings = st;
+  const num = (id, label, value, help) =>
+    `<div class="field"><label>${label}</label>
+      <input type="number" min="0" id="${id}" value="${value}" />
+      ${help ? `<div class="help">${help}</div>` : ''}</div>`;
+
+  el('setBody').innerHTML = `
+    <div class="card"><div class="card-head"><h3>السياسة الافتراضية</h3></div>
+      <div class="card-body">
+        <div class="help" style="margin-bottom:14px">تُطبَّق على كل الموظفين، ويمكن تجاوزها
+          بسياسة أخص لفرع أو إدارة أو وردية في البطاقة أدناه.</div>
+        <div class="grid cols-3">
+          ${num('arAllow', 'مدة الاستراحة المسموحة يومياً (دقيقة)', st.break_allowance_minutes)}
+          ${num('arGrace', 'دقائق السماح فوق المسموح', st.break_grace_minutes)}
+          ${num('arMaxCount', 'حد عدد الاستراحات في اليوم', st.break_max_count, '0 = بلا حد لعدد مرات الاستراحة')}
+          ${num('arMaxTotal', 'الحد الأعلى لإجمالي وقت الاستراحة', st.break_max_total_minutes, '0 = يساوي المسموح')}
+          <div class="field"><label>خصم وقت الاستراحة من ساعات العمل</label>
+            <select id="arDeduct">
+              <option value="true" ${st.break_deducted ? 'selected' : ''}>يُخصم</option>
+              <option value="false" ${!st.break_deducted ? 'selected' : ''}>لا يُخصم</option></select></div>
+          ${num('arOut', 'وقت السماح بالانصراف (دقيقة قبل نهاية الوردية)', st.clock_out_from_minutes,
+                'البصم بعد هذا الوقت يُفهم انصرافاً، وقبله استراحة.')}
+          ${num('arEarly', 'سياسة الخروج المبكر: دقائق السماح', st.early_leave_grace_minutes)}
+          ${num('arLate', 'سياسة التأخير: دقائق السماح', st.late_grace_minutes)}
+          ${num('arDebounce', 'تجاهل البصمات المكررة (ثانية)', st.punch_debounce_seconds,
+                'يُنصح بـ 10 إلى 30 ثانية لمنع تكرار بصمة الجهاز.')}
+        </div>
+        <button class="btn" id="arSave">حفظ السياسة الافتراضية</button>
+        <div class="help" style="margin-top:12px">تجاوز الاستراحة <b>لا يمنع</b> الموظف من تسجيل
+          العودة: يُسجَّل التجاوز ويصل تنبيه للإدارة.</div>
+      </div></div>
+
+    <div class="card"><div class="card-head"><h3>سياسات الفروع والإدارات والورديات</h3>
+      <button class="btn sm" id="arAdd">إضافة سياسة</button></div>
+      <div id="arList"></div></div>`;
+
+  const scopeOptions = (scope, id) => {
+    const source = scope === 'site' ? sites : scope === 'department' ? departments : shifts;
+    return options(source, id, 'id', 'name');
+  };
+
+  const renderList = () => {
+    el('arList').innerHTML = table(
+      ['السياسة', 'النطاق', 'الاستراحة المسموحة', 'حد العدد', 'الخصم', 'وقت الانصراف', ''],
+      policies,
+      (r) => `<tr><td><b>${esc(r.name)}</b></td>
+        <td>${esc(r.scope_label)}${r.scope_name ? ' — ' + esc(r.scope_name) : ''}</td>
+        <td>${r.break_allowance_minutes ?? '—'}</td>
+        <td>${r.max_break_count === null ? '—' : (r.max_break_count || 'بلا حد')}</td>
+        <td>${r.deduct_breaks === null ? '—' : (r.deduct_breaks ? 'يُخصم' : 'لا يُخصم')}</td>
+        <td>${r.clock_out_from_minutes ?? '—'}</td>
+        <td><button class="btn sm ghost" onclick="policyEdit(${r.id})">تعديل</button>
+          <button class="btn sm danger" onclick="policyDelete(${r.id})">حذف</button></td></tr>`,
+      'لا سياسات خاصة — الجميع على السياسة الافتراضية');
+  };
+  renderList();
+
+  const form = (row) => modal({
+    title: row ? 'تعديل سياسة' : 'سياسة جديدة',
+    body: `<div class="help" style="margin-bottom:12px">اترك أي حقل فارغاً ليرث قيمته من
+        السياسة الأعم. الأخص يغلب: الوردية ثم الإدارة ثم الفرع ثم الافتراضية.</div>
+      <div class="field"><label>اسم السياسة</label>
+        <input id="poName" value="${esc(row?.name || '')}" placeholder="مثال: استراحة المطبخ" /></div>
+      <div class="field"><label>النطاق</label><select id="poScope">
+        ${Object.entries(POLICY_SCOPES).map(([k, v]) =>
+          `<option value="${k}" ${row?.scope === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+      <div class="field ${!row || row.scope === 'default' ? 'hidden' : ''}" id="poTargetWrap">
+        <label>الجهة</label><select id="poTarget">${
+          row && row.scope !== 'default' ? scopeOptions(row.scope, row.scope_id) : ''}</select></div>
+      <div class="grid cols-2">
+        <div class="field"><label>الاستراحة المسموحة (دقيقة)</label>
+          <input type="number" min="0" id="poAllow" value="${row?.break_allowance_minutes ?? ''}" /></div>
+        <div class="field"><label>دقائق السماح</label>
+          <input type="number" min="0" id="poGrace" value="${row?.break_grace_minutes ?? ''}" /></div>
+        <div class="field"><label>حد عدد الاستراحات (0 = بلا حد)</label>
+          <input type="number" min="0" id="poCount" value="${row?.max_break_count ?? ''}" /></div>
+        <div class="field"><label>الحد الأعلى لإجمالي الاستراحة</label>
+          <input type="number" min="0" id="poTotal" value="${row?.max_total_break_minutes ?? ''}" /></div>
+        <div class="field"><label>خصم الاستراحة من ساعات العمل</label><select id="poDeduct">
+          <option value="">حسب الأعم</option>
+          <option value="true" ${row?.deduct_breaks === true ? 'selected' : ''}>يُخصم</option>
+          <option value="false" ${row?.deduct_breaks === false ? 'selected' : ''}>لا يُخصم</option></select></div>
+        <div class="field"><label>وقت السماح بالانصراف (دقيقة)</label>
+          <input type="number" min="0" id="poOut" value="${row?.clock_out_from_minutes ?? ''}" /></div>
+        <div class="field"><label>سماح الخروج المبكر</label>
+          <input type="number" min="0" id="poEarly" value="${row?.early_leave_grace_minutes ?? ''}" /></div>
+        <div class="field"><label>سماح التأخير</label>
+          <input type="number" min="0" id="poLate" value="${row?.late_grace_minutes ?? ''}" /></div>
+        <div class="field"><label>تجاهل التكرار (ثانية)</label>
+          <input type="number" min="0" id="poDebounce" value="${row?.debounce_seconds ?? ''}" /></div>
+      </div>`,
+    footer: '<button class="btn" id="poSave">حفظ</button><button class="btn gray" data-close>إلغاء</button>',
+    onOpen: (root) => {
+      const scopeSel = $('#poScope', root);
+      scopeSel.onchange = () => {
+        const scope = scopeSel.value;
+        $('#poTargetWrap', root).classList.toggle('hidden', scope === 'default');
+        if (scope !== 'default') $('#poTarget', root).innerHTML = scopeOptions(scope, null);
+      };
+      $('#poSave', root).onclick = async () => {
+        const numOrNull = (id) => {
+          const raw = $('#' + id, root).value.trim();
+          return raw === '' ? null : Number(raw);
+        };
+        const deduct = $('#poDeduct', root).value;
+        const scope = scopeSel.value;
+        const body = {
+          name: $('#poName', root).value.trim(),
+          scope,
+          scope_id: scope === 'default' ? null : Number($('#poTarget', root).value),
+          is_active: true,
+          break_allowance_minutes: numOrNull('poAllow'),
+          break_grace_minutes: numOrNull('poGrace'),
+          max_break_count: numOrNull('poCount'),
+          max_total_break_minutes: numOrNull('poTotal'),
+          deduct_breaks: deduct === '' ? null : deduct === 'true',
+          clock_out_from_minutes: numOrNull('poOut'),
+          early_leave_grace_minutes: numOrNull('poEarly'),
+          late_grace_minutes: numOrNull('poLate'),
+          debounce_seconds: numOrNull('poDebounce'),
+        };
+        try {
+          await api(row ? '/api/attendance-policies/' + row.id : '/api/attendance-policies',
+            { method: row ? 'PUT' : 'POST', body });
+          toast('حُفظت السياسة', 'ok'); closeModal(); settingsTabs.attendanceRules();
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    },
+  });
+
+  el('arAdd').onclick = () => form(null);
+  window.policyEdit = (id) => form(policies.find((r) => r.id === id));
+  window.policyDelete = async (id) => {
+    if (!confirm('حذف هذه السياسة؟ سيعود موظفوها إلى السياسة الأعم.')) return;
+    try { await api('/api/attendance-policies/' + id, { method: 'DELETE' });
+      toast('حُذفت السياسة', 'ok'); settingsTabs.attendanceRules(); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+
+  el('arSave').onclick = async () => {
+    try {
+      state.cache.settings = await api('/api/settings', { method: 'PUT', body: {
+        break_allowance_minutes: Number(el('arAllow').value),
+        break_grace_minutes: Number(el('arGrace').value),
+        break_max_count: Number(el('arMaxCount').value),
+        break_max_total_minutes: Number(el('arMaxTotal').value),
+        break_deducted: el('arDeduct').value === 'true',
+        clock_out_from_minutes: Number(el('arOut').value),
+        early_leave_grace_minutes: Number(el('arEarly').value),
+        late_grace_minutes: Number(el('arLate').value),
+        punch_debounce_seconds: Number(el('arDebounce').value) } });
+      toast('حُفظت السياسة الافتراضية', 'ok');
     } catch (e) { toast(e.message, 'err'); }
   };
 };

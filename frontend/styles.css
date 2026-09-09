@@ -531,13 +531,16 @@ html[dir="ltr"] .layout.mini .nav a::after{right:auto;left:calc(100% + 10px);tra
   animation:rise var(--normal) var(--ease) both}
 .status-card.in{background:linear-gradient(140deg,#0d9488 0%,#0f766e 60%,#134e4a 100%)}
 .status-card.off{background:linear-gradient(140deg,#64748b 0%,#475569 60%,#334155 100%)}
+/* في استراحة: كهرماني يميّزها فوراً عن «داخل العمل» */
+.status-card.break{background:linear-gradient(140deg,#f59e0b 0%,#d97706 60%,#92400e 100%)}
 .status-card::after{content:"";position:absolute;inset:auto -40px -60px auto;width:190px;height:190px;
   border-radius:50%;background:rgba(255,255,255,.08)}
 .status-card .who{display:flex;align-items:center;gap:11px;margin-bottom:14px;position:relative}
 .status-card .who b{display:block;font-size:15.5px}
 .status-card .who span{font-size:12.5px;opacity:.85}
 .status-card .state{font-size:12.5px;opacity:.9;margin-bottom:4px}
-.status-card .state-value{font-size:25px;font-weight:700;letter-spacing:-.4px;margin-bottom:14px}
+.status-card .state-value{font-size:25px;font-weight:700;letter-spacing:-.4px;margin-bottom:4px}
+.status-card .state-detail{font-size:13px;opacity:.92;margin-bottom:14px;position:relative}
 .status-card .meta{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;position:relative}
 .status-card .meta span{background:rgba(255,255,255,.16);border-radius:var(--radius-pill);
   padding:5px 11px;font-size:12px;display:inline-flex;align-items:center;gap:6px}
@@ -549,6 +552,38 @@ html[dir="ltr"] .layout.mini .nav a::after{right:auto;left:calc(100% + 10px);tra
 .punch-btn:active{transform:scale(.98)}
 .punch-btn:disabled{opacity:.6;cursor:not-allowed}
 .punch-btn svg.i{width:21px;height:21px}
+/* الزر الثاني (انصراف أثناء العمل مثلاً): أخف وزناً من الأول */
+.punch-btn.second{margin-top:9px;background:rgba(255,255,255,.16);color:#fff;
+  box-shadow:none;font-size:15px;min-height:48px;border:1px solid rgba(255,255,255,.35)}
+.row-item .rv.danger{color:var(--danger)}
+
+/* لوحة الحالة الآن (الإدارة) */
+.live-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
+.live-card{border:1px solid var(--border);border-radius:var(--radius);padding:12px 13px;
+  background:var(--surface);display:flex;gap:11px;align-items:center}
+.live-card .dot{width:10px;height:10px;border-radius:50%;flex:none;background:var(--muted)}
+.live-card.in .dot{background:var(--ok);box-shadow:0 0 0 4px var(--ok-soft)}
+.live-card.break .dot{background:var(--warn);box-shadow:0 0 0 4px var(--warn-soft)}
+.live-card.out .dot{background:var(--border-2,#cbd5e1)}
+.live-card .lt{flex:1;min-width:0}
+.live-card .lt b{display:block;font-size:14px;margin-bottom:2px}
+.live-card .lt span{font-size:12px;color:var(--muted);display:block}
+.live-card .lv{font-size:12px;font-weight:600;color:var(--text-2);text-align:center}
+.live-card .lv small{display:block;font-weight:400;color:var(--muted);font-size:11px}
+.live-card.alarm{border-color:var(--danger);background:var(--danger-soft)}
+
+/* سلسلة أحداث اليوم */
+.timeline{position:relative;padding-inline-start:22px}
+.timeline::before{content:"";position:absolute;inset-block:6px;inset-inline-start:6px;
+  width:2px;background:var(--border)}
+.timeline .ev{position:relative;padding:9px 0}
+.timeline .ev::before{content:"";position:absolute;inset-inline-start:-20px;top:14px;width:10px;
+  height:10px;border-radius:50%;background:var(--primary);border:2px solid var(--surface)}
+.timeline .ev.BREAK_START::before{background:var(--warn)}
+.timeline .ev.BREAK_END::before{background:var(--secondary,#14b8a6)}
+.timeline .ev.CLOCK_OUT::before{background:var(--muted)}
+.timeline .ev b{font-size:13.5px}
+.timeline .ev span{font-size:12px;color:var(--muted);margin-inline-start:8px}
 .status-card .hint{margin-top:10px;font-size:12px;opacity:.9;text-align:center;position:relative}
 .status-card .alert{margin-top:12px;background:rgba(255,255,255,.18);border-radius:var(--radius-sm);
   padding:9px 12px;font-size:12.5px;display:flex;gap:8px;align-items:center;position:relative}

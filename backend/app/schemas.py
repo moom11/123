@@ -199,7 +199,66 @@ class AttendanceDayOut(ORMModel):
     overtime_minutes: int = 0
     status: DayStatus
     punches_count: int = 0
+    presence_minutes: int = 0
+    break_minutes: int = 0
+    break_count: int = 0
+    break_overrun_minutes: int = 0
+    open_break: bool = False
+    breaks: list["BreakOut"] = []
     note: str | None = None
+
+
+class BreakOut(ORMModel):
+    """استراحة واحدة بمدتها."""
+
+    sequence: int
+    start_at: datetime
+    end_at: datetime | None = None
+    minutes: int = 0
+    is_open: bool = False
+
+
+class AttendanceEventOut(ORMModel):
+    """حدث حضور مُفسَّر بكل بياناته."""
+
+    id: int
+    employee_id: int
+    employee_code: str
+    employee_name: str
+    work_date: date
+    event_time: datetime
+    received_at: datetime | None = None
+    event_type: str
+    event_label: str = ""
+    state_before: str
+    state_after: str
+    state_after_label: str = ""
+    source: str
+    device_name: str | None = None
+    site_name: str | None = None
+    shift_name: str | None = None
+    note: str | None = None
+
+
+class LiveStatusOut(BaseModel):
+    """حالة موظف الآن للوحة الإدارة."""
+
+    employee_id: int
+    employee_name: str
+    employee_code: str
+    site_name: str | None = None
+    shift_name: str | None = None
+    state: str                      # out | in | break
+    state_label: str
+    since: datetime | None = None   # منذ متى في هذه الحالة
+    since_minutes: int = 0
+    check_in: datetime | None = None
+    check_out: datetime | None = None
+    break_minutes: int = 0
+    break_count: int = 0
+    break_overrun_minutes: int = 0
+    open_break: bool = False
+    needs_review: bool = False
 
 
 class SelfPunchIn(BaseModel):
@@ -208,6 +267,9 @@ class SelfPunchIn(BaseModel):
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
     accuracy_meters: float | None = Field(default=None, ge=0)
+    # نية صريحة من الزر: clock_in / break_start / break_end / clock_out
+    # وإن تُركت فارغة يستنتجها النظام من حالة الموظف
+    intent: str | None = Field(default=None, pattern="^(clock_in|break_start|break_end|clock_out)$")
 
 
 class SelfPunchResult(BaseModel):
@@ -215,9 +277,11 @@ class SelfPunchResult(BaseModel):
     punch: PunchOut
     site_name: str | None = None
     distance_meters: float | None = None
-    kind: str = ""          # حضور أو انصراف
+    kind: str = ""          # حضور / بدء استراحة / عودة من الاستراحة / انصراف
     time_label: str = ""    # 08:57 ص
     message: str = ""
+    state: str = "out"      # حالة الموظف بعد البصمة
+    state_label: str = ""
 
 
 class WorkSiteIn(BaseModel):
@@ -282,6 +346,16 @@ class SettingsOut(BaseModel):
     attendance_alert_enabled: bool = True
     attendance_alert_after_minutes: int = 60
     attendance_alert_notify_employee: bool = True
+    # سياسة الحضور والاستراحة الافتراضية
+    break_allowance_minutes: int = 60
+    break_grace_minutes: int = 5
+    break_max_count: int = 0
+    break_max_total_minutes: int = 0
+    break_deducted: bool = True
+    clock_out_from_minutes: int = 30
+    early_leave_grace_minutes: int = 10
+    late_grace_minutes: int = 10
+    punch_debounce_seconds: int = 20
 
 
 class SettingsIn(BaseModel):
@@ -303,6 +377,15 @@ class SettingsIn(BaseModel):
     attendance_alert_enabled: bool | None = None
     attendance_alert_after_minutes: int | None = Field(default=None, ge=5, le=600)
     attendance_alert_notify_employee: bool | None = None
+    break_allowance_minutes: int | None = Field(default=None, ge=0, le=600)
+    break_grace_minutes: int | None = Field(default=None, ge=0, le=120)
+    break_max_count: int | None = Field(default=None, ge=0, le=20)
+    break_max_total_minutes: int | None = Field(default=None, ge=0, le=600)
+    break_deducted: bool | None = None
+    clock_out_from_minutes: int | None = Field(default=None, ge=0, le=480)
+    early_leave_grace_minutes: int | None = Field(default=None, ge=0, le=240)
+    late_grace_minutes: int | None = Field(default=None, ge=0, le=240)
+    punch_debounce_seconds: int | None = Field(default=None, ge=0, le=300)
 
 
 class AttendanceOverride(BaseModel):
@@ -792,10 +875,19 @@ class HomeDay(BaseModel):
 class MyHomeOut(BaseModel):
     employee_name: str
     job_title: str | None = None
-    state: str = "out"              # in | out | done | off
-    state_label: str = ""
-    action: str = "in"              # in | out | none
+    state: str = "out"              # in | break | out | done | off
+    state_label: str = ""           # أنت الآن داخل العمل / في استراحة / خارج العمل
+    state_detail: str = ""          # وقت بداية العمل أو بداية الاستراحة أو آخر انصراف
+    action: str = "in"              # in | break_start | break_end | out | none
     action_label: str = ""
+    secondary_action: str | None = None      # زر ثانٍ (انصراف أثناء العمل مثلاً)
+    secondary_action_label: str | None = None
+    break_started_at: datetime | None = None
+    break_elapsed_minutes: int = 0           # مدة الاستراحة الجارية الآن
+    break_minutes: int = 0                   # إجمالي استراحات اليوم
+    break_count: int = 0
+    break_allowance_minutes: int = 60
+    break_overrun_minutes: int = 0
     today_status: DayStatus | None = None
     check_in: datetime | None = None
     check_out: datetime | None = None

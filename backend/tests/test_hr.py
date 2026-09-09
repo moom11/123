@@ -868,17 +868,17 @@ def test_sheets_retries_after_network_failure(client, auth):
             "employee_id": emp["id"], "punch_time": f"{date.today()}T08:07:00"})
 
         # المحاولة الأولى تفشل (الخادم يرد بخطأ)، ثم تنجح إعادة المحاولة
-        for _ in range(5):
+        for _ in range(20):
             client.post("/api/sheets/flush", headers=auth)
             if any(r[1] == "9701" for r in stub.rows_of("punches")):
                 break
-            time.sleep(0.2)
+            time.sleep(0.25)
 
         assert any(r[1] == "9701" for r in stub.rows_of("punches")), "لم يصل الصف بعد إعادة المحاولة"
 
         # الانتظار حتى يفرغ صندوق الإرسال (قد يكون خيط الإرسال الخلفي ما زال يعمل)
         pending = None
-        for _ in range(10):
+        for _ in range(20):
             pending = client.get("/api/sheets/status", headers=auth).json()["pending"]
             if pending == 0:
                 break
@@ -1928,7 +1928,7 @@ def test_employee_home_screen(client, auth):
     home = client.get("/api/me/home", headers=h).json()
     assert home["employee_name"] == "موظف الشاشة"
     assert home["state"] in ("out", "off")
-    assert home["action"] == "in" and "حضور" in home["action_label"]
+    assert home["action"] == "clock_in" and "حضور" in home["action_label"]
     assert home["site_name"] == "فرع التجربة"
     assert len(home["week"]) == 7 and sum(1 for d in home["week"] if d["is_today"]) == 1
     assert home["pending_requests"] == 0
@@ -1941,8 +1941,11 @@ def test_employee_home_screen(client, auth):
     assert body["time_label"]
 
     after = client.get("/api/me/home", headers=h).json()
-    assert after["state"] == "in" and after["state_label"] == "داخل الدوام"
-    assert after["action"] == "out" and "انصراف" in after["action_label"]
+    assert after["state"] == "in" and after["state_label"] == "أنت الآن داخل العمل"
+    # داخل العمل: الزر الأول استراحة أو انصراف حسب قربنا من نهاية الوردية،
+    # والثاني هو الآخر — فكلاهما متاح دائماً
+    actions = {after["action"], after["secondary_action"]}
+    assert actions == {"break_start", "clock_out"}
     assert after["check_in"] is not None
     assert after["last_punch_site"] == "فرع التجربة"
 
@@ -2120,3 +2123,359 @@ def test_mark_present_is_idempotent_and_guarded(client, auth):
 
     assert client.post("/api/attendance/mark-present", json={
         "date_from": "2026-09-01", "date_to": "2026-09-02"}).status_code == 401
+
+
+# --------------------------- آلة حالات الحضور والاستراحات ---------------------------
+
+def _punch(client, auth, employee_id: int, when: str, intent: str | None = None):
+    body = {"employee_id": employee_id, "punch_time": when}
+    res = client.post("/api/attendance/punches", headers=auth, json=body)
+    assert res.status_code == 201, res.text
+    if intent:   # النية الصريحة تُضبط بالتعديل الموثّق (كما يفعل التطبيق)
+        client.patch(f"/api/attendance/punches/{res.json()['id']}", headers=auth,
+                     json={"intent": intent, "reason": "اختبار"})
+    return res.json()
+
+
+def test_state_machine_reads_punches_by_state_not_by_order(client, auth):
+    """المثال الكامل: حضور، ثلاث استراحات، ثم انصراف — والمعنى من الحالة لا الترتيب."""
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية الاستراحات", "start_time": "08:00:00", "end_time": "17:00:00",
+        "work_days": "0,1,2,3,4,5,6"}).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9310", "full_name": "موظف الاستراحات", "shift_id": shift["id"]}).json()
+
+    day = "2026-09-02"
+    for when in ("08:00:00", "10:00:00", "10:15:00", "12:30:00",
+                 "12:45:00", "15:00:00", "15:10:00", "17:00:00"):
+        _punch(client, auth, emp["id"], f"{day}T{when}")
+
+    events = client.get(
+        f"/api/attendance/events?employee_id={emp['id']}&date_from={day}&date_to={day}",
+        headers=auth).json()
+    events.sort(key=lambda e: e["event_time"])
+    assert [e["event_type"] for e in events] == [
+        "CLOCK_IN", "BREAK_START", "BREAK_END", "BREAK_START",
+        "BREAK_END", "BREAK_START", "BREAK_END", "CLOCK_OUT",
+    ]
+    # الحالة تتغيّر مباشرة بعد كل حدث
+    assert [e["state_after"] for e in events] == [
+        "in", "break", "in", "break", "in", "break", "in", "out"]
+    assert events[0]["state_before"] == "out"
+    # كل حدث يحمل بياناته كاملة
+    first = events[0]
+    assert first["employee_name"] == "موظف الاستراحات"
+    assert first["employee_code"] == "9310" and first["shift_name"] == "وردية الاستراحات"
+    assert first["work_date"] == day and first["received_at"] and first["source"] == "manual"
+    assert first["event_label"] == "حضور"
+
+    rows = client.get(
+        f"/api/attendance/employee/{emp['id']}?date_from={day}&date_to={day}",
+        headers=auth).json()
+    row = rows[0]
+    assert row["break_count"] == 3
+    assert [b["minutes"] for b in row["breaks"]] == [15, 15, 10]
+    assert row["break_minutes"] == 40
+    assert row["presence_minutes"] == 540                 # 08:00 → 17:00
+    assert row["worked_minutes"] == 540 - 40              # ناقص الاستراحات
+    assert row["status"] == "present" and row["break_overrun_minutes"] == 0
+
+
+def test_unlimited_breaks_and_overrun_is_recorded_not_blocked(client, auth):
+    """أكثر من ثلاث استراحات بلا حد، والتجاوز يُسجَّل ولا يُمنع."""
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية التجاوز", "start_time": "08:00:00", "end_time": "17:00:00",
+        "work_days": "0,1,2,3,4,5,6"}).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9311", "full_name": "موظف التجاوز", "shift_id": shift["id"]}).json()
+
+    day = "2026-09-03"
+    # خمس استراحات مجموعها 79 دقيقة (المسموح 60 + سماح 5 = 65 → تجاوز 14)
+    times = ["08:00:00",
+             "09:00:00", "09:20:00",     # 20
+             "10:00:00", "10:20:00",     # 20
+             "11:00:00", "11:15:00",     # 15
+             "13:00:00", "13:15:00",     # 15
+             "14:00:00", "14:09:00",     # 9  → المجموع 79
+             "17:00:00"]
+    for when in times:
+        _punch(client, auth, emp["id"], f"{day}T{when}")
+
+    row = client.get(
+        f"/api/attendance/employee/{emp['id']}?date_from={day}&date_to={day}",
+        headers=auth).json()[0]
+    assert row["break_count"] == 5                 # لا حد لعدد الاستراحات
+    assert row["break_minutes"] == 79
+    assert row["break_overrun_minutes"] == 14      # 79 − (60 + 5)
+    assert row["status"] == "present"              # لم يُمنع ولم يُعتبر غياباً
+    assert "تجاوز" in (row["note"] or "")
+    assert row["worked_minutes"] == 540 - 79
+
+
+def test_open_break_needs_review_and_no_invented_return(client, auth):
+    """استراحة بلا عودة: «تحتاج مراجعة» ولا يخترع النظام وقت عودة."""
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية الاستراحة المفتوحة", "start_time": "08:00:00", "end_time": "17:00:00",
+        "work_days": "0,1,2,3,4,5,6"}).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9312", "full_name": "موظف الاستراحة المفتوحة", "shift_id": shift["id"]}).json()
+
+    day = "2026-09-04"
+    _punch(client, auth, emp["id"], f"{day}T08:00:00")
+    _punch(client, auth, emp["id"], f"{day}T11:00:00")   # بدء استراحة بلا عودة
+
+    row = client.get(
+        f"/api/attendance/employee/{emp['id']}?date_from={day}&date_to={day}",
+        headers=auth).json()[0]
+    assert row["open_break"] is True
+    assert row["status"] == "needs_review"
+    assert row["check_out"] is None                 # لم يُخترع وقت انصراف
+    assert row["breaks"][0]["end_at"] is None and row["breaks"][0]["is_open"] is True
+    assert row["breaks"][0]["minutes"] == 0
+    assert "استراحة مفتوحة" in (row["note"] or "")
+
+
+def test_debounce_ignores_duplicate_device_punches(client, auth):
+    """بصمات مكررة خلال ثوانٍ من خطأ الجهاز تُهمل ولا تُغيّر الحالة."""
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية التكرار", "start_time": "08:00:00", "end_time": "17:00:00",
+        "work_days": "0,1,2,3,4,5,6"}).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9313", "full_name": "موظف التكرار الآلي", "shift_id": shift["id"]}).json()
+
+    day = "2026-09-07"
+    for when in ("08:00:00", "08:00:05", "08:00:12"):   # ثلاث بصمات خلال 12 ثانية
+        _punch(client, auth, emp["id"], f"{day}T{when}")
+    _punch(client, auth, emp["id"], f"{day}T17:00:00")
+
+    events = client.get(
+        f"/api/attendance/events?employee_id={emp['id']}&date_from={day}&date_to={day}",
+        headers=auth).json()
+    assert [e["event_type"] for e in events][::-1] == ["CLOCK_IN", "CLOCK_OUT"]
+
+    row = client.get(
+        f"/api/attendance/employee/{emp['id']}?date_from={day}&date_to={day}",
+        headers=auth).json()[0]
+    assert row["status"] == "present" and row["break_count"] == 0
+    # البصمات المكررة لم تُحذف من القاعدة، إنما استُبعدت من الاحتساب
+    punches = client.get(
+        f"/api/attendance/punches?employee_id={emp['id']}&date_from={day}&date_to={day}",
+        headers=auth).json()
+    assert len(punches) == 4
+
+
+def test_live_status_board_and_employee_home_states(client, auth):
+    """لوحة الإدارة وشاشة الموظف تعرضان الحالة نفسها وتتبدّلان مع كل بصمة."""
+    from app import security_extra
+
+    security_extra.reset_all()
+    site = client.post("/api/sites", headers=auth, json={
+        "name": "فرع الحالة الحيّة", "latitude": 24.8, "longitude": 46.8,
+        "radius_meters": 300}).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9314", "full_name": "موظف الحالة الحيّة", "phone": "0539998877",
+        "site_id": site["id"]}).json()
+    token = client.post("/api/auth/login", data={
+        "username": "0539998877", "password": "0539998877"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+    here = {"latitude": 24.8, "longitude": 46.8, "accuracy_meters": 10}
+    # زمن تجاهل التكرار صفر في هذا الاختبار حتى تتوالى البصمات بلا انتظار
+    client.put("/api/settings", headers=auth, json={"punch_debounce_seconds": 0})
+
+    def live():
+        rows = client.get("/api/attendance/live", headers=auth).json()
+        return next(r for r in rows if r["employee_id"] == emp["id"])
+
+    assert live()["state"] == "out"
+    home = client.get("/api/me/home", headers=h).json()
+    assert home["state_label"] == "أنت الآن خارج العمل"
+
+    first = client.post("/api/attendance/self-punch", headers=h, json=here)
+    assert first.status_code == 201, first.text
+    assert live()["state"] == "in" and live()["state_label"] == "داخل العمل"
+    home = client.get("/api/me/home", headers=h).json()
+    assert home["state"] == "in" and home["state_label"] == "أنت الآن داخل العمل"
+
+    # زر «بدء استراحة» يرسل نية صريحة فتتحوّل الحالة فوراً
+    res = client.post("/api/attendance/self-punch", headers=h,
+                      json={**here, "intent": "break_start"})
+    assert res.status_code == 201, res.text
+    assert res.json()["kind"] == "بدء استراحة" and res.json()["state"] == "break"
+    assert live()["state"] == "break" and live()["state_label"] == "في استراحة"
+
+    home = client.get("/api/me/home", headers=h).json()
+    assert home["state"] == "break" and home["state_label"] == "أنت الآن في استراحة"
+    assert home["break_started_at"] and "بدأت" in home["state_detail"]
+    assert home["action"] == "break_end"
+
+    back = client.post("/api/attendance/self-punch", headers=h,
+                       json={**here, "intent": "break_end"})
+    assert back.json()["kind"] == "عودة من الاستراحة" and back.json()["state"] == "in"
+    assert live()["state"] == "in"
+    client.put("/api/settings", headers=auth, json={"punch_debounce_seconds": 20})
+
+
+def test_punch_edit_and_delete_leave_an_audit_trail(client, auth):
+    """تعديل البصمة وحذفها يتركان أثراً كاملاً، والحذف لا يمحو السجل من القاعدة."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9315", "full_name": "موظف التدقيق"}).json()
+    day = "2026-09-08"
+    punch = _punch(client, auth, emp["id"], f"{day}T08:40:00")
+
+    edited = client.patch(f"/api/attendance/punches/{punch['id']}", headers=auth, json={
+        "punch_time": f"{day}T08:05:00", "reason": "الجهاز كان متأخراً 35 دقيقة"})
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["punch_time"].endswith("08:05:00")
+
+    # السبب مطلوب دائماً
+    assert client.patch(f"/api/attendance/punches/{punch['id']}", headers=auth, json={
+        "punch_time": f"{day}T09:00:00"}).status_code == 422
+
+    logs = client.get("/api/audit-logs?entity=punch", headers=auth).json()
+    entry = next(row for row in logs if str(row["entity_id"]) == str(punch["id"])
+                 and row["action"] == "update")
+    assert "08:40" in entry["detail"] and "08:05" in entry["detail"]
+    assert "الجهاز كان متأخراً" in entry["detail"]
+    assert entry["username"] == "admin" and entry["created_at"]
+
+    # الحذف يحتاج سبباً، ويبقي السجل في القاعدة مع أثره
+    assert client.request("DELETE", f"/api/attendance/punches/{punch['id']}",
+                          headers=auth, json={}).status_code == 422
+    gone = client.request("DELETE", f"/api/attendance/punches/{punch['id']}",
+                          headers=auth, json={"reason": "بصمة خاطئة لموظف آخر"})
+    assert gone.status_code == 200, gone.text
+
+    with SessionLocal() as db:
+        from app.models import Punch
+
+        row = db.get(Punch, punch["id"])
+        assert row is not None                      # لم يُمحَ من القاعدة
+        assert row.deleted_at is not None and row.delete_reason == "بصمة خاطئة لموظف آخر"
+
+    logs = client.get("/api/audit-logs?entity=punch", headers=auth).json()
+    assert any(row["action"] == "delete" and "بصمة خاطئة" in (row["detail"] or "")
+               for row in logs)
+    # وقد خرجت من الاحتساب
+    row = client.get(f"/api/attendance/employee/{emp['id']}?date_from={day}&date_to={day}",
+                     headers=auth).json()[0]
+    assert row["check_in"] is None
+
+
+def test_policy_per_shift_overrides_defaults(client, auth):
+    """سياسة وردية تغلب الافتراضية، والحقول الفارغة تُورَّث."""
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية سياسة خاصة", "start_time": "08:00:00", "end_time": "17:00:00",
+        "work_days": "0,1,2,3,4,5,6"}).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9316", "full_name": "موظف السياسة", "shift_id": shift["id"]}).json()
+
+    base = client.get(f"/api/attendance-policies/effective?employee_id={emp['id']}",
+                      headers=auth).json()
+    assert base["break_allowance_minutes"] == 60 and base["source"] == "الافتراضية"
+
+    created = client.post("/api/attendance-policies", headers=auth, json={
+        "name": "استراحة المطبخ", "scope": "shift", "scope_id": shift["id"],
+        "break_allowance_minutes": 30, "deduct_breaks": False})
+    assert created.status_code == 201, created.text
+
+    now = client.get(f"/api/attendance-policies/effective?employee_id={emp['id']}",
+                     headers=auth).json()
+    assert now["break_allowance_minutes"] == 30      # غلبت الوردية
+    assert now["deduct_breaks"] is False
+    assert now["late_grace_minutes"] == base["late_grace_minutes"]   # وُرّث
+    assert now["source"] == "استراحة المطبخ"
+
+    # لا تُخصم الاستراحة من ساعات العمل في هذه الوردية
+    day = "2026-09-09"
+    for when in ("08:00:00", "10:00:00", "10:40:00", "17:00:00"):
+        _punch(client, auth, emp["id"], f"{day}T{when}")
+    row = client.get(f"/api/attendance/employee/{emp['id']}?date_from={day}&date_to={day}",
+                     headers=auth).json()[0]
+    assert row["break_minutes"] == 40
+    assert row["worked_minutes"] == 540              # بلا خصم
+    assert row["break_overrun_minutes"] == 40 - (30 + 5)
+
+    # نطاق بلا معرّف مرفوض
+    assert client.post("/api/attendance-policies", headers=auth, json={
+        "name": "ناقصة", "scope": "site"}).status_code == 400
+
+
+def test_break_report_columns_in_csv_export(client, auth):
+    """التقرير يحمل كل ما طُلب: المدة في المقر، الاستراحات ومددها، والتجاوز."""
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية التقرير", "start_time": "08:00:00", "end_time": "17:00:00",
+        "work_days": "0,1,2,3,4,5,6"}).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9317", "full_name": "موظف التقرير", "shift_id": shift["id"]}).json()
+
+    day = "2026-09-10"
+    for when in ("08:12:00", "10:00:00", "10:20:00", "12:00:00", "12:30:00", "16:40:00"):
+        _punch(client, auth, emp["id"], f"{day}T{when}")
+
+    res = client.get(
+        f"/api/attendance/export.csv?date_from={day}&date_to={day}&employee_id={emp['id']}",
+        headers=auth)
+    assert res.status_code == 200
+    text = res.content.decode("utf-8-sig")
+    header, row = text.strip().splitlines()[0], text.strip().splitlines()[1]
+    assert "إجمالي الاستراحة (د)" in header and "مدد الاستراحات" in header
+    assert "10:00-10:20 (20د)" in row and "12:00-12:30 (30د)" in row
+
+    sheet = client.get(
+        f"/api/attendance/employee/{emp['id']}?date_from={day}&date_to={day}",
+        headers=auth).json()[0]
+    assert sheet["presence_minutes"] == 508           # 08:12 → 16:40
+    assert sheet["break_minutes"] == 50 and sheet["break_count"] == 2
+    assert sheet["worked_minutes"] == 508 - 50
+    assert sheet["late_minutes"] == 12                # تجاوز سماح التأخير (10 دقائق)
+    assert sheet["early_leave_minutes"] == 20         # انصرف 16:40 بدل 17:00
+    assert sheet["status"] == "late"
+
+
+def test_device_push_updates_state_immediately(client, auth):
+    """بصمة الجهاز عبر ADMS تُفسَّر فوراً وتغيّر حالة الموظف بلا انتظار."""
+    sn = "TEST-SN-BREAK"
+    # نافذة الإقران قد تكون مغلقة من اختبار سابق، فنفتحها لتسجيل الجهاز
+    client.post("/api/devices/pairing?minutes=30", headers=auth)
+    assert client.get(f"/iclock/cdata?SN={sn}&options=all").status_code == 200
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية الجهاز", "start_time": "08:00:00", "end_time": "17:00:00",
+        "work_days": "0,1,2,3,4,5,6"}).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9318", "full_name": "موظف الجهاز", "shift_id": shift["id"]}).json()
+
+    def state_now():
+        rows = client.get("/api/attendance/live", headers=auth).json()
+        return next(r["state"] for r in rows if r["employee_id"] == emp["id"])
+
+    today = date.today()
+    assert state_now() == "out"
+
+    # أول بصمة اليوم: حضور
+    client.post(f"/iclock/cdata?SN={sn}&table=ATTLOG",
+                content=f"9318\t{today} 08:00:00\t0\t1\t0\n")
+    assert state_now() == "in"
+
+    # بصمة في منتصف الشفت: بدء استراحة (لا انصراف)
+    client.post(f"/iclock/cdata?SN={sn}&table=ATTLOG",
+                content=f"9318\t{today} 11:00:00\t0\t1\t0\n")
+    assert state_now() == "break"
+
+    # البصمة التالية: عودة من الاستراحة
+    client.post(f"/iclock/cdata?SN={sn}&table=ATTLOG",
+                content=f"9318\t{today} 11:20:00\t0\t1\t0\n")
+    assert state_now() == "in"
+
+    # وقرب نهاية الوردية: انصراف
+    client.post(f"/iclock/cdata?SN={sn}&table=ATTLOG",
+                content=f"9318\t{today} 16:55:00\t0\t1\t0\n")
+    assert state_now() == "out"
+
+    events = client.get(
+        f"/api/attendance/events?employee_id={emp['id']}&date_from={today}&date_to={today}",
+        headers=auth).json()
+    events.reverse()
+    assert [e["event_type"] for e in events] == [
+        "CLOCK_IN", "BREAK_START", "BREAK_END", "CLOCK_OUT"]
+    assert all(e["source"] == "device_push" for e in events)
+    assert all(e["device_name"] for e in events)

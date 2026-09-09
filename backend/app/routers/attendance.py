@@ -6,13 +6,15 @@ import io
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import (
     AttendanceDay,
+    AttendanceEvent,
+    BreakPeriod,
     DayStatus,
     Employee,
     EmployeeStatus,
@@ -21,10 +23,14 @@ from ..models import (
     PunchType,
     Role,
     User,
+    WorkState,
 )
 from ..schemas import (
     AttendanceDayOut,
+    AttendanceEventOut,
     AttendanceOverride,
+    BreakOut,
+    LiveStatusOut,
     PunchIn,
     PunchOut,
     SelfPunchIn,
@@ -37,6 +43,7 @@ from ..security import (
     visible_employee_ids,
 )
 from ..services import attendance as attendance_service
+from ..services import policies, workstate
 from ..services import bulk_attendance
 from ..services import audit, geo, settings_store, sheets
 
@@ -51,6 +58,7 @@ STATUS_LABELS = {
     DayStatus.weekend: "راحة أسبوعية",
     DayStatus.missing_out: "بصمة انصراف ناقصة",
     DayStatus.scheduled: "لم يحن بعد",
+    DayStatus.needs_review: "تحتاج مراجعة",
 }
 
 
@@ -76,7 +84,7 @@ def punch_out(p: Punch) -> PunchOut:
     )
 
 
-def day_out(row: AttendanceDay) -> AttendanceDayOut:
+def day_out(row: AttendanceDay, breaks: list | None = None) -> AttendanceDayOut:
     return AttendanceDayOut(
         id=row.id,
         employee_id=row.employee_id,
@@ -91,8 +99,39 @@ def day_out(row: AttendanceDay) -> AttendanceDayOut:
         overtime_minutes=row.overtime_minutes,
         status=row.status,
         punches_count=row.punches_count,
+        presence_minutes=row.presence_minutes,
+        break_minutes=row.break_minutes,
+        break_count=row.break_count,
+        break_overrun_minutes=row.break_overrun_minutes,
+        open_break=row.open_break,
+        breaks=[break_out(b) for b in breaks] if breaks else [],
         note=row.note,
     )
+
+
+def break_out(row: BreakPeriod) -> BreakOut:
+    return BreakOut(
+        sequence=row.sequence,
+        start_at=row.start_at,
+        end_at=row.end_at,
+        minutes=row.minutes,
+        is_open=row.is_open,
+    )
+
+
+def breaks_for(db: Session, employee_ids: list[int], start: date, end: date) -> dict:
+    """استراحات المدى مرتّبة لكل (موظف، يوم) — استعلام واحد لا استعلام لكل صف."""
+    rows = db.scalars(
+        select(BreakPeriod).where(
+            BreakPeriod.employee_id.in_(employee_ids),
+            BreakPeriod.work_date >= start,
+            BreakPeriod.work_date <= end,
+        ).order_by(BreakPeriod.start_at)
+    ).all()
+    grouped: dict[tuple[int, date], list[BreakPeriod]] = {}
+    for row in rows:
+        grouped.setdefault((row.employee_id, row.work_date), []).append(row)
+    return grouped
 
 
 def _visible_employee_ids(db: Session, user: User) -> list[int] | None:
@@ -163,20 +202,104 @@ def add_punch(
     return punch_out(punch)
 
 
-@router.delete("/punches/{punch_id}")
-def delete_punch(punch_id: int, db: Session = Depends(get_db), user: User = Depends(require_hr)):
+class PunchEditIn(BaseModel):
+    """تعديل بصمة: الوقت و/أو النوع، مع سبب إلزامي يُحفظ في سجل التدقيق."""
+
+    punch_time: datetime | None = None
+    intent: str | None = Field(
+        default=None, pattern="^(auto|clock_in|break_start|break_end|clock_out)$"
+    )
+    note: str | None = Field(default=None, max_length=255)
+    reason: str = Field(min_length=3, max_length=255)
+
+
+class PunchDeleteIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=255)
+
+
+@router.patch("/punches/{punch_id}", response_model=PunchOut)
+def edit_punch(
+    punch_id: int,
+    payload: PunchEditIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_hr),
+):
+    """تعديل بصمة مع أثر كامل: من عدّل، ومتى، والقيمة القديمة والجديدة، والسبب."""
     punch = db.get(Punch, punch_id)
     if not punch:
         raise HTTPException(status_code=404, detail="البصمة غير موجودة")
-    emp_id, day = punch.employee_id, punch.punch_time.date()
-    audit.log(db, user, "delete", "punch", punch.id,
-              f"{punch.employee_code} {punch.punch_time}", commit=False)
-    db.delete(punch)
+    if punch.deleted_at is not None:
+        raise HTTPException(status_code=400, detail="البصمة محذوفة ولا تُعدَّل")
+
+    before = _punch_snapshot(punch)
+    changes = payload.model_dump(exclude_unset=True, exclude={"reason"})
+    days = {punch.punch_time.date()}
+    if changes.get("punch_time"):
+        punch.punch_time = changes["punch_time"].replace(microsecond=0)
+        days.add(punch.punch_time.date())
+    if "intent" in changes:
+        punch.intent = None if changes["intent"] in (None, "auto") else changes["intent"]
+    if "note" in changes:
+        punch.note = changes["note"]
     db.flush()
+
+    audit.log(
+        db, user, "update", "punch", punch.id,
+        f"تعديل بصمة {punch.employee_code}: من [{before}] إلى [{_punch_snapshot(punch)}]"
+        f" — السبب: {payload.reason}",
+        commit=False,
+    )
+    if punch.employee_id:
+        attendance_service.recompute(
+            db, min(days) - timedelta(days=1), max(days), [punch.employee_id], commit=False
+        )
+    db.commit()
+    db.refresh(punch)
+    return punch_out(punch)
+
+
+@router.delete("/punches/{punch_id}")
+def delete_punch(
+    punch_id: int,
+    payload: PunchDeleteIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_hr),
+):
+    """حذف ناعم: السجل يبقى في القاعدة ويُستبعد من الاحتساب، وأثره في سجل التدقيق.
+
+    لا يُمحى سجل حضور من قاعدة البيانات نهائياً بلا أثر.
+    """
+    punch = db.get(Punch, punch_id)
+    if not punch:
+        raise HTTPException(status_code=404, detail="البصمة غير موجودة")
+    if punch.deleted_at is not None:
+        raise HTTPException(status_code=400, detail="البصمة محذوفة أصلاً")
+
+    emp_id, day = punch.employee_id, punch.punch_time.date()
+    snapshot = _punch_snapshot(punch)
+    punch.deleted_at = datetime.now().replace(microsecond=0)
+    punch.deleted_by_id = user.id
+    punch.delete_reason = payload.reason
+    db.flush()
+    audit.log(
+        db, user, "delete", "punch", punch.id,
+        f"حذف بصمة {punch.employee_code}: [{snapshot}] — السبب: {payload.reason}",
+        commit=False,
+    )
     if emp_id:
         attendance_service.recompute(db, day - timedelta(days=1), day, [emp_id], commit=False)
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "message": "حُذفت البصمة وسُجّل الأثر في سجل التدقيق"}
+
+
+def _punch_snapshot(punch: Punch) -> str:
+    """وصف نصي لحالة البصمة يُحفظ في سجل التدقيق قبل التعديل وبعده."""
+    parts = [f"الوقت {punch.punch_time:%Y-%m-%d %H:%M}"]
+    if punch.intent:
+        parts.append(f"النوع {punch.intent}")
+    if punch.note:
+        parts.append(f"ملاحظة {punch.note}")
+    return "، ".join(parts)
 
 
 @router.post("/self-punch", response_model=SelfPunchResult, status_code=201)
@@ -205,13 +328,18 @@ def self_punch(
     )
 
     now = datetime.now().replace(microsecond=0)
+    debounce = max(0, policies.resolve(db, emp).debounce_seconds)
     recent = db.scalar(
         select(Punch)
-        .where(Punch.employee_id == emp.id, Punch.punch_time >= now - timedelta(minutes=2))
+        .where(
+            Punch.employee_id == emp.id,
+            Punch.deleted_at.is_(None),
+            Punch.punch_time > now - timedelta(seconds=debounce),
+        )
         .order_by(Punch.punch_time.desc())
-    )
+    ) if debounce else None
     if recent:
-        raise HTTPException(status_code=400, detail="تم تسجيل بصمة قبل أقل من دقيقتين")
+        raise HTTPException(status_code=400, detail="سُجّلت بصمة قبل قليل، انتظر لحظة")
 
     punch = Punch(
         employee_code=emp.code,
@@ -219,6 +347,7 @@ def self_punch(
         punch_time=now,
         punch_type=PunchType.auto,
         source=PunchSource.web,
+        intent=data.intent,
         latitude=data.latitude,
         longitude=data.longitude,
         accuracy_meters=data.accuracy_meters,
@@ -231,12 +360,18 @@ def self_punch(
     sheets.push(db, "punches", sheets.punch_rows([punch]))
     db.refresh(punch)
 
-    day = db.scalar(
-        select(AttendanceDay).where(
-            AttendanceDay.employee_id == emp.id, AttendanceDay.work_date == now.date()
-        )
+    # ماذا فهم النظام من هذه البصمة، وما حالة الموظف بعدها
+    event = db.scalar(
+        select(AttendanceEvent)
+        .where(AttendanceEvent.punch_id == punch.id)
+        .order_by(AttendanceEvent.id.desc())
+        .limit(1)
     )
-    kind = "انصراف" if day and day.check_out else "حضور"
+    if event:
+        kind = workstate.EVENT_LABELS[event.event_type]
+        state = event.state_after
+    else:
+        kind, state = "بصمة", WorkState.out
     where = f" من موقع «{site.name}»" if site else ""
     hour = now.hour % 12 or 12
     time_label = f"{hour}:{now:%M} {'ص' if now.hour < 12 else 'م'}"
@@ -246,6 +381,8 @@ def self_punch(
         distance_meters=distance,
         kind=kind,
         time_label=time_label,
+        state=state.value,
+        state_label=workstate.STATE_LABELS[state],
         message=f"تم تسجيل {kind} الساعة {now:%H:%M}{where}",
     )
 
@@ -278,7 +415,11 @@ def daily_sheet(
         )
     ).all()
     by_emp = {r.employee_id: r for r in rows}
-    result = [day_out(by_emp[e.id]) for e in employees if e.id in by_emp]
+    breaks = breaks_for(db, ids, work_date, work_date)
+    result = [
+        day_out(by_emp[e.id], breaks.get((e.id, work_date)))
+        for e in employees if e.id in by_emp
+    ]
     if status:
         result = [r for r in result if r.status == status]
     return result
@@ -306,7 +447,8 @@ def employee_sheet(
         )
         .order_by(AttendanceDay.work_date)
     ).all()
-    return [day_out(r) for r in rows]
+    breaks = breaks_for(db, [employee_id], date_from, date_to)
+    return [day_out(r, breaks.get((employee_id, r.work_date))) for r in rows]
 
 
 @router.patch("/day/{day_id}", response_model=AttendanceDayOut)
@@ -357,6 +499,126 @@ class MarkPresentIn(BaseModel):
     date_from: date
     date_to: date
     employee_ids: list[int] | None = None
+
+
+# ------------------------------ الحالة الحيّة والأحداث ------------------------------
+@router.get("/live", response_model=list[LiveStatusOut])
+def live_status(
+    department_id: int | None = None,
+    state: str | None = Query(default=None, pattern="^(out|in|break)$"),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """لوحة الحالة الآن: من داخل العمل، ومن في استراحة، ومن خارج العمل."""
+    emp_stmt = select(Employee).where(Employee.status == EmployeeStatus.active)
+    allowed = _visible_employee_ids(db, user)
+    if allowed is not None:
+        emp_stmt = select(Employee).where(Employee.id.in_(allowed))
+    if department_id:
+        emp_stmt = emp_stmt.where(Employee.department_id == department_id)
+    employees = db.scalars(emp_stmt.order_by(Employee.code)).all()
+    ids = [e.id for e in employees]
+    if not ids:
+        return []
+
+    today = date.today()
+    attendance_service.recompute(db, today - timedelta(days=1), today, ids)
+    return [
+        row for row in (
+            _live_row(db, emp, today) for emp in employees
+        ) if state is None or row.state == state
+    ]
+
+
+def _live_row(db: Session, emp: Employee, today: date) -> LiveStatusOut:
+    """حالة موظف واحد الآن من آخر حدث له في يوم وردية جارٍ."""
+    rules = attendance_service.ShiftRules(emp.shift, emp.weekly_rest_days)
+    work_day = today
+    if rules.is_night and datetime.now() < rules.window(today)[0]:
+        work_day = today - timedelta(days=1)
+
+    last = db.scalar(
+        select(AttendanceEvent)
+        .where(AttendanceEvent.employee_id == emp.id, AttendanceEvent.work_date == work_day)
+        .order_by(AttendanceEvent.event_time.desc(), AttendanceEvent.id.desc())
+        .limit(1)
+    )
+    day = db.scalar(
+        select(AttendanceDay).where(
+            AttendanceDay.employee_id == emp.id, AttendanceDay.work_date == work_day
+        )
+    )
+    state = last.state_after.value if last else WorkState.out.value
+    since = last.event_time if last else (day.check_out if day else None)
+    minutes = int((datetime.now() - since).total_seconds() // 60) if since else 0
+    return LiveStatusOut(
+        employee_id=emp.id,
+        employee_name=emp.full_name,
+        employee_code=emp.code,
+        site_name=emp.site.name if emp.site else None,
+        shift_name=emp.shift.name if emp.shift else None,
+        state=state,
+        state_label=workstate.STATE_LABELS[WorkState(state)],
+        since=since,
+        since_minutes=max(0, minutes),
+        check_in=day.check_in if day else None,
+        check_out=day.check_out if day else None,
+        break_minutes=day.break_minutes if day else 0,
+        break_count=day.break_count if day else 0,
+        break_overrun_minutes=day.break_overrun_minutes if day else 0,
+        open_break=bool(day and day.open_break),
+        needs_review=bool(day and day.status == DayStatus.needs_review),
+    )
+
+
+@router.get("/events", response_model=list[AttendanceEventOut])
+def list_events(
+    employee_id: int | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    limit: int = Query(default=200, ge=1, le=1000),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """سجل الأحداث بالترتيب الزمني: ماذا كانت كل بصمة وما حالة الموظف قبلها وبعدها."""
+    stmt = select(AttendanceEvent)
+    allowed = _visible_employee_ids(db, user)
+    if allowed is not None:
+        stmt = stmt.where(AttendanceEvent.employee_id.in_(allowed))
+    if employee_id:
+        if not can_view_employee(user, employee_id, db):
+            raise HTTPException(status_code=403, detail="لا تملك صلاحية عرض هذا الموظف")
+        stmt = stmt.where(AttendanceEvent.employee_id == employee_id)
+    if date_from:
+        stmt = stmt.where(AttendanceEvent.work_date >= date_from)
+    if date_to:
+        stmt = stmt.where(AttendanceEvent.work_date <= date_to)
+    rows = db.scalars(
+        stmt.order_by(AttendanceEvent.event_time.desc(), AttendanceEvent.id.desc()).limit(limit)
+    ).all()
+    return [event_out(r) for r in rows]
+
+
+def event_out(row: AttendanceEvent) -> AttendanceEventOut:
+    return AttendanceEventOut(
+        id=row.id,
+        employee_id=row.employee_id,
+        employee_code=row.employee_code,
+        employee_name=row.employee_name,
+        work_date=row.work_date,
+        event_time=row.event_time,
+        received_at=row.received_at,
+        event_type=row.event_type.value,
+        event_label=workstate.EVENT_LABELS[row.event_type],
+        state_before=row.state_before.value,
+        state_after=row.state_after.value,
+        state_after_label=workstate.STATE_LABELS[row.state_after],
+        source=row.source.value,
+        device_name=row.device_name,
+        site_name=row.site_name,
+        shift_name=row.shift_name,
+        note=row.note,
+    )
 
 
 @router.post("/mark-present")
@@ -415,19 +677,35 @@ def export_attendance(
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(
-        ["التاريخ", "رقم الموظف", "الاسم", "الحضور", "الانصراف", "ساعات العمل",
+        ["التاريخ", "رقم الموظف", "الاسم", "الحضور", "الانصراف",
+         "المدة في المقر (ساعة)", "إجمالي الاستراحة (د)", "عدد الاستراحات",
+         "تجاوز الاستراحة (د)", "مدد الاستراحات", "ساعات العمل الفعلية",
          "التأخير (د)", "خروج مبكر (د)", "إضافي (د)", "الحالة", "ملاحظة"]
     )
     rows = db.scalars(
         stmt.order_by(AttendanceDay.work_date, AttendanceDay.employee_id)
     ).all()
+    spans = breaks_for(
+        db, list({r.employee_id for r in rows}) or [0], date_from, date_to
+    )
     for r in rows:
+        day_breaks = spans.get((r.employee_id, r.work_date), [])
+        detail = " + ".join(
+            f"{b.start_at:%H:%M}-{b.end_at:%H:%M} ({b.minutes}د)" if b.end_at
+            else f"{b.start_at:%H:%M}- مفتوحة"
+            for b in day_breaks
+        )
         writer.writerow([
             r.work_date.isoformat(),
             r.employee.code if r.employee else "",
             r.employee.full_name if r.employee else "",
             r.check_in.strftime("%H:%M") if r.check_in else "",
             r.check_out.strftime("%H:%M") if r.check_out else "",
+            round(r.presence_minutes / 60, 2),
+            r.break_minutes,
+            r.break_count,
+            r.break_overrun_minutes,
+            detail,
             round(r.worked_minutes / 60, 2),
             r.late_minutes,
             r.early_leave_minutes,
