@@ -47,7 +47,7 @@ const PENALTY_ACTIONS = { warning:'إنذار كتابي', deduction_percent_day
   deduction_days:'خصم أجر أيام', suspension:'إيقاف بدون أجر', termination:'الفصل من العمل' };
 const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
 const money = (v) => (Number(v || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const APP_VERSION = '2026.09.09';
+const APP_VERSION = '2026.09.09b';
 
 /* يفرض تحديث عامل الخدمة فور توفر نسخة جديدة (مهم على آيفون) */
 function watchForUpdates() {
@@ -3324,13 +3324,38 @@ settingsTabs.branding = async () => {
               <button class="btn" id="brSave">حفظ</button>
               ${b.logo_url ? '<button class="btn danger" id="brDel">حذف الشعار</button>' : ''}
             </div>
-            <div class="help" style="margin-top:10px">يُفضّل ملف PNG بخلفية شفافة، عرضه 400–800 بكسل.</div>
+            <div class="help" style="margin-top:10px">يُفضّل ملف PNG بخلفية شفافة، عرضه 400–800 بكسل.
+              الشعار نفسه يصبح أيقونة التطبيق على شاشة الجوال.</div>
           </div>
           <div style="text-align:center;padding:14px;background:var(--surface-2);border-radius:10px">
             <div class="muted" style="font-size:12.5px;margin-bottom:10px">الشعار الحالي</div>
             ${b.logo_url
               ? `<img src="${esc(b.logo_url)}" alt="الشعار" style="max-width:100%;max-height:130px;object-fit:contain" />`
               : '<div class="muted">لا يوجد شعار — سيظهر اسم النظام فقط</div>'}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card"><div class="card-head"><h3>أيقونة التطبيق على شاشة الجوال</h3></div>
+      <div class="card-body">
+        <div class="grid cols-2">
+          <div>
+            <div class="help" style="margin-bottom:12px">هذه هي الأيقونة التي تظهر خارج التطبيق
+              على شاشة الجوال بعد «إضافة إلى الشاشة الرئيسية». تُبنى تلقائياً من الشعار المرفوع
+              فوق الخلفية المختارة.</div>
+            <div class="field"><label>خلفية الأيقونة</label>
+              <input type="color" id="brIconBg" value="${esc(b.app_icon_bg || '#000000')}"
+                     style="height:44px;padding:4px" /></div>
+            <button class="btn" id="brIconSave">حفظ الخلفية وإعادة بناء الأيقونة</button>
+            <div class="help" style="margin-top:10px">بعد التحديث احذف اختصار التطبيق من شاشة
+              الآيفون وأضفه من جديد — نظام iOS يحتفظ بالأيقونة القديمة في ذاكرته.</div>
+          </div>
+          <div style="text-align:center;padding:14px;background:var(--surface-2);border-radius:10px">
+            <div class="muted" style="font-size:12.5px;margin-bottom:10px">الأيقونة الحالية</div>
+            <img id="brIconPreview" src="${esc(b.app_icon_url)}" alt="أيقونة التطبيق"
+                 style="width:96px;height:96px;border-radius:22px;object-fit:cover;
+                        box-shadow:0 6px 18px rgba(15,23,42,.22)" />
           </div>
         </div>
       </div>
@@ -3373,6 +3398,14 @@ settingsTabs.branding = async () => {
     try { applyBranding(await api('/api/branding/logo', { method: 'DELETE' }));
       toast('تم حذف الشعار', 'ok'); settingsTabs.branding(); }
     catch (e) { toast(e.message, 'err'); }
+  };
+  el('brIconSave').onclick = async () => {
+    try {
+      const updated = await api('/api/branding', { method: 'PUT', body: { app_icon_bg: el('brIconBg').value } });
+      applyBranding(updated);
+      el('brIconPreview').src = updated.app_icon_url + '&t=' + Date.now();
+      toast('تم تحديث أيقونة التطبيق', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
   };
   el('brQuoteSave').onclick = async () => {
     try {

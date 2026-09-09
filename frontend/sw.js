@@ -1,7 +1,7 @@
 /* عامل الخدمة: يجعل النظام قابلاً للتثبيت كتطبيق ويسرّع فتحه.
    ملفات الواجهة تُجلب من الشبكة أولاً (فيصل التحديث فوراً بلا حاجة لفتح التطبيق مرتين)،
    والذاكرة تُستخدم عند انقطاع الشبكة فقط. طلبات الـ API لا تُخزَّن إطلاقاً. */
-const VERSION = 'v9';
+const VERSION = 'v10';
 const CACHE = 'hr-shell-' + VERSION;
 const SHELL = [
   '/app/index.html',
@@ -10,8 +10,8 @@ const SHELL = [
   '/app/i18n.js',
   '/app/icons.js',
   '/app/manifest.json',
-  '/app/assets/icon-192.png',
-  '/app/assets/icon-512.png',
+  '/app/icons/icon-192.png',
+  '/app/icons/icon-512.png',
 ];
 
 self.addEventListener('install', (event) => {
@@ -48,4 +48,38 @@ self.addEventListener('fetch', (event) => {
       })
       .catch(() => caches.match(event.request).then((cached) => cached || caches.match('/app/index.html')))
   );
+});
+
+/* ------------------------------ إشعارات الجوال ------------------------------ */
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch (e) { data = { title: 'إشعار جديد' }; }
+  const title = data.title || 'نظام الموارد البشرية';
+  event.waitUntil(self.registration.showNotification(title, {
+    body: data.body || '',
+    icon: '/app/icons/icon-192.png',
+    badge: '/app/icons/icon-192.png',
+    dir: 'rtl',
+    lang: 'ar',
+    tag: 'hr-' + (data.page || 'general'),
+    renotify: true,
+    vibrate: [180, 90, 180],
+    data: { page: data.page || '' },
+  }));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const page = (event.notification.data && event.notification.data.page) || '';
+  const target = '/app/' + (page ? '?page=' + encodeURIComponent(page) : '');
+  event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+    .then((list) => {
+      for (const client of list) {
+        if (client.url.includes('/app/') && 'focus' in client) {
+          if (page) client.postMessage({ type: 'open-page', page });
+          return client.focus();
+        }
+      }
+      return self.clients.openWindow(target);
+    }));
 });

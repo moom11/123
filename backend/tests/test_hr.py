@@ -1948,3 +1948,84 @@ def test_employee_home_screen(client, auth):
 
     # لا يظهر رصيد إجازات في هذه الشاشة إطلاقاً
     assert "balance" not in str(after).lower()
+
+
+# --------------------------- أيقونة التطبيق على شاشة الجوال ---------------------------
+
+def _gold_logo_png() -> bytes:
+    """شعار تجريبي صغير (مربع ذهبي بخلفية شفافة)."""
+    import io
+
+    from PIL import Image
+
+    img = Image.new("RGBA", (300, 200), (0, 0, 0, 0))
+    for x in range(60, 240):
+        for y in range(40, 160):
+            img.putpixel((x, y), (212, 175, 55, 255))
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_app_icons_served_before_static_mount(client):
+    """المسار الديناميكي يسبق مجلد الواجهة ويعيد صورة PNG صالحة."""
+    for name in ("icon-192.png", "icon-512.png", "apple-touch-icon.png", "icon-maskable-512.png"):
+        res = client.get(f"/app/icons/{name}")
+        assert res.status_code == 200, name
+        assert res.headers["content-type"] == "image/png"
+        assert res.content[:8] == b"\x89PNG\r\n\x1a\n"
+    # قائمة بيضاء صارمة: أي اسم آخر مرفوض، فلا مجال للخروج من المجلد
+    from app.services import appicon
+
+    assert client.get("/app/icons/hack.png").status_code == 404
+    assert appicon.icon_path("../app.js") is None
+    assert appicon.icon_path("/etc/passwd") is None
+
+
+def test_manifest_follows_company_name_and_icons(client, auth):
+    client.put("/api/branding", headers=auth, json={"company_name": "مارا لاونج"})
+    body = client.get("/app/manifest.json").json()
+    assert body["name"] == "مارا لاونج"
+    assert body["short_name"] == "مارا لاونج"
+    assert body["display"] == "standalone"
+    srcs = [i["src"].split("?")[0] for i in body["icons"]]
+    assert srcs == ["/app/icons/icon-192.png", "/app/icons/icon-512.png",
+                    "/app/icons/icon-maskable-512.png"]
+    # كل رابط يحمل بصمة إصدار لكسر ذاكرة الجوال
+    assert all("?v=" in i["src"] for i in body["icons"])
+    assert {i["purpose"] for i in body["icons"]} == {"any", "maskable"}
+
+
+def test_uploaded_logo_becomes_the_app_icon(client, auth):
+    """رفع الشعار يبني الأيقونة فعلياً؛ وحذفه يعيد الأيقونة المدمجة."""
+    from PIL import Image
+
+    from app.services import appicon
+
+    before = client.get("/app/manifest.json").json()["icons"][0]["src"]
+    res = client.post("/api/branding/logo", headers=auth,
+                      files={"file": ("mara.png", _gold_logo_png(), "image/png")})
+    assert res.status_code == 200, res.text
+    assert res.json()["app_icon_url"].startswith("/app/icons/icon-192.png?v=")
+
+    generated = appicon.ICON_DIR / "icon-192.png"
+    assert generated.exists()
+    with Image.open(generated) as img:
+        assert img.size == (192, 192)
+        assert img.getpixel((3, 3)) == (0, 0, 0)          # الخلفية سوداء افتراضياً
+        assert img.getpixel((96, 96)) == (212, 175, 55)   # الشعار في المنتصف
+
+    # تغيّر البصمة يجبر الأجهزة على جلب الأيقونة الجديدة
+    assert client.get("/app/manifest.json").json()["icons"][0]["src"] != before
+
+    # تغيير لون الخلفية يعيد البناء
+    client.put("/api/branding", headers=auth, json={"app_icon_bg": "#FFFFFF"})
+    with Image.open(generated) as img:
+        assert img.getpixel((3, 3)) == (255, 255, 255)
+    assert client.put("/api/branding", headers=auth,
+                      json={"app_icon_bg": "red"}).status_code == 422
+
+    client.delete("/api/branding/logo", headers=auth)
+    assert not generated.exists()
+    assert client.get("/app/icons/icon-192.png").status_code == 200  # الأيقونة المدمجة
+    client.put("/api/branding", headers=auth, json={"app_icon_bg": "#000000"})

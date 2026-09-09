@@ -34,8 +34,10 @@ from .routers import (
     sites,
     users,
     violations,
+    webapp,
 )
 from .seed import bootstrap
+from .services import appicon as appicon_service
 from .services import attendance_alerts
 from .services import daily as daily_service
 from .services import push as push_service
@@ -88,6 +90,13 @@ async def lifespan(app: FastAPI):
             push_service.ensure_keys(db)
     except Exception as exc:  # pragma: no cover - لا يمنع الإقلاع
         logger.warning("تعذر تهيئة مفاتيح إشعارات الجوال: %s", exc)
+    # أيقونة التطبيق: تُبنى من الشعار المرفوع إن لم تكن موجودة بعد
+    try:
+        with SessionLocal() as db:
+            if appicon_service.icon_path("icon-192.png") == appicon_service.BUNDLED_DIR / "icon-192.png":
+                appicon_service.rebuild(db)
+    except Exception as exc:  # pragma: no cover - لا يمنع الإقلاع
+        logger.warning("تعذر تجهيز أيقونة التطبيق: %s", exc)
     tasks = [asyncio.create_task(_background_loop())]
     if AUTO_SYNC_MINUTES > 0:
         tasks.append(asyncio.create_task(_auto_sync_loop()))
@@ -137,6 +146,7 @@ for router in (
     sheets.router,
     reports.router,
     iclock.router,
+    webapp.router,
 ):
     app.include_router(router)
 

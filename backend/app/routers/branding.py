@@ -12,7 +12,7 @@ from ..config import MAX_UPLOAD_BYTES, UPLOAD_DIR
 from ..database import get_db
 from ..models import User
 from ..security import require_hr
-from ..services import audit, quotes, settings_store
+from ..services import appicon, audit, quotes, settings_store
 
 router = APIRouter(prefix="/api/branding", tags=["branding"])
 
@@ -25,12 +25,15 @@ class BrandingOut(BaseModel):
     quote: str = ""
     daily_quote_enabled: bool = True
     daily_quote_hour: int = 7
+    app_icon_bg: str = "#000000"
+    app_icon_url: str = "/app/icons/icon-192.png"
 
 
 class BrandingIn(BaseModel):
     company_name: str | None = Field(default=None, max_length=120)
     daily_quote_enabled: bool | None = None
     daily_quote_hour: int | None = Field(default=None, ge=0, le=23)
+    app_icon_bg: str | None = Field(default=None, pattern=r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
 
 def branding_of(db: Session) -> BrandingOut:
@@ -42,6 +45,8 @@ def branding_of(db: Session) -> BrandingOut:
         quote=quotes.quote_for(),
         daily_quote_enabled=values.get("daily_quote_enabled") == "true",
         daily_quote_hour=int(float(values.get("daily_quote_hour") or 7)),
+        app_icon_bg=values.get("app_icon_bg") or "#000000",
+        app_icon_url=f"/app/icons/icon-192.png?v={values.get('app_icon_version') or '0'}",
     )
 
 
@@ -57,6 +62,8 @@ def update_branding(
 ):
     changes = payload.model_dump(exclude_unset=True)
     settings_store.set_many(db, changes)
+    if "app_icon_bg" in changes:
+        appicon.rebuild(db)
     audit.log(db, user, "settings", "settings", None, "الهوية: " + "، ".join(changes.keys()))
     return branding_of(db)
 
@@ -82,6 +89,8 @@ def upload_logo(
     settings_store.set_many(db, {"logo_path": stored})
     if previous and previous != stored:
         (UPLOAD_DIR / previous).unlink(missing_ok=True)
+    # الشعار نفسه يصبح أيقونة التطبيق على شاشة الجوال
+    appicon.rebuild(db)
     audit.log(db, user, "update", "settings", None, "تحديث شعار المنشأة")
     return branding_of(db)
 
@@ -92,6 +101,7 @@ def delete_logo(db: Session = Depends(get_db), user: User = Depends(require_hr))
     if previous:
         (UPLOAD_DIR / previous).unlink(missing_ok=True)
     settings_store.set_many(db, {"logo_path": ""})
+    appicon.rebuild(db)
     audit.log(db, user, "delete", "settings", None, "حذف شعار المنشأة")
     return branding_of(db)
 
