@@ -197,47 +197,47 @@ def payslip_html(db: Session, slip: Payslip, run: PayrollRun) -> str:
 _STYLE = """
   @page { size: A4; margin: 12mm; }
   * { box-sizing: border-box; }
-  body { margin:0; background:#eef2f5; color:#152229; font-size:13px;
+  body { margin:0; background:#f8fafc; color:#1e293b; font-size:13px;
     font-family:"Tajawal","Cairo","Segoe UI",Tahoma,Arial,sans-serif; }
   .bar { position:sticky; top:0; display:flex; gap:10px; justify-content:center;
-    padding:12px; background:#0f766e; }
-  .bar button { border:none; background:#fff; color:#0f766e; font:inherit; font-weight:600;
+    padding:12px; background:#2563eb; }
+  .bar button { border:none; background:#fff; color:#2563eb; font:inherit; font-weight:600;
     padding:9px 18px; border-radius:9px; cursor:pointer; }
   .bar button.ghost { background:transparent; color:#fff; border:1px solid rgba(255,255,255,.6); }
   .slip { background:#fff; width:190mm; min-height:260mm; margin:16px auto; padding:16mm 14mm;
     box-shadow:0 6px 24px rgba(20,40,60,.12); page-break-after:always; }
   .slip:last-of-type { page-break-after:auto; }
   header { display:flex; justify-content:space-between; align-items:flex-start; gap:16px;
-    border-bottom:2px solid #0f766e; padding-bottom:12px; }
+    border-bottom:2px solid #2563eb; padding-bottom:12px; }
   .brand { display:flex; gap:12px; align-items:center; }
   .logo { max-height:56px; max-width:150px; object-fit:contain; }
   header h1 { margin:0; font-size:20px; }
-  header .sub { color:#66798a; font-size:13px; margin-top:3px; }
+  header .sub { color:#64748b; font-size:13px; margin-top:3px; }
   .meta { display:grid; gap:4px; font-size:12px; text-align:left; }
-  .meta span { color:#66798a; margin-left:6px; }
+  .meta span { color:#64748b; margin-left:6px; }
   .who, .stats { display:grid; gap:10px 18px; margin-top:14px; }
   .who { grid-template-columns:repeat(3,1fr); }
-  .stats { grid-template-columns:repeat(5,1fr); background:#f5f8f9; border:1px solid #e2e8ee;
+  .stats { grid-template-columns:repeat(5,1fr); background:#f8fafc; border:1px solid #e2e8f0;
     border-radius:10px; padding:12px; margin-top:14px; text-align:center; }
-  .who span, .stats span { display:block; color:#66798a; font-size:11.5px; margin-bottom:3px; }
+  .who span, .stats span { display:block; color:#64748b; font-size:11.5px; margin-bottom:3px; }
   .who b, .stats b { font-size:13.5px; }
   .tables { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:16px; }
   table { width:100%; border-collapse:collapse; }
-  th, td { padding:7px 9px; border-bottom:1px solid #e6ebf0; text-align:right; font-size:12.5px; }
-  thead th { background:#0f766e; color:#fff; font-size:12.5px; }
+  th, td { padding:7px 9px; border-bottom:1px solid #e2e8f0; text-align:right; font-size:12.5px; }
+  thead th { background:#2563eb; color:#fff; font-size:12.5px; }
   td.num, th.num { text-align:left; font-variant-numeric:tabular-nums; }
-  tr.total td { background:#f2f6f7; font-weight:700; border-top:1px solid #cfd9e2; }
-  .net { margin-top:16px; border:2px solid #0f766e; border-radius:12px; padding:14px 16px;
-    display:flex; flex-wrap:wrap; align-items:center; gap:8px 18px; background:#f4faf9; }
+  tr.total td { background:#f1f5f9; font-weight:700; border-top:1px solid #cbd5e1; }
+  .net { margin-top:16px; border:2px solid #2563eb; border-radius:12px; padding:14px 16px;
+    display:flex; flex-wrap:wrap; align-items:center; gap:8px 18px; background:#eff6ff; }
   .net .label { font-weight:700; }
-  .net .value { font-size:24px; font-weight:700; color:#0f766e; font-variant-numeric:tabular-nums; }
+  .net .value { font-size:24px; font-weight:700; color:#2563eb; font-variant-numeric:tabular-nums; }
   .net .value span { font-size:14px; }
-  .net .words { width:100%; color:#3d4d59; font-size:12.5px; }
-  .note { margin-top:12px; font-size:12.5px; color:#66798a; }
+  .net .words { width:100%; color:#334155; font-size:12.5px; }
+  .note { margin-top:12px; font-size:12.5px; color:#64748b; }
   .signs { display:grid; grid-template-columns:repeat(3,1fr); gap:20px; margin-top:34px; }
-  .signs span { display:block; font-size:12px; color:#66798a; margin-bottom:26px; }
-  .signs i { display:block; border-top:1px dashed #98a8b5; }
-  footer { margin-top:22px; text-align:center; color:#8b9aa6; font-size:11px; }
+  .signs span { display:block; font-size:12px; color:#64748b; margin-bottom:26px; }
+  .signs i { display:block; border-top:1px dashed #94a3b8; }
+  footer { margin-top:22px; text-align:center; color:#94a3b8; font-size:11px; }
   @media print { .bar { display:none; } body { background:#fff; }
     .slip { box-shadow:none; margin:0; width:auto; min-height:auto; padding:0; } }
 """

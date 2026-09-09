@@ -46,7 +46,29 @@ const PENALTY_ACTIONS = { warning:'إنذار كتابي', deduction_percent_day
   deduction_days:'خصم أجر أيام', suspension:'إيقاف بدون أجر', termination:'الفصل من العمل' };
 const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
 const money = (v) => (Number(v || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const CHART_COLORS = ['#0f766e','#1c6dd0','#5b3fa8','#b8763a','#2e7d32','#0d7d8f','#a8443c','#b26a00'];
+const APP_VERSION = '2026.09.09';
+
+/* يفرض تحديث عامل الخدمة فور توفر نسخة جديدة (مهم على آيفون) */
+function watchForUpdates() {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.getRegistration().then((reg) => {
+    if (!reg) return;
+    reg.update();
+    reg.addEventListener('updatefound', () => {
+      const fresh = reg.installing;
+      if (!fresh) return;
+      fresh.addEventListener('statechange', () => {
+        if (fresh.state === 'installed' && navigator.serviceWorker.controller) {
+          fresh.postMessage('skip-waiting');
+          toast('وصل تحديث جديد للتطبيق، جارٍ إعادة التحميل…', 'ok');
+          setTimeout(() => location.reload(), 1200);
+        }
+      });
+    });
+  }).catch(() => {});
+}
+
+const CHART_COLORS = ['#2563eb','#14b8a6','#8b5cf6','#f59e0b','#22c55e','#0ea5e9','#ef4444','#64748b'];
 
 /* تقويم شهري لحالات الحضور */
 const CAL_DOW = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
@@ -494,6 +516,7 @@ function initShell() {
   el('bellBtn').insertAdjacentHTML('afterbegin', icon('bell'));
   el('selfPunchBtn').insertAdjacentHTML('afterbegin', icon('fingerprint'));
   el('collapseBtn').innerHTML = icon('collapse');
+  watchForUpdates();
   if (localStorage.getItem('hr_sidebar_mini') === '1') {
     el('app').classList.add('mini');
     el('collapseBtn').innerHTML = icon('expand');
@@ -872,8 +895,8 @@ views.dashboard = async () => {
       <div class="card" style="margin:0">
         <div class="card-head"><h3>${mine ? 'حضوري خلال آخر ٧ أيام' : 'الحضور خلال آخر ٧ أيام'}</h3>
           <div class="legend">
-            <span><i style="background:#3f9d6a"></i>حاضر</span><span><i style="background:#e0a33c"></i>متأخر</span>
-            <span><i style="background:#5f8fd8"></i>إجازة</span><span><i style="background:#d05a52"></i>غياب</span>
+            <span><i style="background:#22c55e"></i>حاضر</span><span><i style="background:#f59e0b"></i>متأخر</span>
+            <span><i style="background:#14b8a6"></i>إجازة</span><span><i style="background:#ef4444"></i>غياب</span>
           </div>
         </div>
         <div class="card-body"><div class="bars">${stats.weekly_trend.map(bar).join('')}</div></div>
@@ -999,10 +1022,10 @@ views.attendance = async () => {
     const calendar = rows.length
       ? `<div class="card" style="margin:14px 0 0"><div class="card-head">
           <h3>تقويم ${MONTHS[m - 1]} ${y}</h3>
-          <div class="legend"><span><i style="background:#e6f4e8"></i>حاضر</span>
-            <span><i style="background:#fdf1dd"></i>متأخر</span>
-            <span><i style="background:#fbe6e4"></i>غياب</span>
-            <span><i style="background:#e7f0fd"></i>إجازة</span></div></div>
+          <div class="legend"><span><i style="background:#dcfce7"></i>حاضر</span>
+            <span><i style="background:#fef3c7"></i>متأخر</span>
+            <span><i style="background:#fee2e2"></i>غياب</span>
+            <span><i style="background:#ccfbf1"></i>إجازة</span></div></div>
           <div class="card-body">${calendarMonth(rows, y, m)}</div></div>`
       : '';
     el('empTable').innerHTML = calendar + table(
@@ -1052,7 +1075,7 @@ async function openAuthedDocument(url, fallbackTitle = 'مستند') {
     tab.document.write(
       `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8">
        <title>${esc(fallbackTitle)}</title></head>
-       <body style="font-family:Tahoma;padding:40px;text-align:center;color:#66798a">
+       <body style="font-family:Tahoma;padding:40px;text-align:center;color:#64748b">
        جارٍ تجهيز المستند…</body></html>`);
   }
   try {
@@ -2037,10 +2060,10 @@ views.profile = async () => {
       </div>`,
     attendance: () => `
       <div class="card"><div class="card-head"><h3>تقويم ${MONTHS[now.getMonth()]} ${year}</h3>
-        <div class="legend"><span><i style="background:#e6f4e8"></i>حاضر</span>
-          <span><i style="background:#fdf1dd"></i>متأخر</span>
-          <span><i style="background:#fbe6e4"></i>غياب</span>
-          <span><i style="background:#e7f0fd"></i>إجازة</span></div></div>
+        <div class="legend"><span><i style="background:#dcfce7"></i>حاضر</span>
+          <span><i style="background:#fef3c7"></i>متأخر</span>
+          <span><i style="background:#fee2e2"></i>غياب</span>
+          <span><i style="background:#ccfbf1"></i>إجازة</span></div></div>
         <div class="card-body">${calendarMonth(attendance, year, now.getMonth() + 1)}</div></div>
       <div class="card"><div class="card-head"><h3>تفصيل أيام الشهر</h3></div>
         ${table(['التاريخ', 'وقت الحضور', 'وقت الانصراف', 'ساعات', 'تأخير (د)', 'إضافي (د)', 'الحالة'], attendance,
@@ -3394,6 +3417,7 @@ views.account = async () => {
     </div></div>
     <div class="card" style="max-width:520px"><div class="card-head"><h3>بيانات الحساب</h3></div>
     <div class="card-body help">
+      إصدار الواجهة: <b>${APP_VERSION}</b><br>
       المستخدم: <b>${esc(state.user.username)}</b><br>
       الصلاحية: <b>${esc(ROLES[state.user.role])}</b><br>
       الموظف المرتبط: <b>${esc(state.user.employee_name || 'غير مرتبط')}</b>
