@@ -1908,3 +1908,43 @@ def test_uploads_are_not_executable(client, auth):
     """المرفقات تُنزَّل ولا تُنفَّذ في المتصفح."""
     res = client.get("/api/health")
     assert res.headers["X-Content-Type-Options"] == "nosniff"
+
+
+# ------------------------------ شاشة الموظف الرئيسية ------------------------------
+def test_employee_home_screen(client, auth):
+    """طلب واحد يعطي الموظف حالته وزره وأسبوعه، ويتبدّل بعد البصمة."""
+    from app import security_extra
+
+    security_extra.reset_all()
+    site = client.post("/api/sites", headers=auth, json={
+        "name": "فرع التجربة", "latitude": 24.7, "longitude": 46.7, "radius_meters": 300}).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9997", "full_name": "موظف الشاشة", "phone": "0538889900",
+        "job_title": "نادل", "site_id": site["id"]}).json()
+    token = client.post("/api/auth/login", data={
+        "username": "0538889900", "password": "0538889900"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+
+    home = client.get("/api/me/home", headers=h).json()
+    assert home["employee_name"] == "موظف الشاشة"
+    assert home["state"] in ("out", "off")
+    assert home["action"] == "in" and "حضور" in home["action_label"]
+    assert home["site_name"] == "فرع التجربة"
+    assert len(home["week"]) == 7 and sum(1 for d in home["week"] if d["is_today"]) == 1
+    assert home["pending_requests"] == 0
+
+    punch = client.post("/api/attendance/self-punch", headers=h, json={
+        "latitude": 24.7, "longitude": 46.7, "accuracy_meters": 10})
+    assert punch.status_code == 201, punch.text
+    body = punch.json()
+    assert body["kind"] == "حضور" and body["site_name"] == "فرع التجربة"
+    assert body["time_label"]
+
+    after = client.get("/api/me/home", headers=h).json()
+    assert after["state"] == "in" and after["state_label"] == "داخل الدوام"
+    assert after["action"] == "out" and "انصراف" in after["action_label"]
+    assert after["check_in"] is not None
+    assert after["last_punch_site"] == "فرع التجربة"
+
+    # لا يظهر رصيد إجازات في هذه الشاشة إطلاقاً
+    assert "balance" not in str(after).lower()

@@ -17,7 +17,8 @@ const PAGES = [
   { id: 'punches',    title: 'سجل البصمات',   icon: 'fingerprint', group: 'الحضور',   roles: ['admin','hr','manager','employee'] },
   { id: 'restDays',   title: 'أيام الراحة',    icon: 'bed', group: 'الحضور',   roles: ['admin','hr','manager'] },
   { id: 'leaves',     title: 'الإجازات',       icon: 'leave', group: 'الإجازات', roles: ['admin','hr','manager'] },
-  { id: 'myLeaves',   title: 'إجازاتي',        icon: 'leave', group: 'الإجازات', roles: ['employee'] },
+  { id: 'myLeaves',   title: 'الطلبات',        icon: 'leave', group: 'الإجازات', roles: ['employee'] },
+  { id: 'schedule',   title: 'جدولي',          icon: 'calendar', group: 'الحضور', roles: ['employee'] },
   { id: 'balances',   title: 'أرصدة الإجازات', icon: 'balance', group: 'الإجازات', roles: ['admin','hr','manager'] },
   { id: 'violations', title: 'المخالفات',      icon: 'violation', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
   { id: 'payroll',    title: 'الرواتب',        icon: 'payroll', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
@@ -359,11 +360,14 @@ function startApp() {
   if (state.user.must_change_password) forcePasswordChange();
 }
 
-const EXTRA_TITLES = { profile: 'ملف الموظف' };
+const EXTRA_TITLES = { profile: 'ملف الموظف', home: 'الرئيسية' };
 function go(page) {
   state.page = page;
   const meta = PAGES.find((p) => p.id === page);
-  el('pageTitle').textContent = meta ? meta.title : (EXTRA_TITLES[page] || '');
+  const employeeHome = page === 'dashboard' && state.user && state.user.role === 'employee';
+  el('pageTitle').textContent = employeeHome
+    ? 'الرئيسية'
+    : (meta ? meta.title : (EXTRA_TITLES[page] || ''));
   el('nav').querySelectorAll('a').forEach((a) => a.classList.toggle('active', a.dataset.page === page));
   markTabbar(page);
   el('view').innerHTML = skeleton(
@@ -538,7 +542,8 @@ const TABBAR_PAGES = {
   admin: ['dashboard', 'attendance', 'leaves', 'employees'],
   hr: ['dashboard', 'attendance', 'leaves', 'employees'],
   manager: ['dashboard', 'attendance', 'leaves', 'reports'],
-  employee: ['dashboard', 'attendance', 'myLeaves', 'payroll'],
+  // شريط الموظف: الرئيسية — الحضور — الطلبات — جدولي — حسابي
+  employee: ['dashboard', 'attendance', 'myLeaves', 'schedule', 'account'],
 };
 
 function buildTabbar() {
@@ -546,12 +551,15 @@ function buildTabbar() {
   const items = ids
     .map((id) => PAGES.find((p) => p.id === id && p.roles.includes(state.user.role)))
     .filter(Boolean);
-  const punch = state.user.employee_id
+  const employee = state.user.role === 'employee';
+  // الموظف: خمسة أزرار فقط بلا «المزيد»، والبصمة زر كبير في الشاشة الرئيسية
+  const punch = (!employee && state.user.employee_id)
     ? `<a class="punch" data-action="punch"><span class="ico">${icon('fingerprint')}</span>بصمة</a>` : '';
-  el('tabbar').innerHTML =
-    items.slice(0, 2).map((p) => tabLink(p)).join('') + punch +
-    items.slice(2).map((p) => tabLink(p)).join('') +
-    `<a data-action="menu"><span class="ico">${icon('menu')}</span>المزيد</a>`;
+  el('tabbar').innerHTML = employee
+    ? items.map((p) => tabLink(p)).join('')
+    : items.slice(0, 2).map((p) => tabLink(p)).join('') + punch +
+      items.slice(2).map((p) => tabLink(p)).join('') +
+      `<a data-action="menu"><span class="ico">${icon('menu')}</span>المزيد</a>`;
   el('tabbar').querySelectorAll('a').forEach((a) => a.onclick = () => {
     if (a.dataset.action === 'menu') return toggleDrawer();
     if (a.dataset.action === 'punch') return selfPunch();
@@ -559,8 +567,11 @@ function buildTabbar() {
   });
   markTabbar(state.page);
 }
+const TAB_LABELS = { dashboard: 'الرئيسية', attendance: 'الحضور', myLeaves: 'الطلبات',
+  schedule: 'جدولي', account: 'حسابي' };
 const tabLink = (p) =>
-  `<a data-page="${p.id}"><span class="ico">${icon(p.icon)}</span>${esc(p.title.split(' ')[0])}</a>`;
+  `<a data-page="${p.id}"><span class="ico">${icon(p.icon)}</span>${
+    esc(TAB_LABELS[p.id] || p.title.split(' ')[0])}</a>`;
 function markTabbar(page) {
   el('tabbar').querySelectorAll('a').forEach((a) =>
     a.classList.toggle('active', a.dataset.page === page));
@@ -882,7 +893,148 @@ const options = (items, value, key = 'id', label = 'name') =>
 
 
 /* ------------------------------ لوحة المؤشرات ------------------------------ */
+/* ------------------------------ شاشة الموظف الرئيسية ------------------------------ */
+const HOME_STATE_TONE = { in: 'in', out: '', done: '', off: 'off' };
+
+/** شاشة نجاح مختصرة بعد البصمة: الوقت والموقع */
+function punchSuccess(result) {
+  const site = result.site_name ? ` — ${result.site_name}` : '';
+  const box = document.createElement('div');
+  box.className = 'punch-done';
+  box.innerHTML = `<div class="box">
+      <div class="ring">${icon('check')}</div>
+      <h3>تم تسجيل ${esc(result.kind || 'الحضور')}</h3>
+      <p>${esc(result.time_label || '')}${esc(site)}</p>
+    </div>`;
+  box.onclick = () => box.remove();
+  document.body.appendChild(box);
+  if (navigator.vibrate) navigator.vibrate([30, 40, 30]);
+  setTimeout(() => box.remove(), 2600);
+}
+
+views.home = async () => {
+  const home = await api('/api/me/home');
+  const tone = HOME_STATE_TONE[home.state] || '';
+  const timeOf = (value) => (value ? fmtTime(value) : '—');
+
+  render(`
+    ${iosInstallHint()}
+    <div class="status-card ${tone}">
+      <div class="who">${avatar(home.employee_name)}
+        <div><b>${esc(home.employee_name)}</b>
+          <span>${esc(home.job_title || '')}</span></div></div>
+      <div class="state">أنت الآن</div>
+      <div class="state-value">${esc(home.state_label)}</div>
+      <div class="meta">
+        <span>${icon('clock')} ${esc(home.shift_label || '')}</span>
+        ${home.site_name ? `<span>${icon('location')} ${esc(home.site_name)}</span>` : ''}
+        <span>${icon(home.requires_location ? 'shield' : 'check')} ${
+          home.requires_location ? 'يتحقق من موقعك' : 'بلا تحقق موقع'}</span>
+      </div>
+      ${home.punch_enabled
+        ? `<button class="punch-btn" id="homePunch">${icon(home.action === 'out' ? 'logout' : 'fingerprint')}
+             ${esc(home.action_label)}</button>
+           <div class="hint" id="homeHint">${home.requires_location
+             ? 'يجب أن تكون داخل نطاق موقع العمل عند التسجيل.' : 'اضغط الزر لتسجيل بصمتك.'}</div>`
+        : '<div class="hint">تسجيل الحضور من التطبيق معطّل حالياً</div>'}
+      ${home.alert ? `<div class="alert">${icon('alert')} ${esc(home.alert)}</div>` : ''}
+    </div>
+
+    <div class="card"><div class="card-head"><h3>دوام اليوم</h3>
+      <span class="muted">${esc(home.shift_name || '')}</span></div>
+      <div class="row-item"><span class="ri">${icon('clock')}</span>
+        <div class="rt"><b>الحضور</b><span>${esc(home.shift_label || '')}</span></div>
+        <div class="rv">${timeOf(home.check_in)}</div></div>
+      <div class="row-item"><span class="ri">${icon('logout')}</span>
+        <div class="rt"><b>الانصراف</b><span>${home.worked_minutes
+          ? 'عملت ' + hours(home.worked_minutes) + ' ساعة' : 'لم يُسجَّل بعد'}</span></div>
+        <div class="rv">${timeOf(home.check_out)}</div></div>
+      ${home.late_minutes ? `<div class="row-item"><span class="ri">${icon('alert')}</span>
+        <div class="rt"><b>تأخير</b><span>يُحتسب في المسير</span></div>
+        <div class="rv">${home.late_minutes} دقيقة</div></div>` : ''}
+    </div>
+
+    <div class="card"><div class="card-head"><h3>آخر عملية حضور</h3></div>
+      <div class="row-item"><span class="ri">${icon('fingerprint')}</span>
+        <div class="rt"><b>${esc(home.last_punch_kind || 'بصمة')}</b>
+          <span>${esc(home.last_punch_site || 'بدون موقع مسجّل')}</span></div>
+        <div class="rv">${home.last_punch_at ? fmtDateTime(home.last_punch_at) : '—'}</div></div>
+      <div class="row-item" onclick="go('myLeaves')" style="cursor:pointer">
+        <span class="ri">${icon('leave')}</span>
+        <div class="rt"><b>الطلبات المعلّقة</b><span>طلبات إجازتك قيد الاعتماد</span></div>
+        <div class="rv"><span class="tag ${home.pending_requests ? 'pending' : 'on'}">${
+          home.pending_requests}</span></div></div>
+    </div>
+
+    <div class="card"><div class="card-head"><h3>جدول هذا الأسبوع</h3>
+      <button class="btn sm ghost" onclick="go('schedule')">التفاصيل</button></div>
+      <div class="card-body">
+        <div class="week-strip">${home.week.map((d) => `
+          <div class="d ${d.status || ''} ${d.is_today ? 'today' : ''}" title="${esc(d.label)}">
+            <span class="n">${esc(d.weekday.replace('ال', ''))}</span>
+            <span class="v">${d.date.slice(8)}</span>
+            <span class="s">${d.check_in ? fmtTime(d.check_in) : esc(d.label || '')}</span>
+          </div>`).join('')}</div>
+      </div></div>`);
+
+  const button = el('homePunch');
+  if (button) {
+    button.onclick = async () => {
+      button.disabled = true;
+      const hint = el('homeHint');
+      try {
+        let body = {};
+        if (home.requires_location) {
+          if (hint) hint.textContent = 'جارٍ تحديد موقعك…';
+          body = await currentPosition();
+        }
+        const result = await api('/api/attendance/self-punch', { method: 'POST', body });
+        punchSuccess(result);
+        setTimeout(() => views.home(), 1800);
+      } catch (e) {
+        toast(e.message, 'err');
+        if (hint) hint.textContent = e.message;
+        button.disabled = false;
+      }
+    };
+  }
+};
+
+/* ------------------------------ جدولي ------------------------------ */
+views.schedule = async () => {
+  const home = await api('/api/me/home');
+  const now = new Date();
+  const rows = await api(
+    `/api/attendance/employee/${state.user.employee_id}?date_from=${monthStart()}&date_to=${today()}`
+  ).catch(() => []);
+
+  render(`
+    <div class="card"><div class="card-head"><h3>أسبوعي</h3>
+      <span class="muted">${esc(home.shift_name || '')} · ${esc(home.shift_label || '')}</span></div>
+      <div class="card-body">
+        ${home.week.map((d) => `
+          <div class="row-item">
+            <span class="ri">${icon(d.status === 'weekend' ? 'bed'
+              : d.status === 'leave' ? 'leave' : 'clock')}</span>
+            <div class="rt"><b>${esc(d.weekday)} ${d.date.slice(5)}${d.is_today ? ' — اليوم' : ''}</b>
+              <span>${esc(d.shift_label || '')}</span></div>
+            <div class="rv">${d.check_in
+              ? fmtTime(d.check_in) + (d.check_out ? ' → ' + fmtTime(d.check_out) : '')
+              : `<span class="tag ${d.status || ''}">${esc(d.label || '')}</span>`}</div>
+          </div>`).join('')}
+      </div></div>
+
+    <div class="card"><div class="card-head"><h3>تقويم ${MONTHS[now.getMonth()]} ${now.getFullYear()}</h3>
+      <div class="legend"><span><i style="background:#dcfce7"></i>حاضر</span>
+        <span><i style="background:#fef3c7"></i>متأخر</span>
+        <span><i style="background:#fee2e2"></i>غياب</span>
+        <span><i style="background:#ccfbf1"></i>إجازة</span></div></div>
+      <div class="card-body">${calendarMonth(rows, now.getFullYear(), now.getMonth() + 1)}</div></div>`);
+};
+
 views.dashboard = async () => {
+  // الموظف يرى شاشة مبسّطة (بطاقة الحالة + زر البصمة) بدل لوحة المؤشرات الإدارية
+  if (state.user.role === 'employee') return views.home();
   const stats = await api('/api/reports/dashboard');
   const mine = state.user.role === 'employee';
   const myStatus = stats.late ? ['متأخر', 'warn', 'clock']

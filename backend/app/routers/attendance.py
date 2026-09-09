@@ -236,10 +236,14 @@ def self_punch(
     )
     kind = "انصراف" if day and day.check_out else "حضور"
     where = f" من موقع «{site.name}»" if site else ""
+    hour = now.hour % 12 or 12
+    time_label = f"{hour}:{now:%M} {'ص' if now.hour < 12 else 'م'}"
     return SelfPunchResult(
         punch=punch_out(punch),
         site_name=site.name if site else None,
         distance_meters=distance,
+        kind=kind,
+        time_label=time_label,
         message=f"تم تسجيل {kind} الساعة {now:%H:%M}{where}",
     )
 

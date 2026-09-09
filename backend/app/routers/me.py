@@ -1,14 +1,28 @@
 """بياناتي: يطّلع الموظف على بياناته ويحدّث ما يخصّه منها بنفسه."""
 from __future__ import annotations
 
+from datetime import date, datetime, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Employee, Role, User
-from ..schemas import MyProfileIn, MyProfileOut
+from ..models import (
+    AttendanceDay,
+    DayStatus,
+    Employee,
+    LeaveRequest,
+    LeaveStatus,
+    Punch,
+    RestDay,
+    Role,
+    User,
+)
+from ..schemas import HomeDay, MyHomeOut, MyProfileIn, MyProfileOut
 from ..security import get_current_user
-from ..services import accounts, audit, notifications
+from ..services import accounts, audit, notifications, settings_store
+from ..services import attendance as attendance_service
 
 router = APIRouter(prefix="/api/me", tags=["me"])
 
@@ -91,3 +105,144 @@ def update_my_profile(
     db.commit()
     db.refresh(employee)
     return profile_out(employee)
+
+
+# ------------------------------ الشاشة الرئيسية للموظف ------------------------------
+WEEKDAY_NAMES = ["الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"]
+STATUS_LABELS = {
+    DayStatus.present: "حاضر",
+    DayStatus.late: "متأخر",
+    DayStatus.absent: "غياب",
+    DayStatus.leave: "إجازة",
+    DayStatus.holiday: "عطلة رسمية",
+    DayStatus.weekend: "راحة",
+    DayStatus.missing_out: "لم يسجّل الانصراف",
+    DayStatus.scheduled: "دوام قادم",
+}
+
+
+def _time_label(value: datetime | None) -> str:
+    if not value:
+        return ""
+    hour = value.hour % 12 or 12
+    return f"{hour}:{value:%M} {'ص' if value.hour < 12 else 'م'}"
+
+
+@router.get("/home", response_model=MyHomeOut)
+def my_home(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """كل ما تحتاجه شاشة الموظف الرئيسية في طلب واحد: حالته الآن، وزره، وأسبوعه."""
+    employee = _employee_of(db, user)
+    today = date.today()
+
+    # أسبوع يبدأ من الأحد
+    start = today - timedelta(days=(today.weekday() + 1) % 7)
+    end = start + timedelta(days=6)
+    attendance_service.recompute(db, start, min(end, today), [employee.id])
+
+    rows = {
+        row.work_date: row
+        for row in db.scalars(
+            select(AttendanceDay).where(
+                AttendanceDay.employee_id == employee.id,
+                AttendanceDay.work_date >= start,
+                AttendanceDay.work_date <= end,
+            )
+        ).all()
+    }
+    rest_dates = {
+        row.rest_date
+        for row in db.scalars(
+            select(RestDay).where(
+                RestDay.employee_id == employee.id,
+                RestDay.rest_date >= start,
+                RestDay.rest_date <= end,
+            )
+        ).all()
+    }
+
+    rules = attendance_service.ShiftRules(employee.shift, employee.weekly_rest_days)
+    shift_label = f"{rules.start:%H:%M} - {rules.end:%H:%M}"
+    today_row = rows.get(today)
+    is_workday = today.weekday() in rules.work_days and today not in rest_dates
+
+    # حالة الموظف الآن
+    if today_row and today_row.check_in and not today_row.check_out:
+        state, state_label, action, action_label = "in", "داخل الدوام", "out", "تسجيل انصراف"
+    elif today_row and today_row.check_in and today_row.check_out:
+        state, state_label, action, action_label = "done", "أنهيت دوام اليوم", "in", "تسجيل حضور جديد"
+    elif not is_workday:
+        state, state_label, action, action_label = "off", "اليوم راحتك", "in", "تسجيل حضور"
+    else:
+        state, state_label, action, action_label = "out", "خارج الدوام", "in", "تسجيل حضور"
+
+    last_punch = db.scalar(
+        select(Punch)
+        .where(Punch.employee_id == employee.id)
+        .order_by(Punch.punch_time.desc())
+        .limit(1)
+    )
+    last_kind = None
+    if last_punch and today_row:
+        if today_row.check_out and last_punch.punch_time == today_row.check_out:
+            last_kind = "انصراف"
+        elif today_row.check_in and last_punch.punch_time == today_row.check_in:
+            last_kind = "حضور"
+    last_site = last_punch.site.name if last_punch and last_punch.site else None
+
+    pending = len(db.scalars(
+        select(LeaveRequest).where(
+            LeaveRequest.employee_id == employee.id,
+            LeaveRequest.status == LeaveStatus.pending,
+        )
+    ).all())
+
+    alert = None
+    if today_row and today_row.late_minutes:
+        alert = f"سُجّل تأخيرك اليوم {today_row.late_minutes} دقيقة"
+    elif is_workday and state == "out" and datetime.now() > rules.scheduled_in(today):
+        minutes = int((datetime.now() - rules.scheduled_in(today)).total_seconds() // 60)
+        if minutes > rules.grace_in:
+            alert = f"بدأ دوامك قبل {minutes} دقيقة ولم تسجّل حضورك"
+
+    week: list[HomeDay] = []
+    for offset in range(7):
+        day = start + timedelta(days=offset)
+        row = rows.get(day)
+        day_off = day.weekday() not in rules.work_days or day in rest_dates
+        status = row.status if row else (DayStatus.weekend if day_off else DayStatus.scheduled)
+        week.append(HomeDay(
+            date=day,
+            weekday=WEEKDAY_NAMES[day.weekday()],
+            status=status,
+            label=STATUS_LABELS.get(status, ""),
+            shift_label="راحة" if day_off else shift_label,
+            check_in=row.check_in if row else None,
+            check_out=row.check_out if row else None,
+            is_today=(day == today),
+        ))
+
+    return MyHomeOut(
+        employee_name=employee.full_name,
+        job_title=employee.job_title,
+        state=state,
+        state_label=state_label,
+        action=action,
+        action_label=action_label,
+        today_status=today_row.status if today_row else None,
+        check_in=today_row.check_in if today_row else None,
+        check_out=today_row.check_out if today_row else None,
+        late_minutes=today_row.late_minutes if today_row else 0,
+        worked_minutes=today_row.worked_minutes if today_row else 0,
+        shift_name=employee.shift.name if employee.shift else "الدوام الافتراضي",
+        shift_label=shift_label,
+        is_workday=is_workday,
+        site_name=employee.site.name if employee.site else None,
+        requires_location=settings_store.get_bool(db, "web_punch_requires_location"),
+        punch_enabled=settings_store.get_bool(db, "web_punch_enabled"),
+        last_punch_at=last_punch.punch_time if last_punch else None,
+        last_punch_kind=last_kind,
+        last_punch_site=last_site,
+        pending_requests=pending,
+        alert=alert,
+        week=week,
+    )

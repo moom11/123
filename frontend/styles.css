@@ -524,6 +524,74 @@ html[dir="ltr"] .layout.mini .nav a::after{right:auto;left:calc(100% + 10px);tra
   html[dir="ltr"] table.stack td::before{text-align:left}
 }
 
+/* ------------------------------ شاشة الموظف (بطاقة الحالة) ------------------------------ */
+.status-card{border-radius:var(--radius-lg);padding:20px 18px;color:#fff;position:relative;
+  overflow:hidden;box-shadow:var(--shadow-2);margin-bottom:16px;
+  background:linear-gradient(140deg,var(--primary) 0%,var(--primary-2) 65%,#1e3a8a 100%);
+  animation:rise var(--normal) var(--ease) both}
+.status-card.in{background:linear-gradient(140deg,#0d9488 0%,#0f766e 60%,#134e4a 100%)}
+.status-card.off{background:linear-gradient(140deg,#64748b 0%,#475569 60%,#334155 100%)}
+.status-card::after{content:"";position:absolute;inset:auto -40px -60px auto;width:190px;height:190px;
+  border-radius:50%;background:rgba(255,255,255,.08)}
+.status-card .who{display:flex;align-items:center;gap:11px;margin-bottom:14px;position:relative}
+.status-card .who b{display:block;font-size:15.5px}
+.status-card .who span{font-size:12.5px;opacity:.85}
+.status-card .state{font-size:12.5px;opacity:.9;margin-bottom:4px}
+.status-card .state-value{font-size:25px;font-weight:700;letter-spacing:-.4px;margin-bottom:14px}
+.status-card .meta{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;position:relative}
+.status-card .meta span{background:rgba(255,255,255,.16);border-radius:var(--radius-pill);
+  padding:5px 11px;font-size:12px;display:inline-flex;align-items:center;gap:6px}
+.status-card .meta span svg.i{width:14px;height:14px}
+.punch-btn{width:100%;border:none;border-radius:var(--radius);padding:16px;font:inherit;
+  font-size:16.5px;font-weight:700;cursor:pointer;background:#fff;color:var(--primary-2);
+  display:flex;align-items:center;justify-content:center;gap:9px;min-height:56px;
+  box-shadow:0 6px 18px rgba(0,0,0,.18);transition:transform var(--fast) var(--ease),opacity var(--fast)}
+.punch-btn:active{transform:scale(.98)}
+.punch-btn:disabled{opacity:.6;cursor:not-allowed}
+.punch-btn svg.i{width:21px;height:21px}
+.status-card .hint{margin-top:10px;font-size:12px;opacity:.9;text-align:center;position:relative}
+.status-card .alert{margin-top:12px;background:rgba(255,255,255,.18);border-radius:var(--radius-sm);
+  padding:9px 12px;font-size:12.5px;display:flex;gap:8px;align-items:center;position:relative}
+
+/* صف بسيط (آخر عملية، طلبات معلّقة) */
+.row-item{display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid var(--border)}
+.row-item:last-child{border-bottom:none}
+.row-item .ri{width:36px;height:36px;border-radius:11px;display:grid;place-items:center;flex:none;
+  background:var(--primary-soft);color:var(--primary)}
+.row-item .rt{flex:1;min-width:0}
+.row-item .rt b{display:block;font-size:14px;margin-bottom:2px}
+.row-item .rt span{font-size:12.5px;color:var(--muted)}
+.row-item .rv{font-size:13.5px;font-weight:600;color:var(--text-2)}
+
+/* شريط أسبوعي */
+.week-strip{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.week-strip .d{border:1px solid var(--border);border-radius:var(--radius-sm);padding:9px 4px;
+  text-align:center;background:var(--surface)}
+.week-strip .d .n{font-size:11px;color:var(--muted);display:block;margin-bottom:4px}
+.week-strip .d .v{font-size:13px;font-weight:700}
+.week-strip .d .s{font-size:10px;color:var(--muted);display:block;margin-top:3px}
+.week-strip .d.today{outline:2px solid var(--primary);outline-offset:1px}
+.week-strip .d.present{background:var(--ok-soft);border-color:transparent}
+.week-strip .d.late{background:var(--warn-soft);border-color:transparent}
+.week-strip .d.absent{background:var(--danger-soft);border-color:transparent}
+.week-strip .d.leave{background:var(--info-soft);border-color:transparent}
+.week-strip .d.weekend{background:var(--surface-3);border-color:transparent}
+
+/* شاشة نجاح البصمة */
+.punch-done{position:fixed;inset:0;z-index:95;display:grid;place-items:center;
+  background:rgba(15,23,42,.55);backdrop-filter:blur(3px);animation:fade var(--fast) var(--ease)}
+.punch-done .box{background:var(--surface);border-radius:var(--radius-lg);padding:28px 26px;
+  width:min(330px,88vw);text-align:center;box-shadow:var(--shadow-3);
+  animation:pop var(--normal) var(--ease) both}
+.punch-done .ring{width:84px;height:84px;border-radius:50%;margin:0 auto 16px;display:grid;
+  place-items:center;background:var(--ok-soft);color:var(--ok);animation:ringIn .45s var(--ease) both}
+.punch-done .ring svg.i{width:44px;height:44px;stroke-width:2.4;
+  stroke-dasharray:60;stroke-dashoffset:60;animation:draw .5s .15s var(--ease) forwards}
+.punch-done h3{margin:0 0 6px;font-size:19px}
+.punch-done p{margin:0;color:var(--muted);font-size:13.5px;line-height:2}
+@keyframes ringIn{from{transform:scale(.6);opacity:0}to{transform:none;opacity:1}}
+@keyframes draw{to{stroke-dashoffset:0}}
+
 /* ------------------------------ شريط التنقل السفلي (الجوال) ------------------------------ */
 .tabbar{display:none}
 @media(max-width:900px){

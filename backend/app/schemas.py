@@ -215,6 +215,8 @@ class SelfPunchResult(BaseModel):
     punch: PunchOut
     site_name: str | None = None
     distance_meters: float | None = None
+    kind: str = ""          # حضور أو انصراف
+    time_label: str = ""    # 08:57 ص
     message: str = ""
 
 
@@ -774,6 +776,43 @@ class RestSummaryRow(BaseModel):
     quota: int = 0
     remaining: int = 0
     dates: list[date] = []
+
+
+class HomeDay(BaseModel):
+    date: date
+    weekday: str
+    status: DayStatus | None = None
+    label: str = ""
+    shift_label: str | None = None
+    check_in: datetime | None = None
+    check_out: datetime | None = None
+    is_today: bool = False
+
+
+class MyHomeOut(BaseModel):
+    employee_name: str
+    job_title: str | None = None
+    state: str = "out"              # in | out | done | off
+    state_label: str = ""
+    action: str = "in"              # in | out | none
+    action_label: str = ""
+    today_status: DayStatus | None = None
+    check_in: datetime | None = None
+    check_out: datetime | None = None
+    late_minutes: int = 0
+    worked_minutes: int = 0
+    shift_name: str | None = None
+    shift_label: str | None = None
+    is_workday: bool = True
+    site_name: str | None = None
+    requires_location: bool = True
+    punch_enabled: bool = True
+    last_punch_at: datetime | None = None
+    last_punch_kind: str | None = None
+    last_punch_site: str | None = None
+    pending_requests: int = 0
+    alert: str | None = None
+    week: list[HomeDay] = []
 
 
 class PushSubscriptionIn(BaseModel):

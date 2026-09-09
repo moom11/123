@@ -205,6 +205,17 @@ const I18N_EN = {
   'إصدار الواجهة': 'App version',
   'وصل تحديث جديد للتطبيق، جارٍ إعادة التحميل…': 'A new version arrived — reloading…',
 
+  'الرئيسية': 'Home', 'جدولي': 'My schedule', 'الطلبات': 'Requests',
+  'أنت الآن': 'You are now', 'داخل الدوام': 'On shift', 'خارج الدوام': 'Off shift',
+  'أنهيت دوام اليوم': 'Shift completed', 'اليوم راحتك': 'Your day off',
+  'تسجيل حضور': 'Check in', 'تسجيل انصراف': 'Check out', 'تسجيل حضور جديد': 'Check in again',
+  'يتحقق من موقعك': 'Location verified', 'بلا تحقق موقع': 'No location check',
+  'دوام اليوم': "Today's shift", 'آخر عملية حضور': 'Last punch',
+  'الطلبات المعلّقة': 'Pending requests', 'جدول هذا الأسبوع': 'This week',
+  'التفاصيل': 'Details', 'أسبوعي': 'My week', 'تم تسجيل حضور': 'Checked in',
+  'تم تسجيل انصراف': 'Checked out', 'لم يُسجَّل بعد': 'Not recorded yet',
+  'بدون موقع مسجّل': 'No site recorded', 'تأخير': 'Late', 'يُحتسب في المسير': 'Counted in payroll',
+
   // ------- الأيام والأشهر -------
   'الأحد': 'Sunday', 'الاثنين': 'Monday', 'الثلاثاء': 'Tuesday', 'الأربعاء': 'Wednesday',
   'الخميس': 'Thursday', 'الجمعة': 'Friday', 'السبت': 'Saturday',
