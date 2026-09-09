@@ -239,10 +239,31 @@ const closeModal = () => { el('modalRoot').innerHTML = ''; };
 function table(columns, rows, renderRow, emptyText = 'لا توجد بيانات') {
   if (!rows.length) return `<div class="empty">${esc(emptyText)}</div>`;
   const labels = columns.map((c) => esc(c)).join('|');
-  return `<div class="table-wrap"><table class="stack" data-labels="${labels}"><thead><tr>${
+  const tools = columns.length > 4
+    ? `<div class="table-tools"><button class="btn sm ghost" onclick="openFullTable(this)">${
+        icon('menu', 'sm')} عرض الجدول الكامل</button></div>`
+    : '';
+  return `${tools}<div class="table-wrap"><table class="stack" data-labels="${labels}"><thead><tr>${
     columns.map((c) => `<th>${esc(c)}</th>`).join('')
   }</tr></thead><tbody>${rows.map(renderRow).join('')}</tbody></table></div>`;
 }
+
+/** يفتح الجدول كاملاً (بلا تحويل إلى بطاقات) في ورقة منزلقة قابلة للتمرير أفقياً */
+window.openFullTable = (button) => {
+  const card = button.closest('.card') || document;
+  const source = card.querySelector('table.stack');
+  if (!source) return;
+  const clone = source.cloneNode(true);
+  clone.classList.remove('stack');
+  clone.querySelectorAll('button, a.btn').forEach((node) => node.remove());
+  const title = (card.querySelector('.card-head h3') || {}).textContent || 'الجدول الكامل';
+  modal({
+    title: title.trim(),
+    body: `<div class="full-table-wrap">${clone.outerHTML}</div>`,
+    footer: '<button class="btn gray" data-close>إغلاق</button>',
+    width: 900,
+  });
+};
 
 /** يضيف data-label لكل خلية (اسم عمودها) ليعمل عرض البطاقات على الجوال */
 function labelTableCells(root = document) {
@@ -369,6 +390,42 @@ const _tableObserver = new MutationObserver(() => {
   });
 });
 _tableObserver.observe(document.documentElement, { childList: true, subtree: true });
+
+/* ------------------------------ الوضع الفاتح / الداكن ------------------------------ */
+const THEMES = ['auto', 'light', 'dark'];
+const THEME_META = {
+  auto:  ['settings', 'تلقائي حسب الجهاز'],
+  light: ['sun', 'الوضع الفاتح'],
+  dark:  ['bed', 'الوضع الداكن'],
+};
+
+function currentTheme() {
+  return localStorage.getItem('hr_theme') || 'auto';
+}
+function isDarkNow() {
+  const theme = currentTheme();
+  if (theme === 'dark') return true;
+  if (theme === 'light') return false;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+function applyTheme(theme) {
+  if (theme === 'auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('hr_theme', theme);
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', isDarkNow() ? '#0f172a' : '#2563eb');
+  const btn = el('themeBtn');
+  if (btn) {
+    const [iconName, label] = THEME_META[theme];
+    btn.innerHTML = icon(iconName);
+    btn.title = label;
+  }
+}
+function cycleTheme() {
+  const next = THEMES[(THEMES.indexOf(currentTheme()) + 1) % THEMES.length];
+  applyTheme(next);
+  toast(THEME_META[next][1], 'ok');
+}
 
 /* ------------------------------ آيفون: التثبيت والإشعارات ------------------------------ */
 const isIOS = () => /iP(hone|ad|od)/.test(navigator.userAgent)
@@ -516,6 +573,10 @@ function initShell() {
   el('bellBtn').insertAdjacentHTML('afterbegin', icon('bell'));
   el('selfPunchBtn').insertAdjacentHTML('afterbegin', icon('fingerprint'));
   el('collapseBtn').innerHTML = icon('collapse');
+  applyTheme(currentTheme());
+  el('themeBtn').onclick = cycleTheme;
+  window.matchMedia('(prefers-color-scheme: dark)')
+    .addEventListener('change', () => applyTheme(currentTheme()));
   watchForUpdates();
   if (localStorage.getItem('hr_sidebar_mini') === '1') {
     el('app').classList.add('mini');

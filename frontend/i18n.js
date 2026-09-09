@@ -200,6 +200,11 @@ const I18N_EN = {
   'إظهار رصيد الإجازات للموظف': 'Show leave balance to employee',
   'مخفي': 'Hidden', 'ظاهر': 'Visible',
 
+  'عرض الجدول الكامل': 'Open full table', 'الجدول الكامل': 'Full table',
+  'الوضع الفاتح': 'Light mode', 'الوضع الداكن': 'Dark mode', 'تلقائي حسب الجهاز': 'Match device',
+  'إصدار الواجهة': 'App version',
+  'وصل تحديث جديد للتطبيق، جارٍ إعادة التحميل…': 'A new version arrived — reloading…',
+
   // ------- الأيام والأشهر -------
   'الأحد': 'Sunday', 'الاثنين': 'Monday', 'الثلاثاء': 'Tuesday', 'الأربعاء': 'Wednesday',
   'الخميس': 'Thursday', 'الجمعة': 'Friday', 'السبت': 'Saturday',
