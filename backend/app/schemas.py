@@ -779,6 +779,7 @@ class PayslipOut(ORMModel):
     late_deduction: float
     unpaid_leave_deduction: float
     violation_deduction: float
+    purchases_deduction: float = 0
     overtime_amount: float
     other_additions: float
     other_deductions: float
@@ -801,6 +802,23 @@ class LoanUpdate(BaseModel):
     status: LoanStatus | None = None
 
 
+class LoanRequestIn(BaseModel):
+    """طلب سلفة يقدّمه الموظف بنفسه."""
+
+    amount: float = Field(gt=0)
+    installment_amount: float = Field(gt=0)
+    start_year: int = Field(ge=2000, le=2100)
+    start_month: int = Field(ge=1, le=12)
+    reason: str | None = Field(default=None, max_length=255)
+
+
+class LoanDecisionIn(BaseModel):
+    """قرار الموارد البشرية على السلفة."""
+
+    approve: bool
+    note: str | None = Field(default=None, max_length=255)
+
+
 class LoanOut(ORMModel):
     id: int
     employee_id: int
@@ -812,11 +830,97 @@ class LoanOut(ORMModel):
     start_month: int
     reason: str | None = None
     status: LoanStatus
+    status_label: str = ""
     months: int = 0
     paid_amount: float = 0
     remaining_amount: float = 0
     last_installment: str | None = None
+    approved_at: datetime | None = None
+    acknowledged_at: datetime | None = None
+    decision_note: str | None = None
+    can_acknowledge: bool = False     # للموظف: بانتظار إقراره بالاستلام
     created_at: datetime | None = None
+
+
+class PurchaseIn(BaseModel):
+    """فاتورة مشتريات على الموظف تُخصم من راتب الشهر."""
+
+    employee_id: int
+    purchase_date: date
+    amount: float = Field(gt=0, le=1_000_000)
+    description: str = Field(min_length=2, max_length=255)
+    invoice_no: str | None = Field(default=None, max_length=64)
+
+
+class PurchaseOut(ORMModel):
+    id: int
+    employee_id: int
+    employee_code: str | None = None
+    employee_name: str | None = None
+    purchase_date: date
+    amount: float
+    description: str
+    invoice_no: str | None = None
+    is_cancelled: bool = False
+    cancel_reason: str | None = None
+    created_at: datetime | None = None
+
+
+class PunchRequestIn(BaseModel):
+    """طلب «نسيت البصمة»."""
+
+    requested_time: datetime
+    kind: str = Field(default="auto", pattern="^(auto|clock_in|break_start|break_end|clock_out)$")
+    reason: str = Field(min_length=3, max_length=500)
+    employee_id: int | None = None     # للموارد البشرية عند التسجيل نيابة عن موظف
+
+
+class PunchRequestDecision(BaseModel):
+    approve: bool
+    note: str | None = Field(default=None, max_length=255)
+
+
+class PunchRequestOut(ORMModel):
+    id: int
+    employee_id: int
+    employee_code: str | None = None
+    employee_name: str | None = None
+    requested_time: datetime
+    kind: str
+    kind_label: str = ""
+    reason: str
+    status: LeaveStatus
+    decision_note: str | None = None
+    decided_at: datetime | None = None
+    punch_id: int | None = None
+    created_at: datetime | None = None
+
+
+class SalaryToDateOut(BaseModel):
+    """المستحق من بداية الشهر حتى اليوم."""
+
+    as_of: date
+    year: int
+    month: int
+    monthly_salary: float
+    basic_salary: float
+    allowances: float
+    daily_rate: float
+    month_days: int
+    days_elapsed: int
+    days_remaining: int
+    gross_to_date: float
+    overtime_amount: float = 0
+    absent_days: int = 0
+    absence_deduction: float = 0
+    late_minutes: int = 0
+    late_deduction: float = 0
+    violation_deduction: float = 0
+    loan_deduction: float = 0
+    purchases_deduction: float = 0
+    deductions_total: float = 0
+    net_to_date: float = 0
+    expected_full_month: float = 0
 
 
 class MyProfileIn(BaseModel):

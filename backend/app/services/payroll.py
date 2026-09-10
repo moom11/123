@@ -20,6 +20,7 @@ from ..models import (
 )
 from . import attendance as attendance_service
 from . import loans as loans_service
+from . import purchases as purchases_service
 from . import settings_store, violations
 
 
@@ -80,12 +81,14 @@ def compute_payslip(db: Session, employee: Employee, year: int, month: int) -> d
     violation_deduction = violations.monthly_deduction(db, employee.id, year, month)
     loan_deduction = loans_service.monthly_deduction(db, employee.id, year, month)
 
+    purchases_deduction = purchases_service.monthly_deduction(db, employee.id, year, month)
+
     basic = round(employee.basic_salary or 0, 2)
     allowances = round(employee.allowances or 0, 2)
     net = round(
         basic + allowances + overtime_amount
         - absence_deduction - unpaid_leave_deduction - late_deduction - violation_deduction
-        - loan_deduction,
+        - loan_deduction - purchases_deduction,
         2,
     )
     return {
@@ -103,6 +106,7 @@ def compute_payslip(db: Session, employee: Employee, year: int, month: int) -> d
         "unpaid_leave_deduction": unpaid_leave_deduction,
         "violation_deduction": violation_deduction,
         "loan_deduction": loan_deduction,
+        "purchases_deduction": purchases_deduction,
         "overtime_amount": overtime_amount,
         "other_additions": 0.0,
         "other_deductions": 0.0,
@@ -164,14 +168,89 @@ def totals(db: Session, run_id: int) -> dict:
         "basic_total": round(sum(s.basic_salary for s in slips), 2),
         "allowances_total": round(sum(s.allowances or 0 for s in slips), 2),
         "loans_total": round(sum(s.loan_deduction or 0 for s in slips), 2),
+        "purchases_total": round(sum(s.purchases_deduction or 0 for s in slips), 2),
         "deductions_total": round(
             sum(
                 s.absence_deduction + s.late_deduction + s.unpaid_leave_deduction
-                + s.violation_deduction + (s.loan_deduction or 0) + s.other_deductions
+                + s.violation_deduction + (s.loan_deduction or 0)
+                + (s.purchases_deduction or 0) + s.other_deductions
                 for s in slips
             ),
             2,
         ),
         "overtime_total": round(sum(s.overtime_amount for s in slips), 2),
         "net_total": round(sum(s.net_pay for s in slips), 2),
+    }
+
+
+def earned_to_date(db: Session, employee: Employee, on_date: date | None = None) -> dict:
+    """المستحق للموظف من بداية الشهر حتى تاريخ اليوم، وما عليه من خصومات.
+
+    الأساس: أجر اليوم × الأيام المنقضية من الشهر (بأيام الشهر المعتمدة في
+    الإعدادات، ٣٠ يوماً افتراضياً). فمن راتبه ١٠٠٠ ريال وكان اليوم العاشر
+    يكون استحقاقه ١٠٠٠ ÷ ٣٠ × ١٠ = ٣٣٣٫٣٣ ريال قبل الخصومات.
+    """
+    today = on_date or date.today()
+    year, month = today.year, today.month
+    month_days = settings_store.get_int(db, "payroll_days_per_month", 30) or 30
+    monthly = round((employee.basic_salary or 0) + (employee.allowances or 0), 2)
+    base = violations.salary_base(db, employee)
+    daily, hourly = _rates(db, base)
+
+    days_elapsed = min(today.day, month_days)
+    days_remaining = max(0, month_days - days_elapsed)
+    gross = round((monthly / month_days) * days_elapsed, 2)
+
+    # الخصومات الواقعة حتى اليوم فقط
+    rows = db.scalars(
+        select(AttendanceDay).where(
+            AttendanceDay.employee_id == employee.id,
+            AttendanceDay.work_date >= date(year, month, 1),
+            AttendanceDay.work_date <= today,
+        )
+    ).all()
+    absent_days = sum(1 for r in rows if r.status == DayStatus.absent)
+    late_minutes = sum(r.late_minutes for r in rows)
+    overtime_minutes = sum(r.overtime_minutes for r in rows)
+
+    multiplier = float(settings_store.get(db, "payroll_absence_multiplier") or 1)
+    late_mode = settings_store.get(db, "payroll_late_deduction_mode")
+    overtime_multiplier = float(settings_store.get(db, "payroll_overtime_multiplier") or 1.5)
+
+    absence_deduction = round(absent_days * daily * multiplier, 2)
+    late_deduction = round((late_minutes / 60) * hourly, 2) if late_mode == "proportional" else 0.0
+    overtime_amount = round((overtime_minutes / 60) * hourly * overtime_multiplier, 2)
+    violation_deduction = violations.monthly_deduction(db, employee.id, year, month)
+    loan_deduction = loans_service.monthly_deduction(db, employee.id, year, month)
+    purchases_deduction = purchases_service.deduction_until(db, employee.id, year, month, today)
+
+    deductions = round(
+        absence_deduction + late_deduction + violation_deduction
+        + loan_deduction + purchases_deduction, 2
+    )
+    net = round(max(gross + overtime_amount - deductions, 0), 2)
+
+    return {
+        "as_of": today,
+        "year": year,
+        "month": month,
+        "monthly_salary": monthly,
+        "basic_salary": round(employee.basic_salary or 0, 2),
+        "allowances": round(employee.allowances or 0, 2),
+        "daily_rate": round(monthly / month_days, 2),
+        "month_days": month_days,
+        "days_elapsed": days_elapsed,
+        "days_remaining": days_remaining,
+        "gross_to_date": gross,
+        "overtime_amount": overtime_amount,
+        "absent_days": absent_days,
+        "absence_deduction": absence_deduction,
+        "late_minutes": late_minutes,
+        "late_deduction": late_deduction,
+        "violation_deduction": violation_deduction,
+        "loan_deduction": loan_deduction,
+        "purchases_deduction": purchases_deduction,
+        "deductions_total": deductions,
+        "net_to_date": net,
+        "expected_full_month": round(monthly, 2),
     }

@@ -23,6 +23,8 @@ const PAGES = [
   { id: 'violations', title: 'المخالفات',      icon: 'violation', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
   { id: 'payroll',    title: 'الرواتب',        icon: 'payroll', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
   { id: 'loans',      title: 'السلف',          icon: 'loans', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
+  { id: 'purchases',  title: 'مشتريات الموظفين', icon: 'cart', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
+  { id: 'punchRequests', title: 'طلبات البصمة', icon: 'edit', group: 'الحضور', roles: ['admin','hr','manager'] },
   { id: 'employees',  title: 'الموظفون',       icon: 'employees', group: 'شؤون الموظفين', roles: ['admin','hr','manager'] },
   { id: 'documents',  title: 'الوثائق',        icon: 'documents', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
   { id: 'devices',    title: 'أجهزة البصمة',   icon: 'device', group: 'الإدارة',  roles: ['admin','hr'] },
@@ -44,6 +46,11 @@ const EVENT_LABELS = {
   BREAK_END: 'عودة من الاستراحة', CLOCK_OUT: 'انصراف',
 };
 const LEAVE_STATUS = { pending:'قيد الاعتماد', approved:'معتمدة', rejected:'مرفوضة', cancelled:'ملغاة' };
+const LOAN_STATUS = { pending:'بانتظار الاعتماد', approved:'بانتظار إقرار الاستلام',
+  active:'سارية', settled:'مسدّدة', cancelled:'ملغاة' };
+const LOAN_TAG = { pending:'pending', approved:'late', active:'on', settled:'approved', cancelled:'cancelled' };
+const PUNCH_KINDS = { auto:'يحدّده النظام', clock_in:'حضور', break_start:'بدء استراحة',
+  break_end:'عودة من الاستراحة', clock_out:'انصراف' };
 const ROLES = { admin:'مدير النظام', hr:'موارد بشرية', manager:'مدير إدارة', employee:'موظف' };
 const SOURCES = { device_pull:'جهاز (سحب)', device_push:'جهاز (دفع)', manual:'إدخال يدوي', web:'ويب' };
 const VIOLATION_STATUS = { pending:'بانتظار إقرار الموظف', acknowledged:'أقرّ بالاطلاع',
@@ -52,7 +59,7 @@ const PENALTY_ACTIONS = { warning:'إنذار كتابي', deduction_percent_day
   deduction_days:'خصم أجر أيام', suspension:'إيقاف بدون أجر', termination:'الفصل من العمل' };
 const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
 const money = (v) => (Number(v || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const APP_VERSION = '2026.09.09d';
+const APP_VERSION = '2026.09.10';
 
 /* يفرض تحديث عامل الخدمة فور توفر نسخة جديدة (مهم على آيفون) */
 function watchForUpdates() {
@@ -368,6 +375,8 @@ function startApp() {
 const EXTRA_TITLES = { profile: 'ملف الموظف', home: 'الرئيسية' };
 function go(page) {
   state.page = page;
+  // رقم تسلسلي للتنقل: نتيجة شاشة قديمة وصلت متأخرة لا تمسّ الشاشة الحالية
+  const token = (state.nav = (state.nav || 0) + 1);
   const meta = PAGES.find((p) => p.id === page);
   const employeeHome = page === 'dashboard' && state.user && state.user.role === 'employee';
   el('pageTitle').textContent = employeeHome
@@ -379,7 +388,11 @@ function go(page) {
     page === 'dashboard' ? 'kpis' : page === 'employees' ? 'cards' : 'rows');
   const fn = views[page];
   Promise.resolve(fn ? fn() : '<div class="empty">صفحة غير متاحة</div>')
-    .catch((e) => { toast(e.message, 'err'); el('view').innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
+    .catch((e) => {
+      if (state.nav !== token) return;   // المستخدم انتقل لشاشة أخرى، فلا نعرض خطأ القديمة
+      toast(e.message, 'err');
+      el('view').innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+    });
 }
 const render = (html) => {
   el('view').innerHTML = html;
@@ -968,6 +981,12 @@ const HELP = {
       <li><b>إلغاء الاعتماد</b> يعيده مسودة قابلة للتعديل، وتختفي القسائم من شاشات الموظفين
         ويصلهم إشعار بأنها قيد المراجعة. السبب إلزامي ويُحفظ في سجل التدقيق.</li>
     </ul>
+    <h4>${icon('printer')} الطباعة</h4>
+    <ul>
+      <li><b>القسائم PDF</b>: قسيمة مستقلة لكل موظف.</li>
+      <li><b>طباعة الجدول</b>: جدول الرواتب كاملاً في صفحة أفقية مرتّبة، بمجاميع
+        وخانات توقيع (أعدّه / راجعه / اعتمده) والمبلغ كتابةً.</li>
+    </ul>
     <div class="hp-note">بعد أي تعديل على الحضور أو المخالفات، احذف المسير وأعد إنشاءه
       ليُحتسب من جديد على البيانات المصححة.</div>`],
 
@@ -1019,7 +1038,43 @@ const HELP = {
     <div class="hp-note">تجاوز المدة المسموحة يصلك عليه تنبيه، وقد يُسجَّل مخالفة إن زاد
       عن الحد. ولا استراحة في آخر نصف ساعة من دوامك.</div>
     <h4>${icon('location')} الموقع</h4>
-    <p>إن كان مكتوباً «يتحقق من موقعك» فلا تُقبل بصمتك إلا داخل نطاق فرعك.</p>`],
+    <p>إن كان مكتوباً «يتحقق من موقعك» فلا تُقبل بصمتك إلا داخل نطاق فرعك.</p>
+    <h4>${icon('money')} راتبي حتى اليوم</h4>
+    <p>يعرض ما استحققته من بداية الشهر حتى اليوم: أجر اليوم × الأيام المنقضية، ناقص
+      ما عليك من غياب وتأخير ومخالفات وأقساط سلف ومشتريات. رقم تقديري يتغيّر حتى
+      نهاية الشهر.</p>
+    <h4>${icon('edit')} نسيت البصمة؟</h4>
+    <p>أرسل طلباً بالوقت الفعلي وسببه. بعد اعتماد الإدارة تُسجَّل بصمتك ويُعاد احتساب يومك.</p>`],
+
+  purchases: ['مشتريات الموظفين', `
+    <h4>${icon('cart')} ما هذه الشاشة</h4>
+    <p>فواتير ما يشتريه الموظف من المتجر أو المطعم. كل فاتورة تُخصم تلقائياً من راتب
+      <b>الشهر الذي يقع فيه تاريخها</b>، وتظهر في قسيمته باسم «مشتريات».</p>
+    <h4>${icon('shield')} الإلغاء</h4>
+    <p>الفاتورة لا تُحذف: تُلغى بسبب مكتوب فتبقى في السجل ولا تُخصم.</p>
+    <div class="hp-note">إن كان مسير الشهر <b>معتمداً</b> فلا تُقبل فاتورة جديدة فيه —
+      ألغِ اعتماد المسير أولاً أو سجّلها في الشهر الحالي.</div>`],
+
+  punchRequests: ['طلبات البصمة', `
+    <h4>${icon('edit')} ما هذه الشاشة</h4>
+    <p>طلبات «نسيت البصمة» التي يرسلها الموظفون. الموظف يحدد الوقت الفعلي ونوع البصمة
+      ويكتب السبب.</p>
+    <h4>${icon('check')} الاعتماد</h4>
+    <p>عند الاعتماد تُسجَّل البصمة فعلياً بالوقت المطلوب مصدرها «إدخال يدوي»، ويُعاد
+      احتساب اليوم تلقائياً فتتغيّر حالته من «انصراف ناقص» إلى «حاضر».</p>
+    <div class="hp-tip">لا تُقبل طلبات أقدم من ٣٠ يوماً ولا بوقت مستقبلي، والطلب المكرر
+      بالوقت نفسه مرفوض.</div>`],
+
+  loans: ['السلف', `
+    <h4>${icon('loans')} دورة السلفة</h4>
+    <ol>
+      <li><b>الطلب</b>: الموارد البشرية تسجّلها، أو الموظف يطلبها من شاشته.</li>
+      <li><b>الاعتماد</b>: الموارد البشرية تعتمد أو ترفض بسبب مكتوب.</li>
+      <li><b>إقرار الاستلام</b>: الموظف يقرّ باستلام المبلغ.</li>
+      <li><b>الخصم</b>: يبدأ خصم الأقساط من راتبه حسب الجدول.</li>
+    </ol>
+    <div class="hp-note">لا يُخصم قسط واحد قبل إقرار الموظف بالاستلام — فلا يُخصم من
+      راتب أحد مبلغ لم يستلمه.</div>`],
 
   myLeaves: ['طلباتي', `
     <h4>${icon('leave')} تقديم طلب</h4>
@@ -1128,6 +1183,10 @@ views.home = async () => {
         <div class="rv danger">${home.break_overrun_minutes} دقيقة</div></div>` : ''}
     </div>
 
+    <div class="card" id="salaryCard"><div class="card-head"><h3>راتبي حتى اليوم</h3>
+      <span class="muted" id="salPeriod"></span></div>
+      <div id="salBody"><div class="sk-rows">${'<div class="sk line"></div>'.repeat(2)}</div></div></div>
+
     <div class="card"><div class="card-head"><h3>آخر عملية حضور</h3></div>
       <div class="row-item"><span class="ri">${icon('fingerprint')}</span>
         <div class="rt"><b>${esc(home.last_punch_kind || 'بصمة')}</b>
@@ -1138,6 +1197,10 @@ views.home = async () => {
         <div class="rt"><b>الطلبات المعلّقة</b><span>طلبات إجازتك قيد الاعتماد</span></div>
         <div class="rv"><span class="tag ${home.pending_requests ? 'pending' : 'on'}">${
           home.pending_requests}</span></div></div>
+      <div class="row-item" id="missedPunch" style="cursor:pointer">
+        <span class="ri">${icon('edit')}</span>
+        <div class="rt"><b>نسيت البصمة؟</b><span>أرسل طلباً لتسجيل بصمة فائتة</span></div>
+        <div class="rv">${icon('chevron')}</div></div>
     </div>
 
     <div class="card"><div class="card-head"><h3>جدول هذا الأسبوع</h3>
@@ -1177,6 +1240,37 @@ views.home = async () => {
     if (button) button.onclick = () => punch(button);
   });
 
+  // راتبي حتى اليوم: احتساب تناسبي من بداية الشهر
+  api('/api/me/salary-to-date').then((pay) => {
+    if (!el('salBody')) return;
+    el('salPeriod').textContent = `${MONTHS[pay.month - 1]} ${pay.year}`;
+    const pct = pay.month_days ? (pay.days_elapsed / pay.month_days) * 100 : 0;
+    el('salBody').innerHTML = `
+      <div class="card-body" style="padding-bottom:6px">
+        <div class="progress ok" style="margin-bottom:6px"><i style="width:${Math.min(100, pct)}%"></i></div>
+        <div class="muted" style="font-size:12px">مضى ${pay.days_elapsed} من ${pay.month_days} يوماً
+          — يتبقى ${pay.days_remaining} يوماً</div>
+      </div>
+      <div class="row-item"><span class="ri">${icon('money')}</span>
+        <div class="rt"><b>المستحق حتى اليوم</b>
+          <span>${money(pay.daily_rate)} ريال × ${pay.days_elapsed} يوم</span></div>
+        <div class="rv"><b>${money(pay.gross_to_date)}</b></div></div>
+      ${pay.deductions_total ? `<div class="row-item"><span class="ri">${icon('alert')}</span>
+        <div class="rt"><b>الخصومات حتى اليوم</b><span>${[
+          pay.absence_deduction ? 'غياب' : '', pay.late_deduction ? 'تأخير' : '',
+          pay.violation_deduction ? 'مخالفات' : '', pay.loan_deduction ? 'سلف' : '',
+          pay.purchases_deduction ? 'مشتريات' : ''].filter(Boolean).join(' · ') || 'خصومات'}</span></div>
+        <div class="rv danger">− ${money(pay.deductions_total)}</div></div>` : ''}
+      <div class="row-item"><span class="ri">${icon('check')}</span>
+        <div class="rt"><b>الصافي التقديري الآن</b><span>يتغيّر حتى نهاية الشهر</span></div>
+        <div class="rv"><b class="money" style="color:var(--ok)">${money(pay.net_to_date)}</b></div></div>
+      <div class="row-item"><span class="ri">${icon('calendar')}</span>
+        <div class="rt"><b>راتب الشهر كاملاً</b><span>إن أكملت الشهر بلا خصومات</span></div>
+        <div class="rv">${money(pay.expected_full_month)}</div></div>`;
+  }).catch(() => { if (el('salaryCard')) el('salaryCard').remove(); });
+
+  if (el('missedPunch')) el('missedPunch').onclick = () => missedPunchModal();
+
   // مدة الاستراحة الجارية تُحدَّث كل دقيقة أمام الموظف
   clearInterval(state.breakTimer);
   if (home.state === 'break' && home.break_started_at) {
@@ -1189,6 +1283,42 @@ views.home = async () => {
     }, 30000);
   }
 };
+
+/** طلب «نسيت البصمة»: يرسله الموظف فتعتمده الإدارة وتُسجَّل البصمة */
+function missedPunchModal(after) {
+  const now = new Date();
+  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  modal({
+    title: 'طلب تسجيل بصمة فائتة',
+    body: `<div class="help" style="margin-bottom:12px">اكتب الوقت الفعلي الذي حضرت أو انصرفت
+        فيه وسبب عدم تسجيل البصمة. يصل الطلب للموارد البشرية، وعند اعتماده تُسجَّل بصمتك
+        ويُعاد احتساب يومك.</div>
+      <div class="field"><label>وقت البصمة الفائتة</label>
+        <input type="datetime-local" id="mpqTime" value="${local}" /></div>
+      <div class="field"><label>نوعها</label><select id="mpqKind">
+        <option value="auto">يحدّده النظام حسب حالتي</option>
+        <option value="clock_in">حضور</option>
+        <option value="clock_out">انصراف</option>
+        <option value="break_start">بدء استراحة</option>
+        <option value="break_end">عودة من الاستراحة</option></select></div>
+      <div class="field"><label>السبب</label>
+        <textarea id="mpqReason" rows="3" placeholder="مثال: نسيت تسجيل الانصراف، غادرت الساعة الخامسة"></textarea></div>`,
+    footer: '<button class="btn" id="mpqSave">إرسال الطلب</button><button class="btn gray" data-close>إلغاء</button>',
+    onOpen: (root) => {
+      $('#mpqSave', root).onclick = async () => {
+        const reason = $('#mpqReason', root).value.trim();
+        if (reason.length < 3) return toast('اكتب سبب الطلب', 'err');
+        try {
+          await api('/api/punch-requests', { method: 'POST', body: {
+            requested_time: $('#mpqTime', root).value + ':00',
+            kind: $('#mpqKind', root).value,
+            reason } });
+          toast('أُرسل الطلب للموارد البشرية', 'ok'); closeModal(); if (after) after();
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    },
+  });
+}
 
 /* ------------------------------ جدولي ------------------------------ */
 views.schedule = async () => {
@@ -2209,6 +2339,170 @@ function importModal(after) {
 }
 
 /* ------------------------------ السلف على الراتب ------------------------------ */
+/* ------------------------------ مشتريات الموظفين ------------------------------ */
+views.purchases = async () => {
+  const manage = isHR();
+  const { employees } = manage ? await loadLookups() : { employees: [] };
+  const now = new Date();
+  render(`
+    <div class="card"><div class="card-body inline">
+      ${manage ? `<button class="btn ok" id="puNew">${icon('plus')} تسجيل فاتورة</button>` : ''}
+      <div class="field"><label>السنة</label><input type="number" id="puYear" value="${now.getFullYear()}" /></div>
+      <div class="field"><label>الشهر</label><select id="puMonth">${
+        MONTHS.map((m, i) => `<option value="${i + 1}" ${i === now.getMonth() ? 'selected' : ''}>${m}</option>`).join('')
+      }</select></div>
+      ${manage ? `<div class="field"><label>الموظف</label><select id="puEmp"><option value="">الكل</option>${
+        options(employees, '', 'id', 'full_name')}</select></div>` : ''}
+      <button class="btn ghost" id="puLoad">عرض</button>
+      <span class="help">فواتير الشهر تُخصم تلقائياً في مسير رواتبه.</span>
+    </div></div>
+    <div class="grid cols-3 stagger" id="puKpis"></div>
+    <div class="card"><div class="card-head"><h3>الفواتير</h3><span class="muted" id="puCount"></span></div>
+      <div id="puTable"><div class="sk-rows">${'<div class="sk line"></div>'.repeat(4)}</div></div></div>`);
+
+  const load = async () => {
+    const q = new URLSearchParams({ year: el('puYear').value, month: el('puMonth').value });
+    if (el('puEmp') && el('puEmp').value) q.set('employee_id', el('puEmp').value);
+    const rows = await api('/api/purchases?' + q);
+    const live = rows.filter((r) => !r.is_cancelled);
+    el('puCount').textContent = `${rows.length} فاتورة`;
+    el('puKpis').innerHTML = `
+      <div class="kpi primary"><div class="label">فواتير الشهر<span class="ico">${icon('cart')}</span></div>
+        <div class="value">${live.length}</div></div>
+      <div class="kpi danger"><div class="label">إجمالي الخصم<span class="ico">${icon('money')}</span></div>
+        <div class="value danger">${money(live.reduce((t, r) => t + r.amount, 0))}</div></div>
+      <div class="kpi info"><div class="label">ملغاة<span class="ico">${icon('close')}</span></div>
+        <div class="value info">${rows.length - live.length}</div></div>`;
+    el('puTable').innerHTML = table(
+      ['التاريخ', 'الموظف', 'البيان', 'رقم الفاتورة', 'المبلغ', 'الحالة', ''],
+      rows,
+      (r) => `<tr${r.is_cancelled ? ' style="opacity:.55"' : ''}>
+        <td>${esc(r.purchase_date)}</td>
+        <td>${esc(r.employee_name || '')}<div class="muted" style="font-size:11.5px">${esc(r.employee_code || '')}</div></td>
+        <td>${esc(r.description)}</td><td>${esc(r.invoice_no || '—')}</td>
+        <td class="money"><b>${money(r.amount)}</b></td>
+        <td>${r.is_cancelled
+          ? `<span class="tag cancelled">ملغاة</span>
+             <div class="muted" style="font-size:11px">${esc(r.cancel_reason || '')}</div>`
+          : '<span class="tag on">تُخصم</span>'}</td>
+        <td>${manage && !r.is_cancelled
+          ? `<button class="btn sm danger" onclick="cancelPurchase(${r.id})">إلغاء</button>` : ''}</td></tr>`,
+      manage ? 'لا فواتير في هذا الشهر' : 'لا توجد فواتير عليك');
+  };
+
+  el('puLoad').onclick = () => load().catch((e) => toast(e.message, 'err'));
+  if (el('puNew')) el('puNew').onclick = () => modal({
+    title: 'تسجيل فاتورة مشتريات',
+    body: `<div class="help" style="margin-bottom:12px">تُخصم من راتب الشهر الذي يقع فيه
+        تاريخ الفاتورة، ويصل الموظف إشعار بها.</div>
+      <div class="field"><label>الموظف</label>
+        <select id="pfEmp">${options(employees, '', 'id', 'full_name')}</select></div>
+      <div class="inline">
+        <div class="field" style="flex:1"><label>التاريخ</label>
+          <input type="date" id="pfDate" value="${today()}" /></div>
+        <div class="field" style="flex:1"><label>المبلغ</label>
+          <input type="number" step="0.01" id="pfAmount" value="10" /></div>
+      </div>
+      <div class="field"><label>البيان</label>
+        <input id="pfDesc" placeholder="مثال: وجبة من المتجر" /></div>
+      <div class="field"><label>رقم الفاتورة (اختياري)</label><input id="pfNo" /></div>`,
+    footer: '<button class="btn" id="pfSave">حفظ</button><button class="btn gray" data-close>إلغاء</button>',
+    onOpen: (root) => {
+      $('#pfSave', root).onclick = async () => {
+        const description = $('#pfDesc', root).value.trim();
+        if (description.length < 2) return toast('اكتب بيان الفاتورة', 'err');
+        try {
+          await api('/api/purchases', { method: 'POST', body: {
+            employee_id: Number($('#pfEmp', root).value),
+            purchase_date: $('#pfDate', root).value,
+            amount: Number($('#pfAmount', root).value),
+            description,
+            invoice_no: $('#pfNo', root).value.trim() || null } });
+          toast('سُجّلت الفاتورة', 'ok'); closeModal(); load();
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    },
+  });
+  window.cancelPurchase = (id) => modal({
+    title: 'إلغاء الفاتورة',
+    body: `<div class="help" style="margin-bottom:12px">تبقى في السجل ولا تُخصم من الراتب.</div>
+      <div class="field"><label>سبب الإلغاء (إلزامي)</label>
+        <input id="pcReason" placeholder="مثال: أُعيدت البضاعة" /></div>`,
+    footer: '<button class="btn danger" id="pcSave">إلغاء الفاتورة</button><button class="btn gray" data-close>تراجع</button>',
+    onOpen: (root) => {
+      $('#pcSave', root).onclick = async () => {
+        const reason = $('#pcReason', root).value.trim();
+        if (reason.length < 3) return toast('اكتب سبب الإلغاء', 'err');
+        try {
+          await api(`/api/purchases/${id}/cancel`, { method: 'POST', body: { reason } });
+          toast('أُلغيت الفاتورة', 'ok'); closeModal(); load();
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    },
+  });
+  load().catch((e) => toast(e.message, 'err'));
+};
+
+/* ------------------------------ طلبات «نسيت البصمة» ------------------------------ */
+views.punchRequests = async () => {
+  render(`
+    <div class="card"><div class="card-body inline">
+      <div class="field"><label>الحالة</label><select id="prqStatus">
+        <option value="pending">قيد الاعتماد</option><option value="">الكل</option>
+        <option value="approved">معتمدة</option><option value="rejected">مرفوضة</option>
+        <option value="cancelled">ملغاة</option></select></div>
+      <button class="btn ghost" id="prqLoad">عرض</button>
+      <span class="help">الاعتماد يسجّل البصمة فعلياً ويعيد احتساب اليوم تلقائياً.</span>
+    </div></div>
+    <div class="card"><div class="card-head"><h3>طلبات البصمة</h3><span class="muted" id="prqCount"></span></div>
+      <div id="prqTable"><div class="sk-rows">${'<div class="sk line"></div>'.repeat(4)}</div></div></div>`);
+
+  const load = async () => {
+    const q = new URLSearchParams();
+    if (el('prqStatus').value) q.set('status', el('prqStatus').value);
+    const rows = await api('/api/punch-requests?' + q);
+    el('prqCount').textContent = `${rows.length} طلب`;
+    el('prqTable').innerHTML = table(
+      ['الموظف', 'الوقت المطلوب', 'النوع', 'السبب', 'الحالة', 'قُدّم', ''],
+      rows,
+      (r) => `<tr>
+        <td>${esc(r.employee_name || '')}<div class="muted" style="font-size:11.5px">${esc(r.employee_code || '')}</div></td>
+        <td>${fmtDateTime(r.requested_time)}</td>
+        <td>${esc(r.kind_label || PUNCH_KINDS[r.kind] || '')}</td>
+        <td>${esc(r.reason)}</td>
+        <td><span class="tag ${r.status}">${LEAVE_STATUS[r.status] || r.status}</span>
+          ${r.decision_note ? `<div class="muted" style="font-size:11px">${esc(r.decision_note)}</div>` : ''}</td>
+        <td>${r.created_at ? String(r.created_at).slice(0, 10) : ''}</td>
+        <td>${r.status === 'pending'
+          ? `<button class="btn sm ok" onclick="decidePunchRequest(${r.id},true)">اعتماد</button>
+             <button class="btn sm danger" onclick="decidePunchRequest(${r.id},false)">رفض</button>` : ''}</td></tr>`,
+      'لا طلبات');
+  };
+  el('prqLoad').onclick = () => load().catch((e) => toast(e.message, 'err'));
+  el('prqStatus').onchange = () => load().catch((e) => toast(e.message, 'err'));
+  window.decidePunchRequest = (id, approve) => modal({
+    title: approve ? 'اعتماد طلب البصمة' : 'رفض الطلب',
+    body: `<div class="help" style="margin-bottom:12px">${approve
+        ? 'ستُسجَّل البصمة بالوقت المطلوب مصدرها «إدخال يدوي»، ويُعاد احتساب اليوم.'
+        : 'يصل الموظف إشعار بالرفض مع السبب.'}</div>
+      <div class="field"><label>ملاحظة${approve ? ' (اختيارية)' : ' / السبب'}</label>
+        <input id="pdNote" placeholder="${approve ? 'مؤكد من كاميرا الفرع' : 'لا يوجد ما يثبت الحضور'}" /></div>`,
+    footer: `<button class="btn ${approve ? '' : 'danger'}" id="pdSave">${approve ? 'اعتماد' : 'رفض'}</button>
+      <button class="btn gray" data-close>إلغاء</button>`,
+    onOpen: (root) => {
+      $('#pdSave', root).onclick = async () => {
+        try {
+          await api(`/api/punch-requests/${id}/decide`, { method: 'POST', body: {
+            approve, note: $('#pdNote', root).value.trim() || null } });
+          toast(approve ? 'اعتُمد الطلب وسُجّلت البصمة' : 'رُفض الطلب', 'ok');
+          closeModal(); load();
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    },
+  });
+  load().catch((e) => toast(e.message, 'err'));
+};
+
 views.loans = async () => {
   const manage = isHR();
   const { employees } = manage ? await loadLookups() : { employees: [] };
@@ -2216,8 +2510,12 @@ views.loans = async () => {
   render(`
     <div class="card"><div class="card-body inline">
       ${manage ? `<button class="btn ok" id="lnNew">${icon('plus')} تسجيل سلفة</button>` : ''}
+      ${!manage ? `<button class="btn ok" id="lnAsk">${icon('plus')} طلب سلفة</button>` : ''}
       <div class="field"><label>الحالة</label><select id="lnStatus">
-        <option value="">الكل</option><option value="active">سارية</option>
+        <option value="">الكل</option>
+        <option value="pending">بانتظار الاعتماد</option>
+        <option value="approved">بانتظار إقرار الاستلام</option>
+        <option value="active">سارية</option>
         <option value="settled">مسدّدة</option><option value="cancelled">ملغاة</option></select></div>
       ${manage ? `<div class="field"><label>الموظف</label><select id="lnEmp"><option value="">الكل</option>${options(employees, '', 'id', 'full_name')}</select></div>` : ''}
       <button class="btn ghost" id="lnLoad">تحديث</button>
@@ -2260,12 +2558,19 @@ views.loans = async () => {
             <span class="muted" style="font-size:11.5px">${money(r.paid_amount)}</span></td>
           <td class="money"><b>${money(r.remaining_amount)}</b></td>
           <td>${String(r.start_month).padStart(2, '0')}/${r.start_year}</td>
-          <td><span class="tag ${r.status === 'active' ? 'on' : r.status === 'settled' ? 'approved' : 'cancelled'}">
-            ${r.status === 'active' ? 'سارية' : r.status === 'settled' ? 'مسدّدة' : 'ملغاة'}</span></td>
-          <td>${manage ? `${r.status === 'active'
-              ? `<button class="btn sm gray" onclick="cancelLoan(${r.id})">إلغاء</button>
-                 <button class="btn sm ok" onclick="settleLoan(${r.id})">تسديد كامل</button>` : ''}
-             <button class="btn sm danger" onclick="deleteLoan(${r.id})">حذف</button>` : ''}</td></tr>`;
+          <td><span class="tag ${LOAN_TAG[r.status] || ''}">${esc(LOAN_STATUS[r.status] || r.status)}</span>
+            ${r.decision_note ? `<div class="muted" style="font-size:11px">${esc(r.decision_note)}</div>` : ''}</td>
+          <td>${manage
+            ? `${r.status === 'pending'
+                ? `<button class="btn sm ok" onclick="decideLoan(${r.id},true)">اعتماد</button>
+                   <button class="btn sm danger" onclick="decideLoan(${r.id},false)">رفض</button>` : ''}
+               ${r.status === 'active'
+                ? `<button class="btn sm gray" onclick="cancelLoan(${r.id})">إلغاء</button>
+                   <button class="btn sm ok" onclick="settleLoan(${r.id})">تسديد كامل</button>` : ''}
+               <button class="btn sm danger" onclick="deleteLoan(${r.id})">حذف</button>`
+            : (r.can_acknowledge
+                ? `<button class="btn sm ok" onclick="acknowledgeLoan(${r.id})">أقرّ باستلام السلفة</button>`
+                : '')}</td></tr>`;
       },
       manage ? 'لا توجد سلف مسجّلة' : 'لا توجد سلف على راتبك');
   };
@@ -2310,6 +2615,67 @@ views.loans = async () => {
             reason: el('lnFReason').value || null,
           } });
           toast('تم تسجيل السلفة', 'ok'); closeModal(); load();
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    },
+  });
+
+  // اعتماد السلفة أو رفضها، ثم إقرار الموظف بالاستلام
+  window.decideLoan = (id, approve) => modal({
+    title: approve ? 'اعتماد السلفة' : 'رفض طلب السلفة',
+    body: `<div class="help" style="margin-bottom:12px">${approve
+        ? 'بعد الاعتماد تعود السلفة للموظف ليقرّ باستلامها، وعندها فقط يبدأ خصم الأقساط.'
+        : 'يصل الموظف إشعار بالرفض مع السبب، ولا يُخصم منه شيء.'}</div>
+      <div class="field"><label>ملاحظة${approve ? ' (اختيارية)' : ' / السبب'}</label>
+        <input id="ldNote" placeholder="${approve ? 'معتمدة على ثلاثة أقساط' : 'الرصيد لا يسمح حالياً'}" /></div>`,
+    footer: `<button class="btn ${approve ? '' : 'danger'}" id="ldSave">${approve ? 'اعتماد' : 'رفض'}</button>
+      <button class="btn gray" data-close>إلغاء</button>`,
+    onOpen: (root) => {
+      $('#ldSave', root).onclick = async () => {
+        try {
+          await api(`/api/loans/${id}/decide`, { method: 'POST', body: {
+            approve, note: $('#ldNote', root).value.trim() || null } });
+          toast(approve ? 'اعتُمدت السلفة — بانتظار إقرار الموظف' : 'رُفض الطلب', 'ok');
+          closeModal(); load();
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    },
+  });
+  window.acknowledgeLoan = async (id) => {
+    if (!confirm('أقرّ باستلام مبلغ السلفة؟ سيبدأ خصم الأقساط من راتبك حسب الجدول.')) return;
+    try { await api(`/api/loans/${id}/acknowledge`, { method: 'POST' });
+      toast('سُجّل إقرارك بالاستلام', 'ok'); load(); } catch (e) { toast(e.message, 'err'); }
+  };
+  // طلب سلفة يقدّمه الموظف بنفسه
+  if (el('lnAsk')) el('lnAsk').onclick = () => modal({
+    title: 'طلب سلفة على الراتب',
+    body: `<div class="help" style="margin-bottom:12px">يُرفع الطلب للموارد البشرية،
+        وبعد اعتماده تُقرّ أنت باستلام المبلغ ليبدأ الخصم.</div>
+      <div class="inline">
+        <div class="field" style="flex:1"><label>المبلغ المطلوب</label>
+          <input type="number" id="laAmount" value="1000" /></div>
+        <div class="field" style="flex:1"><label>القسط الشهري</label>
+          <input type="number" id="laInst" value="250" /></div>
+      </div>
+      <div class="inline">
+        <div class="field" style="flex:1"><label>يبدأ الخصم من شهر</label><select id="laMonth">${
+          MONTHS.map((m, i) => `<option value="${i + 1}" ${i === now.getMonth() ? 'selected' : ''}>${m}</option>`).join('')
+        }</select></div>
+        <div class="field" style="flex:1"><label>السنة</label>
+          <input type="number" id="laYear" value="${now.getFullYear()}" /></div>
+      </div>
+      <div class="field"><label>السبب</label><input id="laReason" placeholder="ظرف عائلي" /></div>`,
+    footer: `<button class="btn" id="laSave">إرسال الطلب</button><button class="btn gray" data-close>إلغاء</button>`,
+    onOpen: (root) => {
+      $('#laSave', root).onclick = async () => {
+        try {
+          await api('/api/loans/request', { method: 'POST', body: {
+            amount: Number($('#laAmount', root).value),
+            installment_amount: Number($('#laInst', root).value),
+            start_year: Number($('#laYear', root).value),
+            start_month: Number($('#laMonth', root).value),
+            reason: $('#laReason', root).value.trim() || null } });
+          toast('أُرسل طلب السلفة', 'ok'); closeModal(); load();
         } catch (e) { toast(e.message, 'err'); }
       };
     },
@@ -2953,8 +3319,8 @@ views.payroll = async () => {
       <div class="card-head"><h3>قسائم ${MONTHS[run.month - 1]} ${run.year}</h3>
         <span class="muted">صافي المسير: <b class="money">${money(run.net_total)}</b> ريال</span></div>
       ${table(['رقم الموظف', 'الاسم', 'الأساسي', 'البدلات', 'حضور', 'غياب', 'تأخير (د)', 'إضافي (د)',
-               'خصم غياب', 'خصم تأخير', 'إجازة بلا راتب', 'خصم مخالفات', 'قسط سلفة', 'بدل إضافي',
-               'إضافات', 'خصومات', 'الصافي', ''],
+               'خصم غياب', 'خصم تأخير', 'إجازة بلا راتب', 'خصم مخالفات', 'قسط سلفة', 'مشتريات',
+               'بدل إضافي', 'إضافات', 'خصومات', 'الصافي', ''],
         slips,
         (s) => `<tr><td>${esc(s.employee_code)}</td><td>${esc(s.employee_name)}</td>
           <td class="money">${money(s.basic_salary)}</td><td class="money">${money(s.allowances)}</td>
@@ -2963,6 +3329,7 @@ views.payroll = async () => {
           <td class="money">${money(s.absence_deduction)}</td><td class="money">${money(s.late_deduction)}</td>
           <td class="money">${money(s.unpaid_leave_deduction)}</td><td class="money">${money(s.violation_deduction)}</td>
           <td class="money">${money(s.loan_deduction)}</td>
+          <td class="money">${money(s.purchases_deduction || 0)}</td>
           <td class="money">${money(s.overtime_amount)}</td><td class="money">${money(s.other_additions)}</td>
           <td class="money">${money(s.other_deductions)}</td><td class="money"><b>${money(s.net_pay)}</b></td>
           <td><button class="btn sm ghost" onclick="printPayslip(${s.id})">${icon('printer')} قسيمة</button>

@@ -21,10 +21,11 @@ from ..models import (
     User,
     WorkState,
 )
-from ..schemas import HomeDay, MyHomeOut, MyProfileIn, MyProfileOut
+from ..schemas import HomeDay, MyHomeOut, MyProfileIn, MyProfileOut, SalaryToDateOut
 from ..security import get_current_user
 from ..services import accounts, audit, notifications, policies, settings_store
 from ..services import attendance as attendance_service
+from ..services import payroll as payroll_service
 
 router = APIRouter(prefix="/api/me", tags=["me"])
 
@@ -128,6 +129,13 @@ def _time_label(value: datetime | None) -> str:
         return ""
     hour = value.hour % 12 or 12
     return f"{hour}:{value:%M} {'ص' if value.hour < 12 else 'م'}"
+
+
+@router.get("/salary-to-date", response_model=SalaryToDateOut)
+def my_salary_to_date(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """كم استحقّ الموظف من راتبه من بداية الشهر حتى اليوم، وما عليه من خصومات."""
+    employee = _employee_of(db, user)
+    return SalaryToDateOut(**payroll_service.earned_to_date(db, employee))
 
 
 @router.get("/home", response_model=MyHomeOut)

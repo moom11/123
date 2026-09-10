@@ -12,10 +12,14 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import PayrollRun, PayrollStatus, Payslip, Role, User
-from ..schemas import PayrollRunOut, PayslipAdjust, PayslipOut
-from ..models import Employee
-from ..security import can_view_employee, get_current_user, require_hr
+from ..models import Employee, EmployeeStatus, PayrollRun, PayrollStatus, Payslip, Role, User
+from ..schemas import PayrollRunOut, PayslipAdjust, PayslipOut, SalaryToDateOut
+from ..security import (
+    can_view_employee,
+    get_current_user,
+    require_hr,
+    visible_employee_ids,
+)
 from ..services import audit, notifications, payslip_doc, sheets
 from ..services import payroll as service
 
@@ -56,6 +60,7 @@ def payslip_out(slip: Payslip) -> PayslipOut:
         late_deduction=slip.late_deduction,
         unpaid_leave_deduction=slip.unpaid_leave_deduction,
         violation_deduction=slip.violation_deduction,
+        purchases_deduction=slip.purchases_deduction or 0,
         overtime_amount=slip.overtime_amount,
         other_additions=slip.other_additions,
         other_deductions=slip.other_deductions,
@@ -128,6 +133,26 @@ def adjust_payslip(
     db.commit()
     db.refresh(slip)
     return payslip_out(slip)
+
+
+@router.get("/to-date", response_model=list[SalaryToDateOut])
+def salaries_to_date(
+    employee_id: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """المستحق حتى اليوم لكل موظف مرئي — لمعرفة ما تراكم قبل نهاية الشهر."""
+    stmt = select(Employee).where(Employee.status == EmployeeStatus.active)
+    if employee_id:
+        if not can_view_employee(user, employee_id, db):
+            raise HTTPException(status_code=403, detail="لا تملك صلاحية عرض هذا الموظف")
+        stmt = select(Employee).where(Employee.id == employee_id)
+    else:
+        allowed = visible_employee_ids(db, user)
+        if allowed is not None:
+            stmt = stmt.where(Employee.id.in_(allowed or [0]))
+    employees = db.scalars(stmt.order_by(Employee.code)).all()
+    return [SalaryToDateOut(**service.earned_to_date(db, emp)) for emp in employees]
 
 
 @router.post("/runs/{run_id}/approve", response_model=PayrollRunOut)
@@ -270,6 +295,21 @@ def print_run(run_id: int, db: Session = Depends(get_db)):
     return HTMLResponse(
         payslip_doc.document(db, run, slips, f"قسائم رواتب {run.month:02d}/{run.year}")
     )
+
+
+@router.get("/runs/{run_id}/table.html", response_class=HTMLResponse,
+            dependencies=[Depends(require_hr)])
+def payroll_table(run_id: int, db: Session = Depends(get_db)):
+    """جدول الرواتب كاملاً في صفحة أفقية مرتّبة جاهزة للطباعة أو الحفظ PDF."""
+    run = db.get(PayrollRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="المسير غير موجود")
+    slips = db.scalars(
+        select(Payslip).where(Payslip.run_id == run.id).order_by(Payslip.id)
+    ).all()
+    if not slips:
+        raise HTTPException(status_code=400, detail="لا توجد قسائم في هذا المسير")
+    return HTMLResponse(payslip_doc.payroll_table(db, run, slips))
 
 
 @router.get("/runs/{run_id}/export.csv", dependencies=[Depends(require_hr)])

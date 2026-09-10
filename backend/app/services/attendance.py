@@ -186,8 +186,13 @@ def compute_day(
         status = DayStatus.holiday
     elif not is_work_day:
         status = DayStatus.weekend
-    elif day > date.today():
-        status = DayStatus.scheduled   # يوم عمل قادم: لا يُحتسب غياباً
+    elif day > date.today() or (
+        day == date.today()
+        and datetime.now() < rules.scheduled_in(day) + timedelta(minutes=policy.late_grace_minutes)
+    ):
+        # يوم عمل لم يبدأ بعد: لا يُكتب غياباً لمن لم يحن دوامه — الوردية
+        # المسائية مثلاً تبقى «لم يحن بعد» طوال الصباح
+        status = DayStatus.scheduled
     else:
         status = DayStatus.absent
 

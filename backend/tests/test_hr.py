@@ -1404,6 +1404,20 @@ def test_loan_schedule_and_payroll_deduction(client, auth):
     assert loan.status_code == 201, loan.text
     data = loan.json()
     assert data["months"] == 3                      # 400 + 400 + 200
+    # تبدأ بانتظار الاعتماد: لا خصم قبل الاعتماد وإقرار الموظف بالاستلام
+    assert data["status"] == "pending"
+
+    approved = client.post(f"/api/loans/{data['id']}/decide", headers=auth,
+                           json={"approve": True}).json()
+    assert approved["status"] == "approved" and approved["can_acknowledge"] is True
+
+    with SessionLocal() as db:
+        from app.models import EmployeeLoan, LoanStatus
+
+        row = db.get(EmployeeLoan, data["id"])
+        row.status = LoanStatus.active          # إقرار الموظف (يُختبر تفصيلاً لاحقاً)
+        db.commit()
+    data = client.get(f"/api/loans?employee_id={emp['id']}", headers=auth).json()[0]
     # السلفة بدأت الشهر الماضي: قسطان استُحقا حتى الشهر الجاري
     assert data["paid_amount"] == 800
     assert data["remaining_amount"] == 200
@@ -1416,7 +1430,8 @@ def test_loan_schedule_and_payroll_deduction(client, auth):
     assert slip["net_pay"] == max(0, round(
         slip["basic_salary"] + slip["allowances"] + slip["overtime_amount"]
         - slip["absence_deduction"] - slip["late_deduction"] - slip["unpaid_leave_deduction"]
-        - slip["violation_deduction"] - slip["loan_deduction"], 2))
+        - slip["violation_deduction"] - slip["loan_deduction"]
+        - slip["purchases_deduction"], 2))
 
     # إعادة الاحتساب لا تُكرّر الخصم
     again = client.post(f"/api/payroll/runs?year={year}&month={month}", headers=auth)
@@ -2641,3 +2656,386 @@ def test_no_break_in_the_clock_out_window(client, auth):
     out = client.post("/api/attendance/self-punch", headers=h, json=here)
     assert out.json()["kind"] == "انصراف" and out.json()["state"] == "out"
     client.put("/api/settings", headers=auth, json={"punch_debounce_seconds": 20})
+
+
+# --------------------------- دورة السلفة: اعتماد ثم إقرار استلام ---------------------------
+
+def test_loan_approval_then_employee_acknowledgement(client, auth):
+    """السلفة لا تُخصم إلا بعد اعتماد الإدارة وإقرار الموظف باستلامها."""
+    from app import security_extra
+
+    security_extra.reset_all()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9330", "full_name": "موظف دورة السلفة", "phone": "0535554433",
+        "basic_salary": 6000}).json()
+    token = client.post("/api/auth/login", data={
+        "username": "0535554433", "password": "0535554433"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+
+    # الموظف يطلب سلفة بنفسه
+    asked = client.post("/api/loans/request", headers=h, json={
+        "amount": 1200, "installment_amount": 400,
+        "start_year": 2026, "start_month": 10, "reason": "ظرف عائلي"})
+    assert asked.status_code == 201, asked.text
+    loan = asked.json()
+    assert loan["status"] == "pending" and loan["can_acknowledge"] is False
+
+    # لا خصم ما دامت بانتظار الاعتماد
+    with SessionLocal() as db:
+        from app.services import loans as loans_service
+
+        assert loans_service.monthly_deduction(db, emp["id"], 2026, 10) == 0
+
+    # الموظف لا يعتمد سلفته بنفسه
+    assert client.post(f"/api/loans/{loan['id']}/decide", headers=h,
+                       json={"approve": True}).status_code == 403
+    # ولا يقرّ باستلامها قبل اعتمادها
+    assert client.post(f"/api/loans/{loan['id']}/acknowledge", headers=h).status_code == 400
+
+    approved = client.post(f"/api/loans/{loan['id']}/decide", headers=auth,
+                           json={"approve": True, "note": "معتمدة على ثلاثة أقساط"}).json()
+    assert approved["status"] == "approved" and approved["approved_at"]
+    assert approved["can_acknowledge"] is True
+    # ما زالت لا تُخصم حتى يقرّ باستلامها
+    with SessionLocal() as db:
+        from app.services import loans as loans_service
+
+        assert loans_service.monthly_deduction(db, emp["id"], 2026, 10) == 0
+
+    # وصله إشعار بالاعتماد
+    assert any("أقرّ باستلامها" in n["title"] for n in
+               client.get("/api/notifications", headers=h).json())
+
+    done = client.post(f"/api/loans/{loan['id']}/acknowledge", headers=h)
+    assert done.status_code == 200, done.text
+    assert done.json()["status"] == "active" and done.json()["acknowledged_at"]
+
+    with SessionLocal() as db:
+        from app.services import loans as loans_service
+
+        assert loans_service.monthly_deduction(db, emp["id"], 2026, 10) == 400
+
+    # ولا يقرّ مرتين، ولا يقرّ بسلفة غيره
+    assert client.post(f"/api/loans/{loan['id']}/acknowledge", headers=h).status_code == 400
+    assert client.post(f"/api/loans/{loan['id']}/acknowledge", headers=auth).status_code == 403
+
+
+def test_rejected_loan_is_never_deducted(client, auth):
+    """السلفة المرفوضة تُلغى ولا يُخصم منها شيء."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9331", "full_name": "موظف سلفة مرفوضة", "basic_salary": 5000}).json()
+    loan = client.post("/api/loans", headers=auth, json={
+        "employee_id": emp["id"], "amount": 900, "installment_amount": 300,
+        "start_year": 2026, "start_month": 10}).json()
+
+    out = client.post(f"/api/loans/{loan['id']}/decide", headers=auth,
+                      json={"approve": False, "note": "الرصيد لا يسمح"}).json()
+    assert out["status"] == "cancelled" and out["decision_note"] == "الرصيد لا يسمح"
+    with SessionLocal() as db:
+        from app.services import loans as loans_service
+
+        assert loans_service.monthly_deduction(db, emp["id"], 2026, 10) == 0
+    # ولا يُحسم طلب محسوم مرتين
+    assert client.post(f"/api/loans/{loan['id']}/decide", headers=auth,
+                       json={"approve": True}).status_code == 400
+
+
+# --------------------------- مشتريات الموظفين ---------------------------
+
+def _unlock_month(client, auth, year: int, month: int) -> None:
+    """يلغي اعتماد مسير الشهر إن كان معتمداً (اختبار سابق قد يكون اعتمده)."""
+    for run in client.get("/api/payroll/runs", headers=auth).json():
+        if run["year"] == year and run["month"] == month and run["status"] == "approved":
+            client.post(f"/api/payroll/runs/{run['id']}/revoke", headers=auth,
+                        json={"reason": "تهيئة اختبار"})
+
+
+def test_employee_purchases_deducted_from_payroll(client, auth):
+    """فاتورة المشتريات تُخصم في مسير الشهر، وإلغاؤها يوقف الخصم."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9340", "full_name": "موظف المشتريات", "basic_salary": 3000}).json()
+    previous = date.today().replace(day=1) - timedelta(days=1)
+    year, month = previous.year, previous.month
+    when = previous.replace(day=5).isoformat()
+    _unlock_month(client, auth, year, month)
+
+    first = client.post("/api/purchases", headers=auth, json={
+        "employee_id": emp["id"], "purchase_date": when, "amount": 10,
+        "description": "وجبة من المتجر", "invoice_no": "INV-1"})
+    assert first.status_code == 201, first.text
+    client.post("/api/purchases", headers=auth, json={
+        "employee_id": emp["id"], "purchase_date": when, "amount": 25.5,
+        "description": "مشتريات متنوعة"})
+
+    summary = client.get(f"/api/purchases/summary?year={year}&month={month}", headers=auth).json()
+    row = next(r for r in summary["rows"] if r["employee_id"] == emp["id"])
+    assert row["amount"] == 35.5 and row["count"] == 2
+
+    run = client.post(f"/api/payroll/runs?year={year}&month={month}", headers=auth)
+    slips = client.get(f"/api/payroll/runs/{run.json()['id']}/payslips", headers=auth).json()
+    slip = next(s for s in slips if s["employee_code"] == "9340")
+    assert slip["purchases_deduction"] == 35.5
+    assert slip["net_pay"] == max(0, round(
+        slip["basic_salary"] + slip["allowances"] + slip["overtime_amount"]
+        - slip["absence_deduction"] - slip["late_deduction"] - slip["unpaid_leave_deduction"]
+        - slip["violation_deduction"] - slip["loan_deduction"] - slip["purchases_deduction"], 2))
+
+    # الإلغاء بسبب مكتوب يوقف الخصم، والفاتورة تبقى في السجل
+    cancelled = client.post(f"/api/purchases/{first.json()['id']}/cancel", headers=auth,
+                            json={"reason": "أُعيدت البضاعة"})
+    assert cancelled.status_code == 200 and cancelled.json()["is_cancelled"] is True
+    assert client.post(f"/api/purchases/{first.json()['id']}/cancel", headers=auth,
+                       json={"reason": "مرة أخرى"}).status_code == 400
+
+    rebuilt = client.post(f"/api/payroll/runs?year={year}&month={month}", headers=auth)
+    slips = client.get(f"/api/payroll/runs/{rebuilt.json()['id']}/payslips", headers=auth).json()
+    assert next(s for s in slips if s["employee_code"] == "9340")["purchases_deduction"] == 25.5
+
+    # فاتورة بتاريخ مستقبلي مرفوضة
+    assert client.post("/api/purchases", headers=auth, json={
+        "employee_id": emp["id"], "purchase_date": "2099-01-01", "amount": 5,
+        "description": "لاحقاً"}).status_code == 400
+
+
+def test_employee_sees_only_own_purchases(client, auth):
+    """الموظف يرى فواتيره فقط ولا يسجّل فواتير على غيره."""
+    from app import security_extra
+
+    security_extra.reset_all()
+    mine = client.post("/api/employees", headers=auth, json={
+        "code": "9341", "full_name": "صاحب الفواتير", "phone": "0534443322"}).json()
+    other = client.post("/api/employees", headers=auth, json={
+        "code": "9342", "full_name": "موظف آخر"}).json()
+    today_iso = date.today().isoformat()
+    _unlock_month(client, auth, date.today().year, date.today().month)
+    created = client.post("/api/purchases", headers=auth, json={
+        "employee_id": mine["id"], "purchase_date": today_iso, "amount": 12,
+        "description": "قهوة"})
+    assert created.status_code == 201, created.text
+    client.post("/api/purchases", headers=auth, json={
+        "employee_id": other["id"], "purchase_date": today_iso, "amount": 30,
+        "description": "فاتورة غيره"})
+
+    token = client.post("/api/auth/login", data={
+        "username": "0534443322", "password": "0534443322"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+    rows = client.get("/api/purchases", headers=h).json()
+    assert [r["employee_id"] for r in rows] == [mine["id"]]
+    assert client.post("/api/purchases", headers=h, json={
+        "employee_id": other["id"], "purchase_date": today_iso, "amount": 5,
+        "description": "محاولة"}).status_code == 403
+
+
+# --------------------------- طلب «نسيت البصمة» ---------------------------
+
+def test_missed_punch_request_flow(client, auth):
+    """الموظف يطلب بصمة فائتة، والاعتماد يسجّلها فعلاً ويعيد احتساب اليوم."""
+    from app import security_extra
+
+    security_extra.reset_all()
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية النسيان", "start_time": "08:00:00", "end_time": "17:00:00",
+        "work_days": "0,1,2,3,4,5,6"}).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9350", "full_name": "موظف نسي البصمة", "phone": "0533332211",
+        "shift_id": shift["id"]}).json()
+    token = client.post("/api/auth/login", data={
+        "username": "0533332211", "password": "0533332211"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+
+    # حضر ولم يسجّل انصرافه
+    day = (date.today() - timedelta(days=2)).isoformat()
+    _punch(client, auth, emp["id"], f"{day}T08:00:00")
+    before = client.get(f"/api/attendance/employee/{emp['id']}?date_from={day}&date_to={day}",
+                        headers=auth).json()[0]
+    assert before["check_out"] is None
+
+    asked = client.post("/api/punch-requests", headers=h, json={
+        "requested_time": f"{day}T17:00:00", "kind": "clock_out",
+        "reason": "نسيت تسجيل الانصراف، غادرت الساعة الخامسة"})
+    assert asked.status_code == 201, asked.text
+    req = asked.json()
+    assert req["status"] == "pending" and req["kind_label"] == "انصراف"
+
+    # طلب مكرر بالوقت نفسه مرفوض، والمستقبلي مرفوض، والقديم جداً مرفوض
+    assert client.post("/api/punch-requests", headers=h, json={
+        "requested_time": f"{day}T17:00:00", "kind": "clock_out",
+        "reason": "مرة أخرى"}).status_code == 400
+    assert client.post("/api/punch-requests", headers=h, json={
+        "requested_time": "2099-01-01T08:00:00", "reason": "مستقبلي"}).status_code == 400
+    assert client.post("/api/punch-requests", headers=h, json={
+        "requested_time": "2020-01-01T08:00:00", "reason": "قديم جداً"}).status_code == 400
+
+    # الموظف لا يعتمد طلبه بنفسه
+    assert client.post(f"/api/punch-requests/{req['id']}/decide", headers=h,
+                       json={"approve": True}).status_code == 403
+
+    decided = client.post(f"/api/punch-requests/{req['id']}/decide", headers=auth,
+                          json={"approve": True, "note": "مؤكد من كاميرا الفرع"})
+    assert decided.status_code == 200, decided.text
+    assert decided.json()["status"] == "approved" and decided.json()["punch_id"]
+
+    # سُجّلت البصمة فعلاً واكتمل اليوم
+    after = client.get(f"/api/attendance/employee/{emp['id']}?date_from={day}&date_to={day}",
+                       headers=auth).json()[0]
+    assert after["check_out"] is not None and after["status"] == "present"
+
+    punches = client.get(
+        f"/api/attendance/punches?employee_id={emp['id']}&date_from={day}&date_to={day}",
+        headers=auth).json()
+    assert any("طلب نسيان بصمة معتمد" in (p["note"] or "") for p in punches)
+    assert any("اعتُمد طلب البصمة" in n["title"]
+               for n in client.get("/api/notifications", headers=h).json())
+
+
+def test_punch_request_reject_and_cancel(client, auth):
+    """الرفض لا يسجّل بصمة، والموظف يسحب طلبه ما دام معلّقاً."""
+    from app import security_extra
+
+    security_extra.reset_all()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9351", "full_name": "موظف الطلب المرفوض", "phone": "0532221100"}).json()
+    token = client.post("/api/auth/login", data={
+        "username": "0532221100", "password": "0532221100"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+    when = f"{(date.today() - timedelta(days=1)).isoformat()}T09:00:00"
+
+    first = client.post("/api/punch-requests", headers=h, json={
+        "requested_time": when, "reason": "نسيت البصمة"}).json()
+    rejected = client.post(f"/api/punch-requests/{first['id']}/decide", headers=auth,
+                           json={"approve": False, "note": "لا يوجد ما يثبت حضورك"}).json()
+    assert rejected["status"] == "rejected" and rejected["punch_id"] is None
+
+    second = client.post("/api/punch-requests", headers=h, json={
+        "requested_time": f"{(date.today() - timedelta(days=1)).isoformat()}T10:00:00",
+        "reason": "طلب سأسحبه"}).json()
+    assert client.delete(f"/api/punch-requests/{second['id']}", headers=h).status_code == 200
+    mine = client.get("/api/punch-requests", headers=h).json()
+    assert {r["status"] for r in mine} == {"rejected", "cancelled"}
+    # ولا يرى طلبات غيره
+    assert all(r["employee_id"] == emp["id"] for r in mine)
+
+
+# --------------------------- المستحق حتى اليوم ---------------------------
+
+def test_salary_to_date_prorates_the_month(client, auth):
+    """راتب ١٠٠٠ في اليوم العاشر = ٣٣٣٫٣٣ ريال قبل الخصومات."""
+    from app import security_extra
+
+    security_extra.reset_all()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9360", "full_name": "موظف الاستحقاق", "phone": "0531110099",
+        "basic_salary": 700, "allowances": 300}).json()
+    token = client.post("/api/auth/login", data={
+        "username": "0531110099", "password": "0531110099"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+
+    with SessionLocal() as db:
+        from app.models import Employee as Emp
+        from app.services import payroll as payroll_service
+
+        row = db.get(Emp, emp["id"])
+        data = payroll_service.earned_to_date(db, row, on_date=date(2026, 9, 10))
+
+    assert data["monthly_salary"] == 1000
+    assert data["month_days"] == 30 and data["days_elapsed"] == 10
+    assert data["daily_rate"] == round(1000 / 30, 2)
+    assert data["gross_to_date"] == 333.33          # 1000 ÷ 30 × 10
+    assert data["days_remaining"] == 20
+    assert data["expected_full_month"] == 1000
+
+    # ومن شاشة الموظف: الأرقام نفسها بتاريخ اليوم
+    mine = client.get("/api/me/salary-to-date", headers=h).json()
+    assert mine["monthly_salary"] == 1000
+    assert mine["days_elapsed"] == min(date.today().day, 30)
+    assert mine["gross_to_date"] == round((1000 / 30) * mine["days_elapsed"], 2)
+    assert mine["net_to_date"] <= mine["gross_to_date"] + mine["overtime_amount"]
+
+    # والإدارة ترى الجميع
+    board = client.get("/api/payroll/to-date", headers=auth).json()
+    assert any(r["monthly_salary"] == 1000 for r in board)
+
+
+def test_salary_to_date_subtracts_purchases_and_loans(client, auth):
+    """المستحق حتى اليوم ينقص بالمشتريات والسلف الواقعة في الشهر."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9361", "full_name": "موظف الخصومات الجارية", "basic_salary": 3000}).json()
+    today = date.today()
+    _unlock_month(client, auth, today.year, today.month)
+    added = client.post("/api/purchases", headers=auth, json={
+        "employee_id": emp["id"], "purchase_date": today.isoformat(), "amount": 45,
+        "description": "مشتريات اليوم"})
+    assert added.status_code == 201, added.text
+
+    with SessionLocal() as db:
+        from app.models import Employee as Emp
+        from app.services import payroll as payroll_service
+
+        row = db.get(Emp, emp["id"])
+        data = payroll_service.earned_to_date(db, row)
+
+    assert data["purchases_deduction"] == 45
+    assert data["net_to_date"] == round(
+        max(data["gross_to_date"] + data["overtime_amount"] - data["deductions_total"], 0), 2)
+
+
+# --------------------------- لا غياب قبل بداية الدوام ---------------------------
+
+def test_no_absence_before_shift_starts(client, auth):
+    """الوردية المسائية لا تُكتب غياباً في الصباح — تبقى «لم يحن بعد»."""
+    now = datetime.now()
+    # وردية تبدأ بعد ساعتين من الآن
+    later = (now + timedelta(hours=2)).time()
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": f"وردية بعد ساعتين {now:%H%M%S}",
+        "start_time": f"{later.hour:02d}:{later.minute:02d}:00",
+        "end_time": "23:59:00", "work_days": "0,1,2,3,4,5,6"}).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9370", "full_name": "موظف الوردية المسائية", "shift_id": shift["id"]}).json()
+
+    today = date.today().isoformat()
+    row = client.get(f"/api/attendance/employee/{emp['id']}?date_from={today}&date_to={today}",
+                     headers=auth).json()[0]
+    assert row["status"] == "scheduled"      # لا «غائب»
+
+    # ومن بدأ دوامه ولم يبصم يبقى غائباً كما كان
+    early = client.post("/api/shifts", headers=auth, json={
+        "name": f"وردية بدأت {now:%H%M%S}", "start_time": "00:01:00",
+        "end_time": "23:58:00", "work_days": "0,1,2,3,4,5,6"}).json()
+    late_emp = client.post("/api/employees", headers=auth, json={
+        "code": "9371", "full_name": "موظف لم يبصم", "shift_id": early["id"]}).json()
+    row2 = client.get(
+        f"/api/attendance/employee/{late_emp['id']}?date_from={today}&date_to={today}",
+        headers=auth).json()[0]
+    assert row2["status"] == "absent"
+
+
+# --------------------------- طباعة جدول الرواتب ---------------------------
+
+def test_payroll_table_printable(client, auth):
+    """جدول الرواتب يُطبع في صفحة أفقية مرتّبة بمجاميع وخانات توقيع."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9380", "full_name": "موظف الجدول", "basic_salary": 5000,
+        "allowances": 1000}).json()
+    previous = (date.today().replace(day=1) - timedelta(days=1))
+    year, month = previous.year, previous.month
+    run = client.post(f"/api/payroll/runs?year={year}&month={month}", headers=auth).json()
+
+    res = client.get(f"/api/payroll/runs/{run['id']}/table.html", headers=auth)
+    assert res.status_code == 200
+    html = res.text
+    assert "جدول رواتب" in html and "موظف الجدول" in html
+    assert "الإجمالي" in html and "اعتمده" in html      # سطر المجاميع وخانات التوقيع
+    assert "size:A4 landscape" in html.replace(" ", "").replace("size:A4landscape", "size:A4 landscape")
+    assert "مشتريات" in html                            # عمود المشتريات ضمن الجدول
+
+    # الموظف لا يطبع جدول الرواتب
+    from app import security_extra
+
+    security_extra.reset_all()
+    client.post("/api/employees", headers=auth, json={
+        "code": "9381", "full_name": "موظف عادي", "phone": "0530009988"})
+    token = client.post("/api/auth/login", data={
+        "username": "0530009988", "password": "0530009988"}).json()["access_token"]
+    assert client.get(f"/api/payroll/runs/{run['id']}/table.html",
+                      headers={"Authorization": f"Bearer {token}"}).status_code == 403

@@ -39,6 +39,9 @@ ENTITY_LABELS = {
     "document": "وثيقة",
     "payroll": "مسير رواتب",
     "shift": "وردية",
+    "loan": "سلفة",
+    "purchase": "فاتورة مشتريات",
+    "punch_request": "طلب بصمة",
     "department": "إدارة",
 }
 

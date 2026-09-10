@@ -10,7 +10,7 @@ from html import escape
 
 from sqlalchemy.orm import Session
 
-from ..models import PayrollRun, Payslip
+from ..models import PayrollRun, PayrollStatus, Payslip
 from . import settings_store
 
 MONTHS = ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو",
@@ -125,6 +125,7 @@ def payslip_html(db: Session, slip: Payslip, run: PayrollRun) -> str:
         ("إجازة بدون راتب", slip.unpaid_leave_deduction),
         ("خصم المخالفات", slip.violation_deduction),
         ("قسط السلفة", slip.loan_deduction or 0),
+        ("مشتريات", slip.purchases_deduction or 0),
         ("خصومات أخرى", slip.other_deductions),
     ]
     total_earnings = round(sum(value for _, value in earnings), 2)
@@ -261,5 +262,143 @@ def document(db: Session, run: PayrollRun, slips: list[Payslip], title: str) -> 
     <button class="ghost" onclick="window.close()">إغلاق</button>
   </div>
   {body}
+</body>
+</html>"""
+
+
+# ------------------------------ جدول الرواتب للطباعة ------------------------------
+_TABLE_STYLE = """
+  *{box-sizing:border-box}
+  body{margin:0;background:#eef2f7;font-family:Tajawal,'Segoe UI',Tahoma,sans-serif;color:#1e293b}
+  .bar{position:sticky;top:0;display:flex;gap:10px;justify-content:center;padding:12px;
+    background:#0f172a}
+  .bar button{font:inherit;font-weight:700;border:none;border-radius:8px;padding:9px 20px;
+    background:#2563eb;color:#fff;cursor:pointer}
+  .bar button.ghost{background:#334155}
+  .sheet{background:#fff;margin:16px auto;padding:20px 22px;width:297mm;min-height:210mm;
+    box-shadow:0 8px 26px rgba(15,23,42,.12)}
+  header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;
+    border-bottom:2px solid #2563eb;padding-bottom:12px;margin-bottom:14px}
+  .brand{display:flex;align-items:center;gap:12px}
+  .logo{max-height:52px;max-width:140px;object-fit:contain}
+  h1{margin:0;font-size:19px}
+  .sub{color:#64748b;font-size:12.5px;margin-top:3px}
+  .meta{text-align:left;font-size:12px;color:#64748b;line-height:1.9}
+  .meta b{color:#1e293b}
+  table{width:100%;border-collapse:collapse;font-size:11.5px}
+  th,td{border:1px solid #e2e8f0;padding:6px 7px;text-align:center}
+  th{background:#f1f5f9;font-weight:700;color:#334155;font-size:11px}
+  td.name{text-align:start;font-weight:600;white-space:nowrap}
+  td.money{font-variant-numeric:tabular-nums}
+  tbody tr:nth-child(even){background:#f8fafc}
+  tfoot td{background:#eef2ff;font-weight:700;border-top:2px solid #2563eb}
+  .net{color:#16a34a;font-weight:700}
+  .ded{color:#b91c1c}
+  .sign{display:flex;gap:40px;margin-top:26px;font-size:12px;color:#475569}
+  .sign div{flex:1;border-top:1px solid #94a3b8;padding-top:7px;text-align:center}
+  .foot{margin-top:14px;color:#94a3b8;font-size:10.5px;text-align:center}
+  @media print{
+    @page{size:A4 landscape;margin:8mm}
+    body{background:#fff}
+    .bar{display:none}
+    .sheet{width:auto;min-height:0;margin:0;padding:0;box-shadow:none}
+  }
+"""
+
+_TABLE_COLUMNS = [
+    ("رقم الموظف", lambda s: escape(s.employee.code if s.employee else ""), "name"),
+    ("الاسم", lambda s: escape(s.employee.full_name if s.employee else ""), "name"),
+    ("الأساسي", lambda s: _money(s.basic_salary), "money"),
+    ("البدلات", lambda s: _money(s.allowances or 0), "money"),
+    ("حضور", lambda s: str(s.present_days), ""),
+    ("غياب", lambda s: str(s.absent_days), ""),
+    ("تأخير (د)", lambda s: str(s.late_minutes), ""),
+    ("إضافي (د)", lambda s: str(s.overtime_minutes), ""),
+    ("بدل إضافي", lambda s: _money(s.overtime_amount), "money"),
+    ("خصم غياب", lambda s: _money(s.absence_deduction), "money ded"),
+    ("خصم تأخير", lambda s: _money(s.late_deduction), "money ded"),
+    ("إجازة بلا راتب", lambda s: _money(s.unpaid_leave_deduction), "money ded"),
+    ("مخالفات", lambda s: _money(s.violation_deduction), "money ded"),
+    ("سلف", lambda s: _money(s.loan_deduction or 0), "money ded"),
+    ("مشتريات", lambda s: _money(s.purchases_deduction or 0), "money ded"),
+    ("إضافات", lambda s: _money(s.other_additions), "money"),
+    ("خصومات أخرى", lambda s: _money(s.other_deductions), "money ded"),
+    ("الصافي", lambda s: _money(s.net_pay), "money net"),
+]
+
+# الأعمدة التي يُجمع مجموعها في سطر الإجمالي
+_TABLE_SUMS = {
+    2: lambda s: s.basic_salary, 3: lambda s: s.allowances or 0,
+    8: lambda s: s.overtime_amount, 9: lambda s: s.absence_deduction,
+    10: lambda s: s.late_deduction, 11: lambda s: s.unpaid_leave_deduction,
+    12: lambda s: s.violation_deduction, 13: lambda s: s.loan_deduction or 0,
+    14: lambda s: s.purchases_deduction or 0, 15: lambda s: s.other_additions,
+    16: lambda s: s.other_deductions, 17: lambda s: s.net_pay,
+}
+
+
+def payroll_table(db: Session, run: PayrollRun, slips: list[Payslip]) -> str:
+    """جدول الرواتب كاملاً في صفحة أفقية مرتّبة، بمجاميع وخانات توقيع."""
+    company = settings_store.get(db, "company_name") or "نظام الموارد البشرية"
+    logo = settings_store.get(db, "logo_path")
+    logo_html = (f'<img class="logo" src="/uploads/{escape(logo)}" alt="" />' if logo else "")
+    period = f"{MONTHS[run.month - 1]} {run.year}"
+    status = "معتمد" if run.status == PayrollStatus.approved else "مسودة"
+
+    head = "".join(f"<th>{escape(title)}</th>" for title, _, _ in _TABLE_COLUMNS)
+    body = ""
+    for index, slip in enumerate(slips, start=1):
+        cells = "".join(
+            f'<td class="{cls}">{render(slip)}</td>' for _, render, cls in _TABLE_COLUMNS
+        )
+        body += f"<tr><td>{index}</td>{cells}</tr>"
+
+    foot_cells = ""
+    for index in range(len(_TABLE_COLUMNS)):
+        getter = _TABLE_SUMS.get(index)
+        if getter is None:
+            foot_cells += "<td></td>"
+        else:
+            total = round(sum(getter(slip) or 0 for slip in slips), 2)
+            cls = "money net" if index == 17 else "money"
+            foot_cells += f'<td class="{cls}">{_money(total)}</td>'
+
+    total_net = round(sum(slip.net_pay for slip in slips), 2)
+    return f"""<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>جدول رواتب {escape(period)}</title>
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet" />
+<style>{_TABLE_STYLE}</style>
+</head>
+<body>
+  <div class="bar">
+    <button onclick="window.print()">طباعة / حفظ PDF</button>
+    <button class="ghost" onclick="window.close()">إغلاق</button>
+  </div>
+  <div class="sheet">
+    <header>
+      <div class="brand">{logo_html}
+        <div><h1>{escape(company)}</h1>
+          <div class="sub">جدول رواتب {escape(period)} — {status}</div></div>
+      </div>
+      <div class="meta">
+        <div><span>عدد الموظفين: </span><b>{len(slips)}</b></div>
+        <div><span>إجمالي الصافي: </span><b>{_money(total_net)} ريال</b></div>
+        <div><span>تاريخ الطباعة: </span><b>{date.today():%Y-%m-%d}</b></div>
+      </div>
+    </header>
+    <table>
+      <thead><tr><th>م</th>{head}</tr></thead>
+      <tbody>{body}</tbody>
+      <tfoot><tr><td>الإجمالي</td>{foot_cells}</tr></tfoot>
+    </table>
+    <div class="sign">
+      <div>أعدّه</div><div>راجعه</div><div>اعتمده</div>
+    </div>
+    <div class="foot">إجمالي الصافي كتابةً: {escape(amount_in_words(total_net))}</div>
+  </div>
 </body>
 </html>"""

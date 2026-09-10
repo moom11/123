@@ -83,11 +83,13 @@ class PolicyScope(str, enum.Enum):
 
 
 class LoanStatus(str, enum.Enum):
-    """حالة السلفة."""
+    """حالة السلفة عبر دورتها: طلب ← اعتماد ← إقرار استلام ← خصم."""
 
-    active = "active"        # سارية، تُخصم أقساطها شهرياً
-    settled = "settled"      # سُدّدت بالكامل
-    cancelled = "cancelled"  # أُلغيت ولا تُخصم
+    pending = "pending"          # مرفوعة بانتظار الاعتماد
+    approved = "approved"        # اعتُمدت، بانتظار إقرار الموظف باستلامها
+    active = "active"            # أقرّ الموظف بالاستلام، وتُخصم أقساطها شهرياً
+    settled = "settled"          # سُدّدت بالكامل
+    cancelled = "cancelled"      # أُلغيت أو رُفضت، ولا تُخصم
 
 
 class DayStatus(str, enum.Enum):
@@ -636,6 +638,7 @@ class Payslip(Base):
     late_deduction: Mapped[float] = mapped_column(Float, default=0)
     unpaid_leave_deduction: Mapped[float] = mapped_column(Float, default=0)
     violation_deduction: Mapped[float] = mapped_column(Float, default=0)
+    purchases_deduction: Mapped[float] = mapped_column(Float, default=0)
     overtime_amount: Mapped[float] = mapped_column(Float, default=0)
     other_additions: Mapped[float] = mapped_column(Float, default=0)
     other_deductions: Mapped[float] = mapped_column(Float, default=0)
@@ -657,8 +660,54 @@ class EmployeeLoan(Base):
     start_year: Mapped[int] = mapped_column(Integer)             # أول شهر يُخصم فيه
     start_month: Mapped[int] = mapped_column(Integer)
     reason: Mapped[str | None] = mapped_column(String(255))
-    status: Mapped[LoanStatus] = mapped_column(Enum(LoanStatus), default=LoanStatus.active)
+    status: Mapped[LoanStatus] = mapped_column(Enum(LoanStatus), default=LoanStatus.pending)
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    # دورة الاعتماد ثم إقرار الموظف بالاستلام
+    approved_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime)
+    decision_note: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    employee: Mapped[Employee] = relationship()
+
+
+class EmployeePurchase(Base):
+    """مشتريات الموظف من المتجر أو المطعم، تُخصم من راتب الشهر."""
+
+    __tablename__ = "employee_purchases"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    purchase_date: Mapped[date] = mapped_column(Date, index=True)
+    amount: Mapped[float] = mapped_column(Float)
+    description: Mapped[str] = mapped_column(String(255))          # وصف الفاتورة
+    invoice_no: Mapped[str | None] = mapped_column(String(64))     # رقم الفاتورة إن وُجد
+    is_cancelled: Mapped[bool] = mapped_column(Boolean, default=False)
+    cancel_reason: Mapped[str | None] = mapped_column(String(255))
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    employee: Mapped[Employee] = relationship()
+
+
+class PunchRequest(Base):
+    """طلب «نسيت البصمة»: الموظف يطلب تسجيل بصمة فائتة، والإدارة تعتمدها."""
+
+    __tablename__ = "punch_requests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    requested_time: Mapped[datetime] = mapped_column(DateTime, index=True)
+    kind: Mapped[str] = mapped_column(String(20), default="auto")   # auto/clock_in/break_start/break_end/clock_out
+    reason: Mapped[str] = mapped_column(Text)
+    status: Mapped[LeaveStatus] = mapped_column(
+        Enum(LeaveStatus), default=LeaveStatus.pending, index=True
+    )
+    decided_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime)
+    decision_note: Mapped[str | None] = mapped_column(Text)
+    punch_id: Mapped[int | None] = mapped_column(ForeignKey("punches.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     employee: Mapped[Employee] = relationship()
