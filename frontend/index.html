@@ -82,6 +82,10 @@
         <div style="display:flex;align-items:center;gap:10px;min-width:0">
           <button class="icon-btn" id="menuBtn" title="القائمة" aria-label="القائمة"></button>
           <button class="icon-btn" id="collapseBtn" title="تصغير القائمة" aria-label="تصغير القائمة"></button>
+          <div class="brandbar hidden" id="brandBar">
+            <span class="bm" id="brandBarMark"></span>
+            <div><b id="brandBarName">Mara HR</b><span id="brandBarSub">الموارد البشرية</span></div>
+          </div>
           <h1 id="pageTitle">لوحة المؤشرات</h1>
         </div>
         <div class="topbar-actions">
@@ -92,6 +96,7 @@
           <button class="icon-btn" id="langBtn" title="English / العربية"></button>
           <button class="bell" id="bellBtn" title="الإشعارات"><span class="badge hidden" id="bellCount">0</span></button>
           <button class="btn sm" id="selfPunchBtn">تسجيل بصمة</button>
+          <span class="topavatar hidden" id="topAvatar" onclick="go('account')"></span>
         </div>
       </div>
       <div class="content" id="view"></div>

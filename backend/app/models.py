@@ -639,6 +639,9 @@ class Payslip(Base):
     unpaid_leave_deduction: Mapped[float] = mapped_column(Float, default=0)
     violation_deduction: Mapped[float] = mapped_column(Float, default=0)
     purchases_deduction: Mapped[float] = mapped_column(Float, default=0)
+    # أيام «تحتاج مراجعة»: بدأ استراحة ولم يعد حتى نهاية الوردية
+    open_break_days: Mapped[float] = mapped_column(Float, default=0)
+    open_break_deduction: Mapped[float] = mapped_column(Float, default=0)
     overtime_amount: Mapped[float] = mapped_column(Float, default=0)
     other_additions: Mapped[float] = mapped_column(Float, default=0)
     other_deductions: Mapped[float] = mapped_column(Float, default=0)

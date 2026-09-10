@@ -65,23 +65,27 @@
   --shadow-3:0 12px 34px rgba(0,0,0,.5);
   color-scheme:dark;
 }
-/* تفاصيل يجب أن تتبع الوضع الداكن */
-:root[data-theme="dark"] .topbar,
-:root:not([data-theme="light"]) .topbar{background:rgba(30,41,59,.92)}
-:root[data-theme="dark"] .tabbar,
-:root:not([data-theme="light"]) .tabbar{background:rgba(30,41,59,.96)}
-:root[data-theme="dark"] tbody tr:hover,
-:root:not([data-theme="light"]) tbody tr:hover{background:rgba(59,130,246,.12)}
-:root[data-theme="dark"] .sk,
-:root:not([data-theme="light"]) .sk{background:linear-gradient(90deg,#22314a 25%,#2c3d59 37%,#22314a 63%)}
+/* تفاصيل يجب أن تتبع الوضع الداكن.
+   الاختيار الصريح للوضع الداكن يعمل دائماً، أما «تلقائي» فداخل استعلام الوسائط
+   وحده — وإلا لبقيت هذه العناصر داكنة على جهاز فاتح. */
+:root[data-theme="dark"] .topbar{background:rgba(30,41,59,.92)}
+:root[data-theme="dark"] .tabbar{background:rgba(30,41,59,.96)}
+:root[data-theme="dark"] tbody tr:hover{background:rgba(59,130,246,.12)}
+:root[data-theme="dark"] .sk{background:linear-gradient(90deg,#22314a 25%,#2c3d59 37%,#22314a 63%)}
 :root[data-theme="dark"] .install-hint,
-:root[data-theme="dark"] .ios-hint,
-:root:not([data-theme="light"]) .install-hint,
-:root:not([data-theme="light"]) .ios-hint{background:rgba(59,130,246,.12);border-color:rgba(59,130,246,.35)}
-:root[data-theme="dark"] .login-card .quote,
-:root:not([data-theme="light"]) .login-card .quote{background:rgba(59,130,246,.14);color:#bfdbfe}
-:root[data-theme="dark"] code,
-:root:not([data-theme="light"]) code{background:#22314a}
+:root[data-theme="dark"] .ios-hint{background:rgba(59,130,246,.12);border-color:rgba(59,130,246,.35)}
+:root[data-theme="dark"] .login-card .quote{background:rgba(59,130,246,.14);color:#bfdbfe}
+:root[data-theme="dark"] code{background:#22314a}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]) .topbar{background:rgba(30,41,59,.92)}
+  :root:not([data-theme="light"]) .tabbar{background:rgba(30,41,59,.96)}
+  :root:not([data-theme="light"]) tbody tr:hover{background:rgba(59,130,246,.12)}
+  :root:not([data-theme="light"]) .sk{background:linear-gradient(90deg,#22314a 25%,#2c3d59 37%,#22314a 63%)}
+  :root:not([data-theme="light"]) .install-hint,
+  :root:not([data-theme="light"]) .ios-hint{background:rgba(59,130,246,.12);border-color:rgba(59,130,246,.35)}
+  :root:not([data-theme="light"]) .login-card .quote{background:rgba(59,130,246,.14);color:#bfdbfe}
+  :root:not([data-theme="light"]) code{background:#22314a}
+}
 
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
@@ -746,3 +750,106 @@ html[dir="rtl"] .helppanel{--hp-from:-100%}
 .hp-body th,.hp-body td{border:1px solid var(--border);padding:6px 8px;text-align:start}
 .hp-body th{background:var(--surface-2);font-weight:600}
 @media (max-width:640px){.helppanel{width:100%;inset-block-start:0}}
+
+/* ------------------------------ الشاشة الرئيسية للموظف (تصور مارا) ------------------------------ */
+.hi{margin:2px 2px 14px}
+.hi h2{margin:0 0 4px;font-size:21px;font-weight:700;letter-spacing:-.3px}
+.hi p{margin:0;color:var(--muted);font-size:13px}
+
+/* بطاقة الحالة الهادئة */
+.state-soft{display:flex;align-items:center;gap:14px;justify-content:space-between;
+  background:var(--ok-soft);border-radius:var(--radius-lg);padding:16px 18px;margin-bottom:12px;
+  animation:rise var(--normal) var(--ease) both}
+.state-soft .txt b{display:flex;align-items:center;gap:9px;font-size:19px;font-weight:700;
+  margin-bottom:5px;color:var(--text)}
+.state-soft .txt span{font-size:13px;color:var(--text-2)}
+.state-soft .dot{width:11px;height:11px;border-radius:50%;background:var(--ok);flex:none}
+.state-soft .mark{width:58px;height:58px;border-radius:18px;display:grid;place-items:center;
+  background:rgba(255,255,255,.65);color:var(--ok);flex:none}
+.state-soft .mark svg.i{width:28px;height:28px}
+.state-soft.break{background:var(--warn-soft)}
+.state-soft.break .dot{background:var(--warn)} .state-soft.break .mark{color:var(--warn)}
+.state-soft.off,.state-soft:not(.in):not(.break){background:var(--surface-2)}
+.state-soft:not(.in):not(.break) .dot{background:var(--muted)}
+.state-soft:not(.in):not(.break) .mark{color:var(--muted)}
+[data-theme="dark"] .state-soft .mark,
+:root:not([data-theme="light"]) .state-soft .mark{background:rgba(255,255,255,.10)}
+
+/* بطاقتا الأرقام */
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+.tile{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:13px 14px}
+.tile .th{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);
+  margin-bottom:8px}
+.tile .ti{width:30px;height:30px;border-radius:10px;display:grid;place-items:center;flex:none}
+.tile .ti.blue{background:var(--primary-soft);color:var(--primary)}
+.tile .ti.violet{background:#ede9fe;color:#7c3aed}
+[data-theme="dark"] .tile .ti.violet,
+:root:not([data-theme="light"]) .tile .ti.violet{background:rgba(124,58,237,.18);color:#a78bfa}
+.tile b{font-size:17px;font-weight:700;display:block}
+.tile .progress{margin-top:8px}
+
+/* أزرار البصمة الكبيرة */
+.punch-btn.big{background:var(--primary);color:#fff;box-shadow:0 8px 20px rgba(37,99,235,.28);
+  border-radius:16px;min-height:58px;font-size:17px}
+.punch-btn.ghost{background:var(--surface);color:var(--text-2);border:1px solid var(--border);
+  box-shadow:none;margin-top:9px;min-height:48px;font-size:15px}
+.soft-alert{background:var(--warn-soft);color:#92400e;border-radius:var(--radius);
+  padding:11px 13px;font-size:13px;display:flex;gap:9px;align-items:center;margin:12px 0}
+[data-theme="dark"] .soft-alert,
+:root:not([data-theme="light"]) .soft-alert{color:#fcd34d}
+.soft-alert svg.i{width:18px;height:18px;flex:none}
+
+/* أربع بطاقات وصول سريع */
+.quick4{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin:14px 0}
+.quick4 .q{position:relative;display:flex;flex-direction:column;align-items:center;gap:7px;
+  padding:13px 6px;border-radius:var(--radius);font-size:12px;font-weight:600;cursor:pointer;
+  text-align:center;transition:transform var(--fast) var(--ease)}
+.quick4 .q:active{transform:scale(.96)}
+.quick4 .qi{width:34px;height:34px;display:grid;place-items:center}
+.quick4 .qi svg.i{width:23px;height:23px}
+.quick4 .q.amber{background:#fff7ed;color:#c2410c}
+.quick4 .q.blue{background:var(--primary-soft);color:var(--primary)}
+.quick4 .q.rose{background:#fef2f2;color:#dc2626}
+.quick4 .q.green{background:var(--ok-soft);color:#15803d}
+[data-theme="dark"] .quick4 .q.amber,:root:not([data-theme="light"]) .quick4 .q.amber{background:rgba(194,65,12,.16);color:#fdba74}
+[data-theme="dark"] .quick4 .q.rose,:root:not([data-theme="light"]) .quick4 .q.rose{background:rgba(220,38,38,.16);color:#fca5a5}
+[data-theme="dark"] .quick4 .q.green,:root:not([data-theme="light"]) .quick4 .q.green{color:#86efac}
+.quick4 .badge{position:absolute;inset-block-start:6px;inset-inline-end:6px;min-width:19px;height:19px;
+  border-radius:10px;background:var(--danger);color:#fff;font-size:11px;font-weight:700;
+  display:grid;place-items:center;padding:0 5px}
+
+/* صفوف الحركات والإشعارات */
+.row-item .ri.ok{background:var(--ok-soft);color:var(--ok)}
+.row-item .ri.warn{background:var(--warn-soft);color:var(--warn)}
+.row-item .ri.danger{background:var(--danger-soft);color:var(--danger)}
+.row-item .ri.info{background:var(--info-soft);color:var(--info)}
+.row-item .rv small{display:block;font-weight:400;color:var(--muted);font-size:11px;margin-top:2px}
+.row-item.unread{background:var(--primary-soft)}
+
+/* ترويسة العلامة على الجوال (شاشة الموظف الرئيسية) */
+.brandbar{display:flex;align-items:center;gap:9px;min-width:0}
+.brandbar .bm{width:36px;height:36px;border-radius:11px;display:grid;place-items:center;flex:none;
+  background:var(--primary-soft);color:var(--primary);overflow:hidden}
+.brandbar .bm img{width:100%;height:100%;object-fit:contain}
+.brandbar .bm svg.i{width:21px;height:21px}
+.brandbar b{display:block;font-size:15.5px;line-height:1.2}
+.brandbar span{font-size:11.5px;color:var(--muted)}
+.brandbar.hidden{display:none}
+
+/* الحرف الشخصي في الترويسة */
+@media (min-width:641px){ .topavatar{display:none} }
+.topavatar{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;flex:none;
+  background:var(--surface-3);color:var(--text-2);font-weight:700;font-size:14px;cursor:pointer}
+
+
+/* على الجوال: ترويسة مختصرة كما في تصور مارا — علامة + جرس + حرف */
+@media (max-width:640px){
+  .topbar-actions{gap:8px}
+  .topbar-actions .who{display:none}
+  body.tidy-top #langBtn,
+  body.tidy-top #themeBtn,
+  body.tidy-top #helpBtn,
+  body.tidy-top #collapseBtn,
+  body.tidy-top #selfPunchBtn{display:none}
+}

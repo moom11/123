@@ -12,6 +12,8 @@ from ..models import (
     AttendanceDay,
     AttendanceEvent,
     DayStatus,
+    EventType,
+    Notification,
     Employee,
     LeaveRequest,
     LeaveStatus,
@@ -21,11 +23,19 @@ from ..models import (
     User,
     WorkState,
 )
-from ..schemas import HomeDay, MyHomeOut, MyProfileIn, MyProfileOut, SalaryToDateOut
+from ..schemas import (
+    HomeDay,
+    HomeEvent,
+    MyHomeOut,
+    MyProfileIn,
+    MyProfileOut,
+    SalaryToDateOut,
+)
 from ..security import get_current_user
 from ..services import accounts, audit, notifications, policies, settings_store
 from ..services import attendance as attendance_service
 from ..services import payroll as payroll_service
+from ..services import workstate
 
 router = APIRouter(prefix="/api/me", tags=["me"])
 
@@ -263,6 +273,45 @@ def my_home(db: Session = Depends(get_db), user: User = Depends(get_current_user
         if minutes > rules.grace_in:
             alert = f"بدأ دوامك قبل {minutes} دقيقة ولم تسجّل حضورك"
 
+    # ------------------------- أرقام الشاشة الرئيسية -------------------------
+    day_events = db.scalars(
+        select(AttendanceEvent)
+        .where(AttendanceEvent.employee_id == employee.id, AttendanceEvent.work_date == today)
+        .order_by(AttendanceEvent.event_time)
+    ).all()
+    clock_in_count = sum(1 for e in day_events if e.event_type == EventType.clock_in)
+
+    # مدة العمل حتى هذه اللحظة: من الحضور إلى الآن (أو الانصراف) ناقص الاستراحات
+    worked_live = today_row.worked_minutes if today_row else 0
+    if today_row and today_row.check_in and not today_row.check_out:
+        end = now if work_state is not WorkState.on_break else (
+            break_started_at or now
+        )
+        elapsed = max(0, int((end - today_row.check_in).total_seconds() // 60))
+        worked_live = max(0, elapsed - (today_row.break_minutes or 0))
+
+    recent = db.scalars(
+        select(AttendanceEvent)
+        .where(AttendanceEvent.employee_id == employee.id)
+        .order_by(AttendanceEvent.event_time.desc(), AttendanceEvent.id.desc())
+        .limit(6)
+    ).all()
+    recent_events = [
+        HomeEvent(
+            at=row.event_time,
+            type=row.event_type.value,
+            label=workstate.EVENT_LABELS[row.event_type],
+            site_name=row.site_name,
+        )
+        for row in recent
+    ]
+
+    unread = len(db.scalars(
+        select(Notification).where(
+            Notification.user_id == user.id, Notification.is_read.is_(False)
+        )
+    ).all())
+
     week: list[HomeDay] = []
     for offset in range(7):
         day = start + timedelta(days=offset)
@@ -311,6 +360,11 @@ def my_home(db: Session = Depends(get_db), user: User = Depends(get_current_user
         last_punch_kind=last_kind,
         last_punch_site=last_site,
         pending_requests=pending,
+        unread_notifications=unread,
+        worked_minutes_live=worked_live,
+        clock_in_count=clock_in_count,
+        expected_clock_ins=1,
+        recent_events=recent_events,
         alert=alert,
         week=week,
     )

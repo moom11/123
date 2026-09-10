@@ -359,6 +359,7 @@ class SettingsOut(BaseModel):
     early_leave_grace_minutes: int = 10
     late_grace_minutes: int = 10
     punch_debounce_seconds: int = 20
+    open_break_deduction_days: float = 0.5
     break_violation_enabled: bool = True
     break_violation_after_minutes: int = 15
     break_alert_employee: bool = True
@@ -392,6 +393,7 @@ class SettingsIn(BaseModel):
     early_leave_grace_minutes: int | None = Field(default=None, ge=0, le=240)
     late_grace_minutes: int | None = Field(default=None, ge=0, le=240)
     punch_debounce_seconds: int | None = Field(default=None, ge=0, le=300)
+    open_break_deduction_days: float | None = Field(default=None, ge=0, le=3)
     break_violation_enabled: bool | None = None
     break_violation_after_minutes: int | None = Field(default=None, ge=1, le=240)
     break_alert_employee: bool | None = None
@@ -780,6 +782,8 @@ class PayslipOut(ORMModel):
     unpaid_leave_deduction: float
     violation_deduction: float
     purchases_deduction: float = 0
+    open_break_days: float = 0
+    open_break_deduction: float = 0
     overtime_amount: float
     other_additions: float
     other_deductions: float
@@ -918,6 +922,8 @@ class SalaryToDateOut(BaseModel):
     violation_deduction: float = 0
     loan_deduction: float = 0
     purchases_deduction: float = 0
+    open_break_days: int = 0
+    open_break_deduction: float = 0
     deductions_total: float = 0
     net_to_date: float = 0
     expected_full_month: float = 0
@@ -985,6 +991,15 @@ class HomeDay(BaseModel):
     is_today: bool = False
 
 
+class HomeEvent(BaseModel):
+    """حركة واحدة في «آخر الحركات»."""
+
+    at: datetime
+    type: str            # CLOCK_IN / BREAK_START / BREAK_END / CLOCK_OUT
+    label: str
+    site_name: str | None = None
+
+
 class MyHomeOut(BaseModel):
     employee_name: str
     job_title: str | None = None
@@ -1016,6 +1031,12 @@ class MyHomeOut(BaseModel):
     last_punch_kind: str | None = None
     last_punch_site: str | None = None
     pending_requests: int = 0
+    unread_notifications: int = 0
+    # أرقام الشاشة الرئيسية
+    worked_minutes_live: int = 0       # مدة العمل حتى اللحظة (تشمل الجارية)
+    clock_in_count: int = 0            # عدد مرات تسجيل الحضور اليوم
+    expected_clock_ins: int = 1
+    recent_events: list[HomeEvent] = []
     alert: str | None = None
     week: list[HomeDay] = []
 

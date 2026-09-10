@@ -48,6 +48,8 @@ def compute_payslip(db: Session, employee: Employee, year: int, month: int) -> d
 
     present_days = sum(1 for r in rows if r.status in (DayStatus.present, DayStatus.late, DayStatus.missing_out))
     absent_days = sum(1 for r in rows if r.status == DayStatus.absent)
+    # بدأ استراحة ولم يعد حتى نهاية الوردية: يُخصم عنه نصف يوم افتراضياً
+    open_break_days = sum(1 for r in rows if r.status == DayStatus.needs_review)
     late_minutes = sum(r.late_minutes for r in rows)
     overtime_minutes = sum(r.overtime_minutes for r in rows)
 
@@ -82,13 +84,15 @@ def compute_payslip(db: Session, employee: Employee, year: int, month: int) -> d
     loan_deduction = loans_service.monthly_deduction(db, employee.id, year, month)
 
     purchases_deduction = purchases_service.monthly_deduction(db, employee.id, year, month)
+    open_break_factor = float(settings_store.get(db, "open_break_deduction_days") or 0.5)
+    open_break_deduction = round(open_break_days * daily * open_break_factor, 2)
 
     basic = round(employee.basic_salary or 0, 2)
     allowances = round(employee.allowances or 0, 2)
     net = round(
         basic + allowances + overtime_amount
         - absence_deduction - unpaid_leave_deduction - late_deduction - violation_deduction
-        - loan_deduction - purchases_deduction,
+        - loan_deduction - purchases_deduction - open_break_deduction,
         2,
     )
     return {
@@ -107,6 +111,8 @@ def compute_payslip(db: Session, employee: Employee, year: int, month: int) -> d
         "violation_deduction": violation_deduction,
         "loan_deduction": loan_deduction,
         "purchases_deduction": purchases_deduction,
+        "open_break_days": open_break_days,
+        "open_break_deduction": open_break_deduction,
         "overtime_amount": overtime_amount,
         "other_additions": 0.0,
         "other_deductions": 0.0,
@@ -169,11 +175,13 @@ def totals(db: Session, run_id: int) -> dict:
         "allowances_total": round(sum(s.allowances or 0 for s in slips), 2),
         "loans_total": round(sum(s.loan_deduction or 0 for s in slips), 2),
         "purchases_total": round(sum(s.purchases_deduction or 0 for s in slips), 2),
+        "open_break_total": round(sum(s.open_break_deduction or 0 for s in slips), 2),
         "deductions_total": round(
             sum(
                 s.absence_deduction + s.late_deduction + s.unpaid_leave_deduction
                 + s.violation_deduction + (s.loan_deduction or 0)
-                + (s.purchases_deduction or 0) + s.other_deductions
+                + (s.purchases_deduction or 0) + (s.open_break_deduction or 0)
+                + s.other_deductions
                 for s in slips
             ),
             2,
@@ -210,6 +218,7 @@ def earned_to_date(db: Session, employee: Employee, on_date: date | None = None)
         )
     ).all()
     absent_days = sum(1 for r in rows if r.status == DayStatus.absent)
+    open_break_days = sum(1 for r in rows if r.status == DayStatus.needs_review)
     late_minutes = sum(r.late_minutes for r in rows)
     overtime_minutes = sum(r.overtime_minutes for r in rows)
 
@@ -223,10 +232,12 @@ def earned_to_date(db: Session, employee: Employee, on_date: date | None = None)
     violation_deduction = violations.monthly_deduction(db, employee.id, year, month)
     loan_deduction = loans_service.monthly_deduction(db, employee.id, year, month)
     purchases_deduction = purchases_service.deduction_until(db, employee.id, year, month, today)
+    open_break_factor = float(settings_store.get(db, "open_break_deduction_days") or 0.5)
+    open_break_deduction = round(open_break_days * daily * open_break_factor, 2)
 
     deductions = round(
         absence_deduction + late_deduction + violation_deduction
-        + loan_deduction + purchases_deduction, 2
+        + loan_deduction + purchases_deduction + open_break_deduction, 2
     )
     net = round(max(gross + overtime_amount - deductions, 0), 2)
 
@@ -250,6 +261,8 @@ def earned_to_date(db: Session, employee: Employee, on_date: date | None = None)
         "violation_deduction": violation_deduction,
         "loan_deduction": loan_deduction,
         "purchases_deduction": purchases_deduction,
+        "open_break_days": open_break_days,
+        "open_break_deduction": open_break_deduction,
         "deductions_total": deductions,
         "net_to_date": net,
         "expected_full_month": round(monthly, 2),

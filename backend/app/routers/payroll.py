@@ -61,6 +61,8 @@ def payslip_out(slip: Payslip) -> PayslipOut:
         unpaid_leave_deduction=slip.unpaid_leave_deduction,
         violation_deduction=slip.violation_deduction,
         purchases_deduction=slip.purchases_deduction or 0,
+        open_break_days=slip.open_break_days or 0,
+        open_break_deduction=slip.open_break_deduction or 0,
         overtime_amount=slip.overtime_amount,
         other_additions=slip.other_additions,
         other_deductions=slip.other_deductions,

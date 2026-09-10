@@ -3039,3 +3039,61 @@ def test_payroll_table_printable(client, auth):
         "username": "0530009988", "password": "0530009988"}).json()["access_token"]
     assert client.get(f"/api/payroll/runs/{run['id']}/table.html",
                       headers={"Authorization": f"Bearer {token}"}).status_code == 403
+
+
+def test_open_break_day_deducts_half_a_day(client, auth):
+    """من بدأ استراحة ولم يعد حتى نهاية الوردية يُخصم عنه نصف يوم."""
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية نصف اليوم", "start_time": "08:00:00", "end_time": "17:00:00",
+        "work_days": "0,1,2,3,4,5,6"}).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9390", "full_name": "موظف نصف اليوم", "shift_id": shift["id"],
+        "basic_salary": 3000}).json()
+
+    previous = date.today().replace(day=1) - timedelta(days=1)
+    year, month = previous.year, previous.month
+    _unlock_month(client, auth, year, month)
+    day = previous.replace(day=8)
+
+    # حضر ثم بدأ استراحة ولم يعد
+    _punch(client, auth, emp["id"], f"{day}T08:00:00")
+    _punch(client, auth, emp["id"], f"{day}T11:00:00")
+
+    row = client.get(f"/api/attendance/employee/{emp['id']}?date_from={day}&date_to={day}",
+                     headers=auth).json()[0]
+    assert row["status"] == "needs_review" and row["open_break"] is True
+
+    run = client.post(f"/api/payroll/runs?year={year}&month={month}", headers=auth).json()
+    slip = next(s for s in client.get(
+        f"/api/payroll/runs/{run['id']}/payslips", headers=auth).json()
+        if s["employee_code"] == "9390")
+
+    daily = 3000 / 30
+    assert slip["open_break_days"] == 1
+    assert slip["open_break_deduction"] == round(daily * 0.5, 2)     # نصف يوم
+    assert slip["net_pay"] == max(0, round(
+        slip["basic_salary"] + slip["allowances"] + slip["overtime_amount"]
+        - slip["absence_deduction"] - slip["late_deduction"] - slip["unpaid_leave_deduction"]
+        - slip["violation_deduction"] - slip["loan_deduction"] - slip["purchases_deduction"]
+        - slip["open_break_deduction"], 2))
+
+    # النسبة قابلة للضبط: يوم كامل بدل نصف
+    client.put("/api/settings", headers=auth, json={"open_break_deduction_days": 1})
+    rebuilt = client.post(f"/api/payroll/runs?year={year}&month={month}", headers=auth).json()
+    slip = next(s for s in client.get(
+        f"/api/payroll/runs/{rebuilt['id']}/payslips", headers=auth).json()
+        if s["employee_code"] == "9390")
+    assert slip["open_break_deduction"] == round(daily, 2)
+
+    # وبلا خصم إطلاقاً عند ضبطها صفراً (مراجعة يدوية فقط)
+    client.put("/api/settings", headers=auth, json={"open_break_deduction_days": 0})
+    rebuilt = client.post(f"/api/payroll/runs?year={year}&month={month}", headers=auth).json()
+    slip = next(s for s in client.get(
+        f"/api/payroll/runs/{rebuilt['id']}/payslips", headers=auth).json()
+        if s["employee_code"] == "9390")
+    assert slip["open_break_deduction"] == 0
+    client.put("/api/settings", headers=auth, json={"open_break_deduction_days": 0.5})
+
+    # ويظهر في القسيمة المطبوعة وفي جدول الرواتب
+    doc = client.get(f"/api/payroll/payslips/{slip['id']}/print", headers=auth)
+    assert doc.status_code == 200 and "استراحة بلا عودة" in doc.text

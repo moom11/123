@@ -31,6 +31,8 @@ const PAGES = [
   { id: 'reports',    title: 'التقارير',       icon: 'reports', group: 'الإدارة',  roles: ['admin','hr','manager'] },
   { id: 'settings',   title: 'الإعدادات',      icon: 'settings', group: 'الإدارة',  roles: ['admin','hr'] },
   { id: 'myProfile',  title: 'بياناتي',        icon: 'idcard', group: 'شؤون الموظفين', roles: ['employee','manager','hr','admin'] },
+  { id: 'notifications', title: 'الإشعارات',   icon: 'bell', group: 'عام', roles: ['employee'] },
+  { id: 'more',       title: 'المزيد',         icon: 'grid', group: 'عام', roles: ['employee'] },
   { id: 'account',    title: 'حسابي',          icon: 'key', group: 'الإدارة',  roles: ['admin','hr','manager','employee'] },
 ];
 const NAV_GROUPS = ['عام', 'الحضور', 'الإجازات', 'شؤون الموظفين', 'الإدارة'];
@@ -59,7 +61,7 @@ const PENALTY_ACTIONS = { warning:'إنذار كتابي', deduction_percent_day
   deduction_days:'خصم أجر أيام', suspension:'إيقاف بدون أجر', termination:'الفصل من العمل' };
 const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
 const money = (v) => (Number(v || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const APP_VERSION = '2026.09.10';
+const APP_VERSION = '2026.09.10b';
 
 /* يفرض تحديث عامل الخدمة فور توفر نسخة جديدة (مهم على آيفون) */
 function watchForUpdates() {
@@ -379,6 +381,17 @@ function go(page) {
   const token = (state.nav = (state.nav || 0) + 1);
   const meta = PAGES.find((p) => p.id === page);
   const employeeHome = page === 'dashboard' && state.user && state.user.role === 'employee';
+  // في شاشة الموظف الرئيسية تظهر علامة المنشأة بدل عنوان الصفحة
+  el('brandBar').classList.toggle('hidden', !employeeHome);
+  el('pageTitle').classList.toggle('hidden', employeeHome);
+  // الترويسة المختصرة على الجوال للموظف: علامة + جرس + حرف فقط
+  document.body.classList.toggle('tidy-top', !!(state.user && state.user.role === 'employee'));
+  const avatarBox = el('topAvatar');
+  if (avatarBox && state.user) {
+    avatarBox.textContent = initials(state.user.employee_name || state.user.username);
+    avatarBox.title = state.user.employee_name || state.user.username;
+    avatarBox.classList.toggle('hidden', state.user.role !== 'employee');
+  }
   el('pageTitle').textContent = employeeHome
     ? 'الرئيسية'
     : (meta ? meta.title : (EXTRA_TITLES[page] || ''));
@@ -560,8 +573,8 @@ const TABBAR_PAGES = {
   admin: ['dashboard', 'attendance', 'leaves', 'employees'],
   hr: ['dashboard', 'attendance', 'leaves', 'employees'],
   manager: ['dashboard', 'attendance', 'leaves', 'reports'],
-  // شريط الموظف: الرئيسية — الحضور — الطلبات — جدولي — حسابي
-  employee: ['dashboard', 'attendance', 'myLeaves', 'schedule', 'account'],
+  // شريط الموظف: الرئيسية — الإشعارات — الطلبات — المزيد — حسابي
+  employee: ['dashboard', 'notifications', 'myLeaves', 'more', 'account'],
 };
 
 function buildTabbar() {
@@ -586,9 +599,10 @@ function buildTabbar() {
   markTabbar(state.page);
 }
 const TAB_LABELS = { dashboard: 'الرئيسية', attendance: 'الحضور', myLeaves: 'الطلبات',
-  schedule: 'جدولي', account: 'حسابي' };
+  schedule: 'جدولي', notifications: 'الإشعارات', more: 'المزيد', account: 'حسابي' };
+const TAB_ICONS = { dashboard: 'home' };   // الموظف: منزل للرئيسية بدل أيقونة اللوحة
 const tabLink = (p) =>
-  `<a data-page="${p.id}"><span class="ico">${icon(p.icon)}</span>${
+  `<a data-page="${p.id}"><span class="ico">${icon(TAB_ICONS[p.id] || p.icon)}</span>${
     esc(TAB_LABELS[p.id] || p.title.split(' ')[0])}</a>`;
 function markTabbar(page) {
   el('tabbar').querySelectorAll('a').forEach((a) =>
@@ -1130,36 +1144,100 @@ function punchSuccess(result) {
   setTimeout(() => box.remove(), 2600);
 }
 
+const GREETINGS = [[4, 'صباح الخير'], [12, 'مساء الخير'], [17, 'مساء الخير'], [23, 'مساء الخير']];
+const greeting = () => {
+  const h = new Date().getHours();
+  return h < 12 ? 'صباح الخير' : 'مساء الخير';
+};
+const AR_DOW = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+const longDate = (d = new Date()) =>
+  `${AR_DOW[d.getDay()]}، ${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+const EVENT_TONE = { CLOCK_IN: 'ok', BREAK_START: 'warn', BREAK_END: 'info', CLOCK_OUT: 'danger' };
+const EVENT_ICON = { CLOCK_IN: 'login', BREAK_START: 'coffee', BREAK_END: 'play', CLOCK_OUT: 'logout' };
+
+/** مدة بصيغة «3 ساعات و18 دقيقة» */
+function durationLabel(minutes) {
+  const m = Math.max(0, Math.round(minutes || 0));
+  const h = Math.floor(m / 60);
+  const rest = m % 60;
+  if (!h) return `${rest} دقيقة`;
+  const hourWord = h === 1 ? 'ساعة' : h === 2 ? 'ساعتان' : h <= 10 ? `${h} ساعات` : `${h} ساعة`;
+  return rest ? `${hourWord} و${rest} دقيقة` : hourWord;
+}
+
 views.home = async () => {
   const home = await api('/api/me/home');
   const tone = HOME_STATE_TONE[home.state] || '';
   const timeOf = (value) => (value ? fmtTime(value) : '—');
+  const sinceLabel = home.state === 'break'
+    ? (home.break_started_at ? `منذ ${fmtTime(home.break_started_at)}` : '')
+    : (home.check_in ? `منذ ${fmtTime(home.check_in)}` : (home.state_detail || ''));
 
   render(`
     ${iosInstallHint()}
-    <div class="status-card ${tone}">
-      <div class="who">${avatar(home.employee_name)}
-        <div><b>${esc(home.employee_name)}</b>
-          <span>${esc(home.job_title || '')}</span></div></div>
-      <div class="state-value">${esc(home.state_label)}</div>
-      ${home.state_detail ? `<div class="state-detail">${esc(home.state_detail)}</div>` : ''}
-      <div class="meta">
-        <span>${icon('clock')} ${esc(home.shift_label || '')}</span>
-        ${home.site_name ? `<span>${icon('location')} ${esc(home.site_name)}</span>` : ''}
-        <span>${icon(home.requires_location ? 'shield' : 'check')} ${
-          home.requires_location ? 'يتحقق من موقعك' : 'بلا تحقق موقع'}</span>
-      </div>
-      ${home.punch_enabled
-        ? `<button class="punch-btn" id="homePunch" data-intent="${esc(home.action)}">${
-             icon(ACTION_ICONS[home.action] || 'fingerprint')} ${esc(home.action_label)}</button>
-           ${home.secondary_action ? `<button class="punch-btn second" id="homePunch2"
-             data-intent="${esc(home.secondary_action)}">${icon(ACTION_ICONS[home.secondary_action]
-             || 'fingerprint')} ${esc(home.secondary_action_label)}</button>` : ''}
-           <div class="hint" id="homeHint">${home.requires_location
-             ? 'يجب أن تكون داخل نطاق موقع العمل عند التسجيل.' : 'اضغط الزر لتسجيل بصمتك.'}</div>`
-        : '<div class="hint">تسجيل الحضور من التطبيق معطّل حالياً</div>'}
-      ${home.alert ? `<div class="alert">${icon('alert')} ${esc(home.alert)}</div>` : ''}
+    <div class="hi">
+      <h2>${greeting()}، ${esc(String(home.employee_name || '').split(' ')[0])}</h2>
+      <p>${esc(longDate())}</p>
     </div>
+
+    <div class="state-soft ${tone}">
+      <div class="txt">
+        <b><span class="dot"></span>${esc(home.state_label)}</b>
+        <span>${esc(sinceLabel)}</span>
+      </div>
+      <div class="mark">${icon(home.state === 'break' ? 'coffee' : 'building')}</div>
+    </div>
+
+    <div class="tiles">
+      <div class="tile">
+        <div class="th"><span class="ti blue">${icon('clock')}</span>مدة العمل اليوم</div>
+        <b id="workedLive">${durationLabel(home.worked_minutes_live)}</b>
+      </div>
+      <div class="tile">
+        <div class="th"><span class="ti violet">${icon('calendar')}</span>عدد مرات الحضور</div>
+        <b>${home.clock_in_count} / ${home.expected_clock_ins}</b>
+        <div class="progress ok"><i style="width:${Math.min(100,
+          (home.clock_in_count / Math.max(1, home.expected_clock_ins)) * 100)}%"></i></div>
+      </div>
+    </div>
+
+    ${home.punch_enabled
+      ? `<button class="punch-btn big" id="homePunch" data-intent="${esc(home.action)}">
+           ${icon(ACTION_ICONS[home.action] || 'fingerprint')} ${esc(home.action_label)}</button>
+         ${home.secondary_action ? `<button class="punch-btn ghost" id="homePunch2"
+           data-intent="${esc(home.secondary_action)}">${icon(ACTION_ICONS[home.secondary_action]
+           || 'fingerprint')} ${esc(home.secondary_action_label)}</button>` : ''}
+         <div class="hint" id="homeHint">${home.requires_location
+           ? 'يجب أن تكون داخل نطاق موقع العمل عند التسجيل.' : 'اضغط الزر لتسجيل بصمتك.'}</div>`
+      : '<div class="hint">تسجيل الحضور من التطبيق معطّل حالياً</div>'}
+
+    ${home.alert ? `<div class="soft-alert">${icon('alert')} ${esc(home.alert)}</div>` : ''}
+
+    <div class="quick4">
+      <a onclick="go('myLeaves')" class="q amber">${home.pending_requests
+        ? `<span class="badge">${home.pending_requests}</span>` : ''}
+        <span class="qi">${icon('documents')}</span>طلباتي</a>
+      <a onclick="go('attendance')" class="q blue"><span class="qi">${icon('clock')}</span>حضوري</a>
+      <a onclick="go('notifications')" class="q rose">${home.unread_notifications
+        ? `<span class="badge">${home.unread_notifications}</span>` : ''}
+        <span class="qi">${icon('bell')}</span>الإشعارات</a>
+      <a onclick="go('schedule')" class="q green"><span class="qi">${icon('calendar')}</span>جدولي</a>
+    </div>
+
+    <div class="card"><div class="card-head"><h3>آخر الحركات</h3>
+      <button class="btn sm ghost" onclick="go('punches')">عرض الكل</button></div>
+      ${home.recent_events.length ? home.recent_events.map((e) => `
+        <div class="row-item">
+          <span class="ri ${EVENT_TONE[e.type] || ''}">${icon(EVENT_ICON[e.type] || 'fingerprint')}</span>
+          <div class="rt"><b>${esc(e.label)}</b><span>${esc(e.site_name || '')}</span></div>
+          <div class="rv">${fmtTime(e.at)}<small>${esc(String(e.at).slice(0, 10))}</small></div>
+        </div>`).join('')
+        : '<div class="empty">لا حركات بعد</div>'}
+    </div>
+
+    <div class="card" id="salaryCard"><div class="card-head"><h3>راتبي حتى اليوم</h3>
+      <span class="muted" id="salPeriod"></span></div>
+      <div id="salBody"><div class="sk-rows">${'<div class="sk line"></div>'.repeat(2)}</div></div></div>
 
     <div class="card"><div class="card-head"><h3>دوام اليوم</h3>
       <span class="muted">${esc(home.shift_name || '')}</span></div>
@@ -1167,36 +1245,16 @@ views.home = async () => {
         <div class="rt"><b>الحضور</b><span>${esc(home.shift_label || '')}</span></div>
         <div class="rv">${timeOf(home.check_in)}</div></div>
       <div class="row-item"><span class="ri">${icon('logout')}</span>
-        <div class="rt"><b>الانصراف</b><span>${home.worked_minutes
-          ? 'عملت ' + hours(home.worked_minutes) + ' ساعة' : 'لم يُسجَّل بعد'}</span></div>
+        <div class="rt"><b>الانصراف</b><span>${home.check_out ? 'انتهى دوامك' : 'لم يُسجَّل بعد'}</span></div>
         <div class="rv">${timeOf(home.check_out)}</div></div>
-      ${home.late_minutes ? `<div class="row-item"><span class="ri">${icon('alert')}</span>
+      ${home.late_minutes ? `<div class="row-item"><span class="ri danger">${icon('alert')}</span>
         <div class="rt"><b>تأخير</b><span>يُحتسب في المسير</span></div>
-        <div class="rv">${home.late_minutes} دقيقة</div></div>` : ''}
+        <div class="rv danger">${home.late_minutes} دقيقة</div></div>` : ''}
       <div class="row-item"><span class="ri">${icon('coffee')}</span>
         <div class="rt"><b>الاستراحات</b><span>${home.break_count
           ? home.break_count + ' استراحة من أصل ' + home.break_allowance_minutes + ' دقيقة مسموحة'
           : 'المسموح ' + home.break_allowance_minutes + ' دقيقة يومياً'}</span></div>
         <div class="rv ${home.break_overrun_minutes ? 'danger' : ''}">${home.break_minutes} دقيقة</div></div>
-      ${home.break_overrun_minutes ? `<div class="row-item"><span class="ri">${icon('alert')}</span>
-        <div class="rt"><b>تجاوز الاستراحة</b><span>سُجّل للإدارة</span></div>
-        <div class="rv danger">${home.break_overrun_minutes} دقيقة</div></div>` : ''}
-    </div>
-
-    <div class="card" id="salaryCard"><div class="card-head"><h3>راتبي حتى اليوم</h3>
-      <span class="muted" id="salPeriod"></span></div>
-      <div id="salBody"><div class="sk-rows">${'<div class="sk line"></div>'.repeat(2)}</div></div></div>
-
-    <div class="card"><div class="card-head"><h3>آخر عملية حضور</h3></div>
-      <div class="row-item"><span class="ri">${icon('fingerprint')}</span>
-        <div class="rt"><b>${esc(home.last_punch_kind || 'بصمة')}</b>
-          <span>${esc(home.last_punch_site || 'بدون موقع مسجّل')}</span></div>
-        <div class="rv">${home.last_punch_at ? fmtDateTime(home.last_punch_at) : '—'}</div></div>
-      <div class="row-item" onclick="go('myLeaves')" style="cursor:pointer">
-        <span class="ri">${icon('leave')}</span>
-        <div class="rt"><b>الطلبات المعلّقة</b><span>طلبات إجازتك قيد الاعتماد</span></div>
-        <div class="rv"><span class="tag ${home.pending_requests ? 'pending' : 'on'}">${
-          home.pending_requests}</span></div></div>
       <div class="row-item" id="missedPunch" style="cursor:pointer">
         <span class="ri">${icon('edit')}</span>
         <div class="rt"><b>نسيت البصمة؟</b><span>أرسل طلباً لتسجيل بصمة فائتة</span></div>
@@ -1223,7 +1281,6 @@ views.home = async () => {
         if (hint) hint.textContent = 'جارٍ تحديد موقعك…';
         body = await currentPosition();
       }
-      // النية الصريحة من الزر؛ لو تعذّرت يستنتجها النظام من حالة الموظف
       const intent = button.dataset.intent;
       if (intent && intent !== 'none') body.intent = intent;
       const result = await api('/api/attendance/self-punch', { method: 'POST', body });
@@ -1239,8 +1296,9 @@ views.home = async () => {
     const button = el(id);
     if (button) button.onclick = () => punch(button);
   });
+  if (el('missedPunch')) el('missedPunch').onclick = () => missedPunchModal();
 
-  // راتبي حتى اليوم: احتساب تناسبي من بداية الشهر
+  // راتبي حتى اليوم
   api('/api/me/salary-to-date').then((pay) => {
     if (!el('salBody')) return;
     el('salPeriod').textContent = `${MONTHS[pay.month - 1]} ${pay.year}`;
@@ -1255,13 +1313,14 @@ views.home = async () => {
         <div class="rt"><b>المستحق حتى اليوم</b>
           <span>${money(pay.daily_rate)} ريال × ${pay.days_elapsed} يوم</span></div>
         <div class="rv"><b>${money(pay.gross_to_date)}</b></div></div>
-      ${pay.deductions_total ? `<div class="row-item"><span class="ri">${icon('alert')}</span>
+      ${pay.deductions_total ? `<div class="row-item"><span class="ri danger">${icon('alert')}</span>
         <div class="rt"><b>الخصومات حتى اليوم</b><span>${[
           pay.absence_deduction ? 'غياب' : '', pay.late_deduction ? 'تأخير' : '',
           pay.violation_deduction ? 'مخالفات' : '', pay.loan_deduction ? 'سلف' : '',
-          pay.purchases_deduction ? 'مشتريات' : ''].filter(Boolean).join(' · ') || 'خصومات'}</span></div>
+          pay.purchases_deduction ? 'مشتريات' : '',
+          pay.open_break_deduction ? 'استراحة بلا عودة' : ''].filter(Boolean).join(' · ')}</span></div>
         <div class="rv danger">− ${money(pay.deductions_total)}</div></div>` : ''}
-      <div class="row-item"><span class="ri">${icon('check')}</span>
+      <div class="row-item"><span class="ri ok">${icon('check')}</span>
         <div class="rt"><b>الصافي التقديري الآن</b><span>يتغيّر حتى نهاية الشهر</span></div>
         <div class="rv"><b class="money" style="color:var(--ok)">${money(pay.net_to_date)}</b></div></div>
       <div class="row-item"><span class="ri">${icon('calendar')}</span>
@@ -1269,19 +1328,75 @@ views.home = async () => {
         <div class="rv">${money(pay.expected_full_month)}</div></div>`;
   }).catch(() => { if (el('salaryCard')) el('salaryCard').remove(); });
 
-  if (el('missedPunch')) el('missedPunch').onclick = () => missedPunchModal();
-
-  // مدة الاستراحة الجارية تُحدَّث كل دقيقة أمام الموظف
+  // عدّاد حيّ: مدة العمل ومدة الاستراحة الجارية
   clearInterval(state.breakTimer);
-  if (home.state === 'break' && home.break_started_at) {
-    const started = new Date(home.break_started_at);
+  const started = home.check_in ? new Date(home.check_in) : null;
+  if (home.state === 'in' && started && !home.check_out) {
     state.breakTimer = setInterval(() => {
-      const box = document.querySelector('.status-card .state-detail');
+      const box = el('workedLive');
       if (!box) return clearInterval(state.breakTimer);
-      const minutes = Math.max(0, Math.floor((Date.now() - started) / 60000));
-      box.textContent = `بدأت ${fmtTime(home.break_started_at)} — مضى ${minutes} دقيقة`;
+      const minutes = Math.floor((Date.now() - started) / 60000) - (home.break_minutes || 0);
+      box.textContent = durationLabel(minutes);
+    }, 30000);
+  } else if (home.state === 'break' && home.break_started_at) {
+    const from = new Date(home.break_started_at);
+    state.breakTimer = setInterval(() => {
+      const box = document.querySelector('.state-soft .txt span');
+      if (!box) return clearInterval(state.breakTimer);
+      const minutes = Math.max(0, Math.floor((Date.now() - from) / 60000));
+      box.textContent = `منذ ${fmtTime(home.break_started_at)} — ${minutes} دقيقة`;
     }, 30000);
   }
+};
+
+/* ------------------------------ الإشعارات (شاشة كاملة) ------------------------------ */
+views.notifications = async () => {
+  const rows = await api('/api/notifications?limit=100');
+  render(`
+    <div class="card"><div class="card-head"><h3>الإشعارات</h3>
+      <button class="btn sm ghost" id="ntAllRead">تعليم الكل كمقروء</button></div>
+      ${rows.length ? rows.map((n) => `
+        <div class="row-item ${n.is_read ? '' : 'unread'}" data-id="${n.id}"
+             ${n.link_page ? `onclick="go('${esc(n.link_page)}')" style="cursor:pointer"` : ''}>
+          <span class="ri ${n.is_read ? '' : 'info'}">${icon('bell')}</span>
+          <div class="rt"><b>${esc(n.title)}</b><span>${esc(n.body || '')}</span></div>
+          <div class="rv">${fmtTime(n.created_at)}<small>${esc(String(n.created_at).slice(0, 10))}</small></div>
+        </div>`).join('') : '<div class="empty">لا إشعارات</div>'}
+    </div>`);
+  el('ntAllRead').onclick = async () => {
+    try { await api('/api/notifications/read-all', { method: 'POST' });
+      toast('تم', 'ok'); views.notifications(); refreshBell(); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+};
+
+/* ------------------------------ المزيد ------------------------------ */
+const MORE_LINKS = [
+  ['violations', 'violation', 'مخالفاتي', 'إنذاراتك وجزاءاتها'],
+  ['payroll', 'payroll', 'رواتبي', 'قسائم رواتبك الشهرية'],
+  ['loans', 'loans', 'سلفي', 'طلب سلفة ومتابعة أقساطها'],
+  ['purchases', 'cart', 'مشترياتي', 'فواتير تُخصم من راتبك'],
+  ['documents', 'documents', 'وثائقي', 'الإقامة والعقد وغيرها'],
+  ['schedule', 'calendar', 'جدولي', 'وردياتك وأيام راحتك'],
+  ['myProfile', 'idcard', 'بياناتي', 'تحديث جوالك وهويتك'],
+  ['account', 'key', 'حسابي', 'كلمة المرور والإشعارات واللغة'],
+];
+
+views.more = async () => {
+  render(`<div class="card"><div class="card-head"><h3>المزيد</h3></div>
+    ${MORE_LINKS.filter(([id]) => {
+      const meta = PAGES.find((p) => p.id === id);
+      return meta && meta.roles.includes(state.user.role);
+    }).map(([id, ic, title, sub]) => `
+      <div class="row-item" onclick="go('${id}')" style="cursor:pointer">
+        <span class="ri">${icon(ic)}</span>
+        <div class="rt"><b>${title}</b><span>${sub}</span></div>
+        <div class="rv">${icon('chevron')}</div></div>`).join('')}
+    <div class="row-item" onclick="logout()" style="cursor:pointer">
+      <span class="ri danger">${icon('logout')}</span>
+      <div class="rt"><b>تسجيل الخروج</b><span>إنهاء الجلسة على هذا الجهاز</span></div>
+      <div class="rv">${icon('chevron')}</div></div>
+  </div>`);
 };
 
 /** طلب «نسيت البصمة»: يرسله الموظف فتعتمده الإدارة وتُسجَّل البصمة */
@@ -4729,6 +4844,17 @@ function applyBranding(b) {
   if (loginTitle) loginTitle.textContent = title;
   const sideTitle = el('sideTitle');
   if (sideTitle) sideTitle.textContent = b.company_name || 'الموارد البشرية';
+  const barName = el('brandBarName');
+  const barSub = el('brandBarSub');
+  if (barName) barName.textContent = b.company_name || 'الموارد البشرية';
+  // لا نكرّر الاسم في السطرين إن لم تُضبط هوية المنشأة بعد
+  if (barSub) barSub.classList.toggle('hidden', !b.company_name);
+  const barMark = el('brandBarMark');
+  if (barMark) {
+    barMark.innerHTML = b.logo_url
+      ? `<img src="${esc(b.logo_url)}" alt="" />`
+      : icon('employees');
+  }
   const mark = el('brandMark');
   if (mark) {
     const words = (b.company_name || 'HR').trim().split(/\s+/).slice(0, 2);
