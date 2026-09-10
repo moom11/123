@@ -52,6 +52,7 @@ def compute_payslip(db: Session, employee: Employee, year: int, month: int) -> d
     # بدأ استراحة ولم يعد حتى نهاية الوردية: يُخصم عنه نصف يوم افتراضياً
     open_break_days = sum(1 for r in rows if r.status == DayStatus.needs_review)
     late_minutes = sum(r.late_minutes for r in rows)
+    early_leave_minutes = sum(r.early_leave_minutes for r in rows)
     overtime_minutes = sum(r.overtime_minutes for r in rows)
 
     # فصل أيام الإجازة إلى مدفوعة وغير مدفوعة
@@ -76,10 +77,15 @@ def compute_payslip(db: Session, employee: Employee, year: int, month: int) -> d
     absence_multiplier = float(settings_store.get(db, "payroll_absence_multiplier") or 1)
     overtime_multiplier = float(settings_store.get(db, "payroll_overtime_multiplier") or 1.5)
     late_mode = settings_store.get(db, "payroll_late_deduction_mode")
+    early_mode = settings_store.get(db, "payroll_early_leave_deduction_mode")
 
     absence_deduction = round(absent_days * daily * absence_multiplier, 2)
     unpaid_leave_deduction = round(unpaid_leave_days * daily, 2)
     late_deduction = round((late_minutes / 60) * hourly, 2) if late_mode == "proportional" else 0.0
+    # الخروج قبل نهاية الدوام يُخصم بمقدار زمنه، وما دون دقائق السماح لا يُحتسب أصلاً
+    early_leave_deduction = (
+        round((early_leave_minutes / 60) * hourly, 2) if early_mode == "proportional" else 0.0
+    )
     overtime_amount = round((overtime_minutes / 60) * hourly * overtime_multiplier, 2)
     violation_deduction = violations.monthly_deduction(db, employee.id, year, month)
     loan_deduction = loans_service.monthly_deduction(db, employee.id, year, month)
@@ -94,8 +100,9 @@ def compute_payslip(db: Session, employee: Employee, year: int, month: int) -> d
     allowances = round(employee.allowances or 0, 2)
     net = round(
         basic + allowances + overtime_amount + carryover_earning
-        - absence_deduction - unpaid_leave_deduction - late_deduction - violation_deduction
-        - loan_deduction - purchases_deduction - open_break_deduction - carryover_deduction,
+        - absence_deduction - unpaid_leave_deduction - late_deduction - early_leave_deduction
+        - violation_deduction - loan_deduction - purchases_deduction - open_break_deduction
+        - carryover_deduction,
         2,
     )
     return {
@@ -107,9 +114,11 @@ def compute_payslip(db: Session, employee: Employee, year: int, month: int) -> d
         "paid_leave_days": paid_leave_days,
         "unpaid_leave_days": unpaid_leave_days,
         "late_minutes": late_minutes,
+        "early_leave_minutes": early_leave_minutes,
         "overtime_minutes": overtime_minutes,
         "absence_deduction": absence_deduction,
         "late_deduction": late_deduction,
+        "early_leave_deduction": early_leave_deduction,
         "unpaid_leave_deduction": unpaid_leave_deduction,
         "violation_deduction": violation_deduction,
         "loan_deduction": loan_deduction,
@@ -185,7 +194,8 @@ def totals(db: Session, run_id: int) -> dict:
         "carryover_deduction_total": round(sum(s.carryover_deduction or 0 for s in slips), 2),
         "deductions_total": round(
             sum(
-                s.absence_deduction + s.late_deduction + s.unpaid_leave_deduction
+                s.absence_deduction + s.late_deduction + (s.early_leave_deduction or 0)
+                + s.unpaid_leave_deduction
                 + s.violation_deduction + (s.loan_deduction or 0)
                 + (s.purchases_deduction or 0) + (s.open_break_deduction or 0)
                 + (s.carryover_deduction or 0) + s.other_deductions
@@ -227,14 +237,19 @@ def earned_to_date(db: Session, employee: Employee, on_date: date | None = None)
     absent_days = sum(1 for r in rows if r.status == DayStatus.absent)
     open_break_days = sum(1 for r in rows if r.status == DayStatus.needs_review)
     late_minutes = sum(r.late_minutes for r in rows)
+    early_leave_minutes = sum(r.early_leave_minutes for r in rows)
     overtime_minutes = sum(r.overtime_minutes for r in rows)
 
     multiplier = float(settings_store.get(db, "payroll_absence_multiplier") or 1)
     late_mode = settings_store.get(db, "payroll_late_deduction_mode")
+    early_mode = settings_store.get(db, "payroll_early_leave_deduction_mode")
     overtime_multiplier = float(settings_store.get(db, "payroll_overtime_multiplier") or 1.5)
 
     absence_deduction = round(absent_days * daily * multiplier, 2)
     late_deduction = round((late_minutes / 60) * hourly, 2) if late_mode == "proportional" else 0.0
+    early_leave_deduction = (
+        round((early_leave_minutes / 60) * hourly, 2) if early_mode == "proportional" else 0.0
+    )
     overtime_amount = round((overtime_minutes / 60) * hourly * overtime_multiplier, 2)
     violation_deduction = violations.monthly_deduction(db, employee.id, year, month)
     loan_deduction = loans_service.monthly_deduction(db, employee.id, year, month)
@@ -243,7 +258,7 @@ def earned_to_date(db: Session, employee: Employee, on_date: date | None = None)
     open_break_deduction = round(open_break_days * daily * open_break_factor, 2)
 
     deductions = round(
-        absence_deduction + late_deduction + violation_deduction
+        absence_deduction + late_deduction + early_leave_deduction + violation_deduction
         + loan_deduction + purchases_deduction + open_break_deduction, 2
     )
     net = round(max(gross + overtime_amount - deductions, 0), 2)
@@ -265,6 +280,8 @@ def earned_to_date(db: Session, employee: Employee, on_date: date | None = None)
         "absence_deduction": absence_deduction,
         "late_minutes": late_minutes,
         "late_deduction": late_deduction,
+        "early_leave_minutes": early_leave_minutes,
+        "early_leave_deduction": early_leave_deduction,
         "violation_deduction": violation_deduction,
         "loan_deduction": loan_deduction,
         "purchases_deduction": purchases_deduction,

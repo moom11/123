@@ -1396,6 +1396,7 @@ views.home = async () => {
       ${pay.deductions_total ? `<div class="row-item"><span class="ri danger">${icon('alert')}</span>
         <div class="rt"><b>الخصومات حتى اليوم</b><span>${[
           pay.absence_deduction ? 'غياب' : '', pay.late_deduction ? 'تأخير' : '',
+          pay.early_leave_deduction ? 'خروج مبكر' : '',
           pay.violation_deduction ? 'مخالفات' : '', pay.loan_deduction ? 'سلف' : '',
           pay.purchases_deduction ? 'مشتريات' : '',
           pay.open_break_deduction ? 'استراحة بلا عودة' : ''].filter(Boolean).join(' · ')}</span></div>
@@ -3998,15 +3999,18 @@ views.payroll = async () => {
     el('prDetail').innerHTML = `<div class="card">
       <div class="card-head"><h3>قسائم ${MONTHS[run.month - 1]} ${run.year}</h3>
         <span class="muted">صافي المسير: <b class="money">${money(run.net_total)}</b> ريال</span></div>
-      ${table(['رقم الموظف', 'الاسم', 'الأساسي', 'البدلات', 'حضور', 'غياب', 'تأخير (د)', 'إضافي (د)',
-               'خصم غياب', 'خصم تأخير', 'إجازة بلا راتب', 'خصم مخالفات', 'قسط سلفة', 'مشتريات',
+      ${table(['رقم الموظف', 'الاسم', 'الأساسي', 'البدلات', 'حضور', 'غياب', 'تأخير (د)',
+               'خروج مبكر (د)', 'إضافي (د)',
+               'خصم غياب', 'خصم تأخير', 'خصم خروج مبكر', 'إجازة بلا راتب', 'خصم مخالفات',
+               'قسط سلفة', 'مشتريات',
                'مستحق مرحّل', 'خصم مرحّل', 'بدل إضافي', 'إضافات', 'خصومات', 'الصافي', ''],
         slips,
         (s) => `<tr><td>${esc(s.employee_code)}</td><td>${esc(s.employee_name)}</td>
           <td class="money">${money(s.basic_salary)}</td><td class="money">${money(s.allowances)}</td>
           <td>${s.present_days}</td><td>${s.absent_days}</td>
-          <td>${s.late_minutes}</td><td>${s.overtime_minutes}</td>
+          <td>${s.late_minutes}</td><td>${s.early_leave_minutes || 0}</td><td>${s.overtime_minutes}</td>
           <td class="money">${money(s.absence_deduction)}</td><td class="money">${money(s.late_deduction)}</td>
+          <td class="money">${money(s.early_leave_deduction || 0)}</td>
           <td class="money">${money(s.unpaid_leave_deduction)}</td><td class="money">${money(s.violation_deduction)}</td>
           <td class="money">${money(s.loan_deduction)}</td>
           <td class="money">${money(s.purchases_deduction || 0)}</td>
@@ -4091,8 +4095,8 @@ async function myPayslipsView() {
     ${table(['الشهر', 'الراتب الأساسي', 'البدلات', 'أيام الحضور', 'أيام الغياب', 'خصومات', 'قسط السلفة', 'بدل الإضافي', 'صافي الراتب', ''],
       slips,
       (s) => {
-        const deductions = s.absence_deduction + s.late_deduction + s.unpaid_leave_deduction
-          + s.violation_deduction + s.other_deductions;
+        const deductions = s.absence_deduction + s.late_deduction + (s.early_leave_deduction || 0)
+          + s.unpaid_leave_deduction + s.violation_deduction + s.other_deductions;
         return `<tr><td>مسير ${s.run_id}</td><td class="money">${money(s.basic_salary)}</td>
           <td class="money">${money(s.allowances)}</td><td>${s.present_days}</td><td>${s.absent_days}</td><td class="money">${money(deductions)}</td>
           <td class="money">${money(s.loan_deduction)}</td>
@@ -4738,6 +4742,11 @@ settingsTabs.payrollRules = async () => {
         <div class="field"><label>خصم التأخير</label><select id="pyLate">
           <option value="proportional" ${st.payroll_late_deduction_mode === 'proportional' ? 'selected' : ''}>بمقدار زمن التأخير</option>
           <option value="none" ${st.payroll_late_deduction_mode === 'none' ? 'selected' : ''}>بدون خصم</option></select></div>
+        <div class="field"><label>خصم الخروج المبكر</label><select id="pyEarly">
+          <option value="proportional" ${st.payroll_early_leave_deduction_mode !== 'none' ? 'selected' : ''}>بمقدار زمن الخروج المبكر</option>
+          <option value="none" ${st.payroll_early_leave_deduction_mode === 'none' ? 'selected' : ''}>بدون خصم</option></select>
+          <div class="help">من خرج قبل نهاية الدوام بأكثر من دقائق السماح (${st.early_leave_grace_minutes} دقيقة
+            في سياسة الحضور) يُخصم عنه كامل زمن خروجه المبكر بأجر الساعة.</div></div>
         <div class="field"><label>خصم يوم الغياب بدون إذن (بالأيام)</label>
           <input type="number" step="0.5" min="0" max="3" id="pyAbs" value="${st.payroll_absence_multiplier}" />
           <div class="help">2 = يُخصم أجر يومين عن كل يوم غياب بدون إذن.</div></div>
@@ -4760,6 +4769,7 @@ settingsTabs.payrollRules = async () => {
         payroll_workday_hours: Number(el('pyHours').value),
         payroll_overtime_multiplier: Number(el('pyOt').value),
         payroll_late_deduction_mode: el('pyLate').value,
+        payroll_early_leave_deduction_mode: el('pyEarly').value,
         payroll_absence_multiplier: Number(el('pyAbs').value),
         payroll_deduction_base: el('pyBase').value,
         violation_reset_days: Number(el('pyReset').value),
@@ -4798,7 +4808,8 @@ settingsTabs.attendanceRules = async () => {
               <option value="false" ${!st.break_deducted ? 'selected' : ''}>لا يُخصم</option></select></div>
           ${num('arOut', 'وقت السماح بالانصراف (دقيقة قبل نهاية الوردية)', st.clock_out_from_minutes,
                 'البصم بعد هذا الوقت يُفهم انصرافاً، وقبله استراحة.')}
-          ${num('arEarly', 'سياسة الخروج المبكر: دقائق السماح', st.early_leave_grace_minutes)}
+          ${num('arEarly', 'سياسة الخروج المبكر: دقائق السماح', st.early_leave_grace_minutes,
+                'من خرج قبل نهاية الدوام بأقل من هذا لا يُحتسب عليه شيء، وبأكثر منه يُخصم كامل زمنه.')}
           ${num('arLate', 'سياسة التأخير: دقائق السماح', st.late_grace_minutes)}
           ${num('arDebounce', 'تجاهل البصمات المكررة (ثانية)', st.punch_debounce_seconds,
                 'يُنصح بـ 10 إلى 30 ثانية لمنع تكرار بصمة الجهاز.')}

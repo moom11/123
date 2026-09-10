@@ -38,7 +38,7 @@ class Policy:
     max_total_break_minutes: int = 0    # 0 = يساوي المسموح
     deduct_breaks: bool = True
     clock_out_from_minutes: int = 30    # البصم قبل نهاية الوردية بهذا القدر = انصراف
-    early_leave_grace_minutes: int = 10
+    early_leave_grace_minutes: int = 5
     late_grace_minutes: int = 10
     debounce_seconds: int = 20
     source: str = "الافتراضية"          # اسم السياسة التي غلبت (للعرض)

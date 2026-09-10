@@ -108,6 +108,11 @@ def check_location(
     )
 
 
+def _int(values: dict, key: str, fallback: int) -> int:
+    raw = values.get(key)
+    return int(float(raw)) if raw not in (None, "") else fallback
+
+
 def _settings_out(values: dict) -> SettingsOut:
     return SettingsOut(
         web_punch_enabled=values["web_punch_enabled"] == "true",
@@ -117,6 +122,9 @@ def _settings_out(values: dict) -> SettingsOut:
         payroll_workday_hours=int(float(values["payroll_workday_hours"])),
         payroll_overtime_multiplier=float(values["payroll_overtime_multiplier"]),
         payroll_late_deduction_mode=values["payroll_late_deduction_mode"],
+        payroll_early_leave_deduction_mode=(
+            values.get("payroll_early_leave_deduction_mode") or "proportional"
+        ),
         payroll_absence_multiplier=float(values["payroll_absence_multiplier"]),
         payroll_deduction_base=values.get("payroll_deduction_base") or "total",
         violation_reset_days=int(float(values["violation_reset_days"])),
@@ -128,6 +136,20 @@ def _settings_out(values: dict) -> SettingsOut:
         attendance_alert_enabled=values.get("attendance_alert_enabled") == "true",
         attendance_alert_after_minutes=int(float(values.get("attendance_alert_after_minutes") or 60)),
         attendance_alert_notify_employee=values.get("attendance_alert_notify_employee") == "true",
+        # سياسة الحضور والاستراحة: تُقرأ من المخزَّن، وإلا عادت الشاشة بالقيم الافتراضية دائماً
+        break_allowance_minutes=_int(values, "break_allowance_minutes", 60),
+        break_grace_minutes=_int(values, "break_grace_minutes", 5),
+        break_max_count=_int(values, "break_max_count", 0),
+        break_max_total_minutes=_int(values, "break_max_total_minutes", 0),
+        break_deducted=values.get("break_deducted", "true") == "true",
+        clock_out_from_minutes=_int(values, "clock_out_from_minutes", 30),
+        early_leave_grace_minutes=_int(values, "early_leave_grace_minutes", 5),
+        late_grace_minutes=_int(values, "late_grace_minutes", 10),
+        punch_debounce_seconds=_int(values, "punch_debounce_seconds", 20),
+        open_break_deduction_days=float(values.get("open_break_deduction_days") or 0.5),
+        break_violation_enabled=values.get("break_violation_enabled", "true") == "true",
+        break_violation_after_minutes=_int(values, "break_violation_after_minutes", 15),
+        break_alert_employee=values.get("break_alert_employee", "true") == "true",
     )
 
 
@@ -145,6 +167,8 @@ def update_settings(
         raise HTTPException(status_code=400, detail="أساس احتساب الخصم يجب أن يكون الإجمالي أو الأساسي")
     if changes.get("payroll_late_deduction_mode") not in (None, "proportional", "none"):
         raise HTTPException(status_code=400, detail="طريقة خصم التأخير غير صحيحة")
+    if changes.get("payroll_early_leave_deduction_mode") not in (None, "proportional", "none"):
+        raise HTTPException(status_code=400, detail="طريقة خصم الخروج المبكر غير صحيحة")
     values = settings_store.set_many(db, changes)
     audit.log(
         db, user, "settings", "settings", None,

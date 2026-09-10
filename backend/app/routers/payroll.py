@@ -56,9 +56,11 @@ def payslip_out(slip: Payslip) -> PayslipOut:
         paid_leave_days=slip.paid_leave_days,
         unpaid_leave_days=slip.unpaid_leave_days,
         late_minutes=slip.late_minutes,
+        early_leave_minutes=slip.early_leave_minutes or 0,
         overtime_minutes=slip.overtime_minutes,
         absence_deduction=slip.absence_deduction,
         late_deduction=slip.late_deduction,
+        early_leave_deduction=slip.early_leave_deduction or 0,
         unpaid_leave_deduction=slip.unpaid_leave_deduction,
         violation_deduction=slip.violation_deduction,
         purchases_deduction=slip.purchases_deduction or 0,
@@ -129,7 +131,8 @@ def adjust_payslip(
         0.0,
         round(
             slip.basic_salary + (slip.allowances or 0) + slip.overtime_amount + slip.other_additions
-            - slip.absence_deduction - slip.late_deduction - slip.unpaid_leave_deduction
+            - slip.absence_deduction - slip.late_deduction - (slip.early_leave_deduction or 0)
+            - slip.unpaid_leave_deduction
             - slip.violation_deduction - (slip.loan_deduction or 0) - slip.other_deductions,
             2,
         ),
@@ -402,8 +405,9 @@ def export_run(run_id: int, db: Session = Depends(get_db)):
     writer = csv.writer(buffer)
     writer.writerow([
         "رقم الموظف", "الاسم", "الإدارة", "الراتب الأساسي", "البدلات", "أيام الحضور", "أيام الغياب",
-        "إجازة مدفوعة", "إجازة بدون راتب", "دقائق التأخير", "دقائق الإضافي",
-        "خصم الغياب", "خصم التأخير", "خصم إجازة بدون راتب", "خصم المخالفات", "قسط السلفة",
+        "إجازة مدفوعة", "إجازة بدون راتب", "دقائق التأخير", "دقائق الخروج المبكر", "دقائق الإضافي",
+        "خصم الغياب", "خصم التأخير", "خصم الخروج المبكر", "خصم إجازة بدون راتب",
+        "خصم المخالفات", "قسط السلفة",
         "مشتريات", "استراحة بلا عودة", "مستحق مرحّل", "خصم مرحّل",
         "بدل الإضافي", "إضافات أخرى", "خصومات أخرى", "صافي الراتب",
     ])
@@ -412,7 +416,8 @@ def export_run(run_id: int, db: Session = Depends(get_db)):
             s.employee.code if s.employee else "", s.employee.full_name if s.employee else "",
             s.employee.department.name if s.employee and s.employee.department else "",
             s.basic_salary, s.allowances or 0, s.present_days, s.absent_days, s.paid_leave_days, s.unpaid_leave_days,
-            s.late_minutes, s.overtime_minutes, s.absence_deduction, s.late_deduction,
+            s.late_minutes, s.early_leave_minutes or 0, s.overtime_minutes,
+            s.absence_deduction, s.late_deduction, s.early_leave_deduction or 0,
             s.unpaid_leave_deduction, s.violation_deduction, s.loan_deduction or 0,
             s.purchases_deduction or 0, s.open_break_deduction or 0,
             s.carryover_earning or 0, s.carryover_deduction or 0, s.overtime_amount,

@@ -27,7 +27,7 @@ DEFAULTS: dict[str, str] = {
     # البصم قبل نهاية الوردية بهذا القدر (دقائق) يُفهم انصرافاً لا استراحة
     "clock_out_from_minutes": "30",
     # سياسة الخروج المبكر: دقائق السماح قبل احتساب خروج مبكر
-    "early_leave_grace_minutes": "10",
+    "early_leave_grace_minutes": "5",
     # سياسة التأخير: دقائق السماح بعد بداية الوردية
     "late_grace_minutes": "10",
     # تجاهل البصمات المكررة من الجهاز خلال هذه الثواني (10-30 عادةً)
@@ -50,6 +50,10 @@ DEFAULTS: dict[str, str] = {
     "payroll_overtime_multiplier": "1.5",
     # خصم التأخير: proportional = بمقدار زمن التأخير، none = بدون خصم
     "payroll_late_deduction_mode": "proportional",
+    # خصم الخروج المبكر: proportional = بمقدار زمن الخروج المبكر، none = بدون خصم.
+    # دقائق السماح في «early_leave_grace_minutes» هي العتبة: من خرج قبل نهاية
+    # الدوام بأقل منها لا يُحتسب عليه شيء، ومن تجاوزها يُخصم كامل زمن خروجه المبكر.
+    "payroll_early_leave_deduction_mode": "proportional",
     # عدد أيام الأجر التي تُخصم عن كل يوم غياب بدون إذن (2 = أجر يومين عن اليوم الواحد).
     # الغياب بإذن يُسجَّل إجازة: بدون راتب = يوم واحد، أو إجازة مدفوعة = بلا خصم.
     "payroll_absence_multiplier": "2",

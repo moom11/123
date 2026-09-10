@@ -3743,3 +3743,73 @@ def test_general_request_rules(client, auth):
     assert client.post(f"/api/requests/{row['id']}/decide", headers=auth,
                        json={"approve": True}).status_code == 400
     assert client.delete(f"/api/requests/{row['id']}", headers=h).status_code == 400
+
+
+def test_early_leave_is_deducted_after_five_minutes_grace(client, auth):
+    """الخروج قبل نهاية الدوام يُخصم بمقدار زمنه، وما دون 5 دقائق لا يُحتسب.
+
+    القاعدة: دقائق السماح عتبة لا مطروحاً — من خرج قبل النهاية بـ30 دقيقة
+    يُخصم عن الثلاثين كاملة، ومن خرج قبلها بـ3 دقائق لا يُخصم عنه شيء.
+    """
+    from app.services import payroll as payroll_service
+    from app.services import settings_store as store
+
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية الخروج المبكر", "start_time": "08:00:00", "end_time": "17:00:00",
+        "work_days": "0,1,2,3,4,5,6"}).json()
+
+    today = date.today()
+    day = today.replace(day=1) if today.day > 1 else today
+    cases = {
+        "9101": ("16:30:00", 30),   # خرج قبل النهاية بـ30 دقيقة: يُخصم عن 30
+        "9102": ("16:54:00", 6),    # تجاوز السماح بدقيقة: يُخصم عن 6 كاملة
+        "9103": ("16:57:00", 0),    # داخل السماح (5 دقائق): لا خصم
+    }
+    employees = {}
+    for code, (leave_at, _) in cases.items():
+        res = client.post("/api/employees", headers=auth, json={
+            "code": code, "full_name": f"موظف {code}", "shift_id": shift["id"],
+            "basic_salary": 9600, "hire_date": str(day)})
+        assert res.status_code == 201, res.text
+        emp = res.json()
+        employees[code] = emp
+        _punch(client, auth, emp["id"], f"{day}T08:00:00")
+        _punch(client, auth, emp["id"], f"{day}T{leave_at}")
+
+    for code, (_, expected) in cases.items():
+        sheet = client.get(
+            f"/api/attendance/employee/{employees[code]['id']}"
+            f"?date_from={day}&date_to={day}", headers=auth).json()[0]
+        assert sheet["check_out"] is not None, f"{code}: البصمة الأخيرة يجب أن تكون انصرافاً"
+        assert sheet["early_leave_minutes"] == expected, code
+
+    with SessionLocal() as db:
+        hourly = payroll_service._rates(db, 9600)[1]
+        for code, (_, expected) in cases.items():
+            emp = db.get(Employee, employees[code]["id"])
+            slip = payroll_service.compute_payslip(db, emp, day.year, day.month)
+            assert slip["early_leave_minutes"] == expected, code
+            assert slip["early_leave_deduction"] == round((expected / 60) * hourly, 2), code
+
+        # إيقاف الخصم من الإعدادات يوقفه فعلاً، والدقائق تبقى مسجَّلة للتقارير
+        store.set_many(db, {"payroll_early_leave_deduction_mode": "none"})
+        emp = db.get(Employee, employees["9101"]["id"])
+        slip = payroll_service.compute_payslip(db, emp, day.year, day.month)
+        assert slip["early_leave_minutes"] == 30 and slip["early_leave_deduction"] == 0
+        store.set_many(db, {"payroll_early_leave_deduction_mode": "proportional"})
+
+
+def test_attendance_policy_settings_read_back_what_was_saved(client, auth):
+    """ما يُحفظ في سياسة الحضور يعود كما هو، لا بالقيم الافتراضية."""
+    before = client.get("/api/settings", headers=auth).json()
+    assert before["early_leave_grace_minutes"] == 5      # الافتراضي الجديد
+    saved = client.put("/api/settings", headers=auth, json={
+        "early_leave_grace_minutes": 7, "clock_out_from_minutes": 45}).json()
+    assert saved["early_leave_grace_minutes"] == 7 and saved["clock_out_from_minutes"] == 45
+    again = client.get("/api/settings", headers=auth).json()
+    assert again["early_leave_grace_minutes"] == 7 and again["clock_out_from_minutes"] == 45
+    client.put("/api/settings", headers=auth, json={
+        "early_leave_grace_minutes": before["early_leave_grace_minutes"],
+        "clock_out_from_minutes": before["clock_out_from_minutes"]})
+    assert client.put("/api/settings", headers=auth, json={
+        "payroll_early_leave_deduction_mode": "half"}).status_code == 400

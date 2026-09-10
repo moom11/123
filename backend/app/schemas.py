@@ -346,6 +346,7 @@ class SettingsOut(BaseModel):
     payroll_workday_hours: int = 8
     payroll_overtime_multiplier: float = 1.5
     payroll_late_deduction_mode: str = "proportional"
+    payroll_early_leave_deduction_mode: str = "proportional"
     payroll_absence_multiplier: float = 1
     payroll_deduction_base: str = "total"
     violation_reset_days: int = 180
@@ -364,7 +365,7 @@ class SettingsOut(BaseModel):
     break_max_total_minutes: int = 0
     break_deducted: bool = True
     clock_out_from_minutes: int = 30
-    early_leave_grace_minutes: int = 10
+    early_leave_grace_minutes: int = 5
     late_grace_minutes: int = 10
     punch_debounce_seconds: int = 20
     open_break_deduction_days: float = 0.5
@@ -381,6 +382,7 @@ class SettingsIn(BaseModel):
     payroll_workday_hours: int | None = Field(default=None, ge=1, le=16)
     payroll_overtime_multiplier: float | None = Field(default=None, ge=1, le=3)
     payroll_late_deduction_mode: str | None = None
+    payroll_early_leave_deduction_mode: str | None = None
     payroll_absence_multiplier: float | None = Field(default=None, ge=0, le=3)
     payroll_deduction_base: str | None = None
     violation_reset_days: int | None = Field(default=None, ge=30, le=730)
@@ -784,9 +786,11 @@ class PayslipOut(ORMModel):
     paid_leave_days: float
     unpaid_leave_days: float
     late_minutes: int
+    early_leave_minutes: int = 0
     overtime_minutes: int
     absence_deduction: float
     late_deduction: float
+    early_leave_deduction: float = 0
     unpaid_leave_deduction: float
     violation_deduction: float
     purchases_deduction: float = 0
@@ -929,6 +933,8 @@ class SalaryToDateOut(BaseModel):
     absence_deduction: float = 0
     late_minutes: int = 0
     late_deduction: float = 0
+    early_leave_minutes: int = 0
+    early_leave_deduction: float = 0
     violation_deduction: float = 0
     loan_deduction: float = 0
     purchases_deduction: float = 0

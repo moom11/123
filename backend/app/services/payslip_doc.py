@@ -123,6 +123,7 @@ def payslip_html(db: Session, slip: Payslip, run: PayrollRun) -> str:
     deductions = [
         ("خصم الغياب", slip.absence_deduction),
         ("خصم التأخير", slip.late_deduction),
+        ("خصم الخروج المبكر", slip.early_leave_deduction or 0),
         ("إجازة بدون راتب", slip.unpaid_leave_deduction),
         ("خصم المخالفات", slip.violation_deduction),
         ("قسط السلفة", slip.loan_deduction or 0),
@@ -316,10 +317,12 @@ _TABLE_COLUMNS = [
     ("حضور", lambda s: str(s.present_days), ""),
     ("غياب", lambda s: str(s.absent_days), ""),
     ("تأخير (د)", lambda s: str(s.late_minutes), ""),
+    ("خروج مبكر (د)", lambda s: str(s.early_leave_minutes or 0), ""),
     ("إضافي (د)", lambda s: str(s.overtime_minutes), ""),
     ("بدل إضافي", lambda s: _money(s.overtime_amount), "money"),
     ("خصم غياب", lambda s: _money(s.absence_deduction), "money ded"),
     ("خصم تأخير", lambda s: _money(s.late_deduction), "money ded"),
+    ("خصم خروج مبكر", lambda s: _money(s.early_leave_deduction or 0), "money ded"),
     ("إجازة بلا راتب", lambda s: _money(s.unpaid_leave_deduction), "money ded"),
     ("مخالفات", lambda s: _money(s.violation_deduction), "money ded"),
     ("سلف", lambda s: _money(s.loan_deduction or 0), "money ded"),
@@ -335,13 +338,13 @@ _TABLE_COLUMNS = [
 # الأعمدة التي يُجمع مجموعها في سطر الإجمالي
 _TABLE_SUMS = {
     2: lambda s: s.basic_salary, 3: lambda s: s.allowances or 0,
-    8: lambda s: s.overtime_amount, 9: lambda s: s.absence_deduction,
-    10: lambda s: s.late_deduction, 11: lambda s: s.unpaid_leave_deduction,
-    12: lambda s: s.violation_deduction, 13: lambda s: s.loan_deduction or 0,
-    14: lambda s: s.purchases_deduction or 0, 15: lambda s: s.open_break_deduction or 0,
-    16: lambda s: s.carryover_earning or 0, 17: lambda s: s.carryover_deduction or 0,
-    18: lambda s: s.other_additions, 19: lambda s: s.other_deductions,
-    20: lambda s: s.net_pay,
+    9: lambda s: s.overtime_amount, 10: lambda s: s.absence_deduction,
+    11: lambda s: s.late_deduction, 12: lambda s: s.early_leave_deduction or 0,
+    13: lambda s: s.unpaid_leave_deduction, 14: lambda s: s.violation_deduction,
+    15: lambda s: s.loan_deduction or 0, 16: lambda s: s.purchases_deduction or 0,
+    17: lambda s: s.open_break_deduction or 0, 18: lambda s: s.carryover_earning or 0,
+    19: lambda s: s.carryover_deduction or 0, 20: lambda s: s.other_additions,
+    21: lambda s: s.other_deductions, 22: lambda s: s.net_pay,
 }
 
 
