@@ -43,6 +43,7 @@ const ICON_PATHS = {
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
   chevron: '<path d="M14.5 6.5 9 12l5.5 5.5"/>',
   home: '<path d="M3.5 10.5 12 4l8.5 6.5V19a1.6 1.6 0 0 1-1.6 1.6H5.1A1.6 1.6 0 0 1 3.5 19z"/><path d="M9.6 20.6v-6h4.8v6"/>',
+  sheet: '<rect x="3.5" y="4" width="17" height="16" rx="2"/><path d="M3.5 9h17M3.5 14.5h17M9.5 4v16M15 4v16"/>',
   grid: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.6"/>',
   building: '<path d="M4 20.5V6.2a1.7 1.7 0 0 1 1.7-1.7h6.6A1.7 1.7 0 0 1 14 6.2v14.3"/><path d="M14 10.5h4.3a1.7 1.7 0 0 1 1.7 1.7v8.3"/><path d="M2.8 20.5h18.4"/><path d="M7 8.5h4M7 12h4M7 15.5h4M17 14h0M17 17.5h0"/>',
   login: '<path d="M14 4.5h3.5a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H14"/><path d="M10 15.5 13.5 12 10 8.5"/><path d="M13.5 12H4"/>',

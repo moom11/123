@@ -61,7 +61,7 @@ const PENALTY_ACTIONS = { warning:'إنذار كتابي', deduction_percent_day
   deduction_days:'خصم أجر أيام', suspension:'إيقاف بدون أجر', termination:'الفصل من العمل' };
 const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
 const money = (v) => (Number(v || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const APP_VERSION = '2026.09.10c';
+const APP_VERSION = '2026.09.10d';
 
 /* يفرض تحديث عامل الخدمة فور توفر نسخة جديدة (مهم على آيفون) */
 function watchForUpdates() {
@@ -3420,6 +3420,7 @@ views.payroll = async () => {
         <td class="money">${money(r.net_total)}</td>
         <td><button class="btn sm" onclick="openRun(${r.id})">عرض القسائم</button>
             <button class="btn sm ghost" onclick="printRun(${r.id})">${icon('printer')} القسائم PDF</button>
+            <button class="btn sm ghost" onclick="exportExcel(${r.id})">${icon('sheet')} Excel</button>
             <button class="btn sm ghost" onclick="exportRun(${r.id})">CSV</button>
             ${r.status !== 'approved'
               ? `<button class="btn sm ok" onclick="approveRun(${r.id})">اعتماد</button>
@@ -3465,6 +3466,9 @@ views.payroll = async () => {
       </div>`;
   };
   window.exportRun = (id) => downloadCsv(`/api/payroll/runs/${id}/export.csv`, `payroll_${id}.csv`);
+  // ملف Excel منسّق: مجاميع بمعادلات وفلاتر وإعداد طباعة أفقي
+  window.exportExcel = (id) => downloadCsv(
+    `/api/payroll/runs/${id}/export.xlsx`, `payroll_${id}.xlsx`);
   window.approveRun = async (id) => {
     if (!confirm('اعتماد المسير؟ لن يمكن تعديله بعد الاعتماد، وستصل قسائم الرواتب للموظفين.')) return;
     try { await api(`/api/payroll/runs/${id}/approve`, { method: 'POST' });

@@ -3097,3 +3097,58 @@ def test_open_break_day_deducts_half_a_day(client, auth):
     # ويظهر في القسيمة المطبوعة وفي جدول الرواتب
     doc = client.get(f"/api/payroll/payslips/{slip['id']}/print", headers=auth)
     assert doc.status_code == 200 and "استراحة بلا عودة" in doc.text
+
+
+def test_payroll_excel_export(client, auth):
+    """جدول الرواتب يُصدَّر ملف Excel منسّقاً بمجاميع وفلاتر وإعداد طباعة."""
+    import io
+
+    from openpyxl import load_workbook
+
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9395", "full_name": "موظف الإكسل", "basic_salary": 4000,
+        "allowances": 1000}).json()
+    previous = date.today().replace(day=1) - timedelta(days=1)
+    year, month = previous.year, previous.month
+    _unlock_month(client, auth, year, month)
+    client.post("/api/purchases", headers=auth, json={
+        "employee_id": emp["id"], "purchase_date": previous.replace(day=3).isoformat(),
+        "amount": 60, "description": "مشتريات إكسل"})
+    run = client.post(f"/api/payroll/runs?year={year}&month={month}", headers=auth).json()
+
+    res = client.get(f"/api/payroll/runs/{run['id']}/export.xlsx", headers=auth)
+    assert res.status_code == 200
+    assert res.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    assert f"payroll_{year}_{month:02d}.xlsx" in res.headers["content-disposition"]
+
+    ws = load_workbook(io.BytesIO(res.content)).active
+    assert ws.sheet_view.rightToLeft is True          # ورقة عربية
+    headers = [c.value for c in ws[4]]
+    assert "صافي الراتب" in headers and "مشتريات" in headers and "استراحة بلا عودة" in headers
+
+    names = [ws.cell(row=r, column=2).value for r in range(5, ws.max_row + 1)]
+    assert "موظف الإكسل" in names
+    row = names.index("موظف الإكسل") + 5
+    purchases_col = headers.index("مشتريات") + 1
+    assert ws.cell(row=row, column=purchases_col).value == 60
+
+    # سطر الإجمالي بمعادلة حيّة، والطباعة أفقية، والفلاتر مفعّلة
+    totals_row = ws.max_row
+    while ws.cell(row=totals_row, column=1).value != "الإجمالي":
+        totals_row -= 1
+    net_col = headers.index("صافي الراتب") + 1
+    assert str(ws.cell(row=totals_row, column=net_col).value).startswith("=SUM(")
+    assert ws.page_setup.orientation == "landscape"
+    assert ws.freeze_panes == "C5" and ws.auto_filter.ref
+
+    # الموظف لا يصدّر جدول الرواتب
+    from app import security_extra
+
+    security_extra.reset_all()
+    client.post("/api/employees", headers=auth, json={
+        "code": "9396", "full_name": "موظف بلا صلاحية", "phone": "0529998877"})
+    token = client.post("/api/auth/login", data={
+        "username": "0529998877", "password": "0529998877"}).json()["access_token"]
+    assert client.get(f"/api/payroll/runs/{run['id']}/export.xlsx",
+                      headers={"Authorization": f"Bearer {token}"}).status_code == 403

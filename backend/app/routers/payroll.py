@@ -20,7 +20,7 @@ from ..security import (
     require_hr,
     visible_employee_ids,
 )
-from ..services import audit, notifications, payslip_doc, sheets
+from ..services import audit, notifications, payroll_xlsx, payslip_doc, sheets
 from ..services import payroll as service
 
 router = APIRouter(prefix="/api/payroll", tags=["payroll"])
@@ -314,6 +314,33 @@ def payroll_table(run_id: int, db: Session = Depends(get_db)):
     return HTMLResponse(payslip_doc.payroll_table(db, run, slips))
 
 
+@router.get("/runs/{run_id}/export.xlsx", dependencies=[Depends(require_hr)])
+def export_run_excel(run_id: int, db: Session = Depends(get_db)):
+    """جدول الرواتب ملف Excel منسّقاً: مجاميع بمعادلات، فلاتر، وإعداد طباعة أفقي."""
+    run = db.get(PayrollRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="المسير غير موجود")
+    slips = db.scalars(
+        select(Payslip).where(Payslip.run_id == run_id).order_by(Payslip.id)
+    ).all()
+    if not slips:
+        raise HTTPException(status_code=400, detail="لا توجد قسائم في هذا المسير")
+    slips = sorted(slips, key=lambda x: x.employee.code if x.employee else "")
+
+    try:
+        content = payroll_xlsx.workbook(db, run, slips)
+    except ImportError:  # pragma: no cover - مكتبة Excel غير مثبّتة
+        raise HTTPException(
+            status_code=500, detail="مكتبة Excel غير مثبّتة على الخادم — استخدم تصدير CSV"
+        )
+    name = f"payroll_{run.year}_{run.month:02d}.xlsx"
+    return Response(
+        content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={name}"},
+    )
+
+
 @router.get("/runs/{run_id}/export.csv", dependencies=[Depends(require_hr)])
 def export_run(run_id: int, db: Session = Depends(get_db)):
     run = db.get(PayrollRun, run_id)
@@ -326,7 +353,7 @@ def export_run(run_id: int, db: Session = Depends(get_db)):
         "رقم الموظف", "الاسم", "الإدارة", "الراتب الأساسي", "البدلات", "أيام الحضور", "أيام الغياب",
         "إجازة مدفوعة", "إجازة بدون راتب", "دقائق التأخير", "دقائق الإضافي",
         "خصم الغياب", "خصم التأخير", "خصم إجازة بدون راتب", "خصم المخالفات", "قسط السلفة",
-        "بدل الإضافي", "إضافات أخرى", "خصومات أخرى", "صافي الراتب",
+        "مشتريات", "استراحة بلا عودة", "بدل الإضافي", "إضافات أخرى", "خصومات أخرى", "صافي الراتب",
     ])
     for s in sorted(slips, key=lambda x: x.employee.code if x.employee else ""):
         writer.writerow([
@@ -334,7 +361,8 @@ def export_run(run_id: int, db: Session = Depends(get_db)):
             s.employee.department.name if s.employee and s.employee.department else "",
             s.basic_salary, s.allowances or 0, s.present_days, s.absent_days, s.paid_leave_days, s.unpaid_leave_days,
             s.late_minutes, s.overtime_minutes, s.absence_deduction, s.late_deduction,
-            s.unpaid_leave_deduction, s.violation_deduction, s.loan_deduction or 0, s.overtime_amount,
+            s.unpaid_leave_deduction, s.violation_deduction, s.loan_deduction or 0,
+            s.purchases_deduction or 0, s.open_break_deduction or 0, s.overtime_amount,
             s.other_additions, s.other_deductions, s.net_pay,
         ])
     return Response(
