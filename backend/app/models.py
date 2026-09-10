@@ -82,6 +82,19 @@ class PolicyScope(str, enum.Enum):
     shift = "shift"
 
 
+class CarryoverKind(str, enum.Enum):
+    """نوع الحركة المالية المرحّلة."""
+
+    earning = "earning"      # مستحق سابق (يُضاف للراتب)
+    deduction = "deduction"  # خصم سابق (يُخصم من الراتب)
+
+
+class CarryoverStatus(str, enum.Enum):
+    pending = "pending"      # غير مصروف
+    paid = "paid"            # مصروف ضمن مسير معتمد
+    cancelled = "cancelled"  # ملغاة
+
+
 class LoanStatus(str, enum.Enum):
     """حالة السلفة عبر دورتها: طلب ← اعتماد ← إقرار استلام ← خصم."""
 
@@ -665,6 +678,9 @@ class Payslip(Base):
     # أيام «تحتاج مراجعة»: بدأ استراحة ولم يعد حتى نهاية الوردية
     open_break_days: Mapped[float] = mapped_column(Float, default=0)
     open_break_deduction: Mapped[float] = mapped_column(Float, default=0)
+    # حركات مرحّلة من شهور سابقة تُصرف أو تُخصم في هذا المسير
+    carryover_earning: Mapped[float] = mapped_column(Float, default=0)
+    carryover_deduction: Mapped[float] = mapped_column(Float, default=0)
     overtime_amount: Mapped[float] = mapped_column(Float, default=0)
     other_additions: Mapped[float] = mapped_column(Float, default=0)
     other_deductions: Mapped[float] = mapped_column(Float, default=0)
@@ -693,6 +709,38 @@ class EmployeeLoan(Base):
     approved_at: Mapped[datetime | None] = mapped_column(DateTime)
     acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime)
     decision_note: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    employee: Mapped[Employee] = relationship()
+
+
+class PayrollCarryover(Base):
+    """مستحق أو خصم مرحّل من شهر سابق، يُصرف أو يُخصم في مسير لاحق.
+
+    مثال: موظف لم يُصرف له راتب أربعة أيام من الشهر الماضي — تُسجَّل له حركة
+    «مستحق راتب مرحّل» بأربعة أيام وقيمة اليوم، ولا تُقيَّد تلك الأيام إجازةً
+    ولا غياباً في الشهر الحالي.
+    """
+
+    __tablename__ = "payroll_carryovers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[CarryoverKind] = mapped_column(Enum(CarryoverKind), default=CarryoverKind.earning)
+    # الشهر الذي تخصّه الحركة (لا شهر الصرف)
+    source_year: Mapped[int] = mapped_column(Integer, index=True)
+    source_month: Mapped[int] = mapped_column(Integer, index=True)
+    days: Mapped[float] = mapped_column(Float, default=0)        # عدد الأيام
+    day_rate: Mapped[float] = mapped_column(Float, default=0)    # قيمة اليوم
+    amount: Mapped[float] = mapped_column(Float, default=0)      # إجمالي المبلغ
+    reason: Mapped[str] = mapped_column(String(255))             # السبب
+    admin_note: Mapped[str | None] = mapped_column(Text)         # ملاحظة الإدارة
+    status: Mapped[CarryoverStatus] = mapped_column(
+        Enum(CarryoverStatus), default=CarryoverStatus.pending, index=True
+    )
+    paid_run_id: Mapped[int | None] = mapped_column(ForeignKey("payroll_runs.id", ondelete="SET NULL"))
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     employee: Mapped[Employee] = relationship()

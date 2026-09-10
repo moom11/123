@@ -784,6 +784,8 @@ class PayslipOut(ORMModel):
     purchases_deduction: float = 0
     open_break_days: float = 0
     open_break_deduction: float = 0
+    carryover_earning: float = 0
+    carryover_deduction: float = 0
     overtime_amount: float
     other_additions: float
     other_deductions: float

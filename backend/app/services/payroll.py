@@ -20,6 +20,7 @@ from ..models import (
 )
 from . import attendance as attendance_service
 from . import loans as loans_service
+from . import carryovers as carryovers_service
 from . import purchases as purchases_service
 from . import settings_store, violations
 
@@ -86,13 +87,15 @@ def compute_payslip(db: Session, employee: Employee, year: int, month: int) -> d
     purchases_deduction = purchases_service.monthly_deduction(db, employee.id, year, month)
     open_break_factor = float(settings_store.get(db, "open_break_deduction_days") or 0.5)
     open_break_deduction = round(open_break_days * daily * open_break_factor, 2)
+    # حركات مرحّلة من شهور سابقة لم تُصرف بعد
+    carryover_earning, carryover_deduction = carryovers_service.totals_for(db, employee.id)
 
     basic = round(employee.basic_salary or 0, 2)
     allowances = round(employee.allowances or 0, 2)
     net = round(
-        basic + allowances + overtime_amount
+        basic + allowances + overtime_amount + carryover_earning
         - absence_deduction - unpaid_leave_deduction - late_deduction - violation_deduction
-        - loan_deduction - purchases_deduction - open_break_deduction,
+        - loan_deduction - purchases_deduction - open_break_deduction - carryover_deduction,
         2,
     )
     return {
@@ -113,6 +116,8 @@ def compute_payslip(db: Session, employee: Employee, year: int, month: int) -> d
         "purchases_deduction": purchases_deduction,
         "open_break_days": open_break_days,
         "open_break_deduction": open_break_deduction,
+        "carryover_earning": carryover_earning,
+        "carryover_deduction": carryover_deduction,
         "overtime_amount": overtime_amount,
         "other_additions": 0.0,
         "other_deductions": 0.0,
@@ -176,12 +181,14 @@ def totals(db: Session, run_id: int) -> dict:
         "loans_total": round(sum(s.loan_deduction or 0 for s in slips), 2),
         "purchases_total": round(sum(s.purchases_deduction or 0 for s in slips), 2),
         "open_break_total": round(sum(s.open_break_deduction or 0 for s in slips), 2),
+        "carryover_earning_total": round(sum(s.carryover_earning or 0 for s in slips), 2),
+        "carryover_deduction_total": round(sum(s.carryover_deduction or 0 for s in slips), 2),
         "deductions_total": round(
             sum(
                 s.absence_deduction + s.late_deduction + s.unpaid_leave_deduction
                 + s.violation_deduction + (s.loan_deduction or 0)
                 + (s.purchases_deduction or 0) + (s.open_break_deduction or 0)
-                + s.other_deductions
+                + (s.carryover_deduction or 0) + s.other_deductions
                 for s in slips
             ),
             2,

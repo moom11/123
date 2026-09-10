@@ -38,6 +38,8 @@ COLUMNS = [
     ("قسط السلفة", lambda s: s.loan_deduction or 0, 12, True),
     ("مشتريات", lambda s: s.purchases_deduction or 0, 11, True),
     ("استراحة بلا عودة", lambda s: s.open_break_deduction or 0, 15, True),
+    ("مستحق مرحّل", lambda s: s.carryover_earning or 0, 13, True),
+    ("خصم مرحّل", lambda s: s.carryover_deduction or 0, 13, True),
     ("إضافات أخرى", lambda s: s.other_additions, 12, True),
     ("خصومات أخرى", lambda s: s.other_deductions, 12, True),
     ("صافي الراتب", lambda s: s.net_pay, 14, True),

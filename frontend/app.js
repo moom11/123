@@ -24,6 +24,7 @@ const PAGES = [
   { id: 'payroll',    title: 'الرواتب',        icon: 'payroll', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
   { id: 'loans',      title: 'السلف',          icon: 'loans', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
   { id: 'purchases',  title: 'مشتريات الموظفين', icon: 'cart', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
+  { id: 'carryovers', title: 'المستحقات المرحّلة', icon: 'money', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
   { id: 'punchRequests', title: 'طلبات البصمة', icon: 'edit', group: 'الحضور', roles: ['admin','hr','manager'] },
   { id: 'employees',  title: 'الموظفون',       icon: 'employees', group: 'شؤون الموظفين', roles: ['admin','hr','manager'] },
   { id: 'documents',  title: 'الوثائق',        icon: 'documents', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
@@ -61,7 +62,7 @@ const PENALTY_ACTIONS = { warning:'إنذار كتابي', deduction_percent_day
   deduction_days:'خصم أجر أيام', suspension:'إيقاف بدون أجر', termination:'الفصل من العمل' };
 const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
 const money = (v) => (Number(v || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const APP_VERSION = '2026.09.10e';
+const APP_VERSION = '2026.09.10f';
 
 /* يفرض تحديث عامل الخدمة فور توفر نسخة جديدة (مهم على آيفون) */
 function watchForUpdates() {
@@ -1028,6 +1029,16 @@ const HELP = {
       <li><b>إلغاء الاعتماد</b> يعيده مسودة قابلة للتعديل، وتختفي القسائم من شاشات الموظفين
         ويصلهم إشعار بأنها قيد المراجعة. السبب إلزامي ويُحفظ في سجل التدقيق.</li>
     </ul>
+    <h4>${icon('shield')} فحص ما قبل الإقفال</h4>
+    <p>اضغطه قبل احتساب المسير ليعرض لك، لكل موظف، خمس حالات تحتاج معالجة:</p>
+    <ul>
+      <li>أيام غياب بلا بصمة وبلا إجازة.</li>
+      <li>تجاوز رصيد الإجازة.</li>
+      <li>مستحقات مرحّلة من شهر سابق لم تُصرف.</li>
+      <li>خصم مسجَّل لم يُعتمد بعد.</li>
+      <li>بصمة دخول بلا خروج (أو استراحة بلا عودة).</li>
+    </ul>
+    <p>وزر «إرسال الملخّص للإدارة» يرسل النتيجة إشعاراً لمديري النظام والموارد البشرية.</p>
     <h4>${icon('printer')} الطباعة</h4>
     <ul>
       <li><b>القسائم PDF</b>: قسيمة مستقلة لكل موظف.</li>
@@ -1122,6 +1133,23 @@ const HELP = {
     </ol>
     <div class="hp-note">لا يُخصم قسط واحد قبل إقرار الموظف بالاستلام — فلا يُخصم من
       راتب أحد مبلغ لم يستلمه.</div>`],
+
+  carryovers: ['المستحقات المرحّلة', `
+    <h4>${icon('money')} ما هذه الشاشة</h4>
+    <p>جدول مستقل للمستحقات والخصومات المرحّلة من شهور سابقة. مثال: موظف لم يُصرف
+      له راتب أربعة أيام من الشهر الماضي.</p>
+    <div class="hp-note">تلك الأيام <b>لا تُقيَّد إجازةً ولا غياباً</b> في الشهر الحالي —
+      تُسجَّل هنا حركة مالية مستقلة فقط.</div>
+    <h4>${icon('check')} كيف تُصرف</h4>
+    <p>كل حركة «غير مصروفة» تدخل تلقائياً في أقرب مسير: المستحق يُضاف والخصم يُخصم،
+      وتُعلَّم <b>مصروف</b> عند اعتماد المسير. وإلغاء اعتماده يعيدها «غير مصروف».</p>
+    <h4>${icon('edit')} الحقول</h4>
+    <ul>
+      <li><b>نوع الحركة</b>: مستحق سابق أو خصم سابق.</li>
+      <li><b>الشهر الذي تخصّه</b>: لا شهر الصرف.</li>
+      <li><b>الأيام × قيمة اليوم</b> = المبلغ (قيمة اليوم تُحتسب من راتبه إن تُركت فارغة).</li>
+      <li><b>السبب</b> و<b>ملاحظة الإدارة</b> و<b>حالة الصرف</b>.</li>
+    </ul>`],
 
   myLeaves: ['طلباتي', `
     <h4>${icon('leave')} تقديم طلب</h4>
@@ -2601,6 +2629,171 @@ views.purchases = async () => {
   load().catch((e) => toast(e.message, 'err'));
 };
 
+/* ------------------------------ المستحقات والخصومات المرحّلة ------------------------------ */
+const CARRY_KIND = { earning: 'مستحق سابق', deduction: 'خصم سابق' };
+const CARRY_STATUS = { pending: 'غير مصروف', paid: 'مصروف', cancelled: 'ملغاة' };
+const CARRY_TAG = { pending: 'pending', paid: 'on', cancelled: 'cancelled' };
+
+views.carryovers = async () => {
+  const manage = isHR();
+  const { employees } = manage ? await loadLookups() : { employees: [] };
+  const now = new Date();
+  render(`
+    <div class="card"><div class="card-body inline">
+      ${manage ? `<button class="btn ok" id="cyNew">${icon('plus')} تسجيل حركة</button>` : ''}
+      <div class="field"><label>الحالة</label><select id="cyStatus">
+        <option value="pending">غير مصروف</option><option value="">الكل</option>
+        <option value="paid">مصروف</option><option value="cancelled">ملغاة</option></select></div>
+      <div class="field"><label>النوع</label><select id="cyKind">
+        <option value="">الكل</option><option value="earning">مستحق سابق</option>
+        <option value="deduction">خصم سابق</option></select></div>
+      ${manage ? `<div class="field"><label>الموظف</label><select id="cyEmp"><option value="">الكل</option>${
+        options(employees, '', 'id', 'full_name')}</select></div>` : ''}
+      <button class="btn ghost" id="cyLoad">عرض</button>
+      <span class="help">تُضاف أو تُخصم تلقائياً في أقرب مسير، وتُعلَّم «مصروف» عند اعتماده.</span>
+    </div></div>
+    <div class="grid cols-3 stagger" id="cyKpis"></div>
+    <div class="card"><div class="card-head"><h3>الحركات المرحّلة</h3>
+      <span class="muted" id="cyCount"></span></div>
+      <div id="cyTable"><div class="sk-rows">${'<div class="sk line"></div>'.repeat(4)}</div></div></div>`);
+
+  const load = async () => {
+    const q = new URLSearchParams();
+    if (el('cyStatus').value) q.set('status', el('cyStatus').value);
+    if (el('cyKind').value) q.set('kind', el('cyKind').value);
+    if (el('cyEmp') && el('cyEmp').value) q.set('employee_id', el('cyEmp').value);
+    const rows = await api('/api/carryovers?' + q);
+    el('cyCount').textContent = `${rows.length} حركة`;
+    const live = rows.filter((r) => r.status === 'pending');
+    const sum = (kind) => live.filter((r) => r.kind === kind).reduce((t, r) => t + r.amount, 0);
+    el('cyKpis').innerHTML = `
+      <div class="kpi ok"><div class="label">مستحقات غير مصروفة<span class="ico">${icon('money')}</span></div>
+        <div class="value ok">${money(sum('earning'))}</div></div>
+      <div class="kpi danger"><div class="label">خصومات مرحّلة<span class="ico">${icon('alert')}</span></div>
+        <div class="value danger">${money(sum('deduction'))}</div></div>
+      <div class="kpi info"><div class="label">الصافي المرحّل<span class="ico">${icon('check')}</span></div>
+        <div class="value info">${money(sum('earning') - sum('deduction'))}</div></div>`;
+    el('cyTable').innerHTML = table(
+      ['الموظف', 'نوع الحركة', 'الشهر', 'الأيام', 'قيمة اليوم', 'المبلغ', 'السبب',
+       'ملاحظة الإدارة', 'حالة الصرف', ''],
+      rows,
+      (r) => `<tr${r.status === 'cancelled' ? ' style="opacity:.55"' : ''}>
+        <td>${esc(r.employee_name || '')}<div class="muted" style="font-size:11.5px">${esc(r.employee_code || '')}</div></td>
+        <td><span class="tag ${r.kind === 'earning' ? 'on' : 'late'}">${esc(r.kind_label)}</span></td>
+        <td>${esc(r.period_label)}</td>
+        <td>${r.days || '—'}</td><td class="money">${money(r.day_rate)}</td>
+        <td class="money"><b>${money(r.amount)}</b></td>
+        <td>${esc(r.reason)}</td>
+        <td class="muted" style="font-size:12px">${esc(r.admin_note || '')}</td>
+        <td><span class="tag ${CARRY_TAG[r.status]}">${esc(r.status_label)}</span>
+          ${r.paid_at ? `<div class="muted" style="font-size:11px">${esc(String(r.paid_at).slice(0, 10))}</div>` : ''}</td>
+        <td>${manage && r.status === 'pending'
+          ? `<button class="btn sm ghost" onclick="editCarry(${r.id})">تعديل</button>
+             <button class="btn sm danger" onclick="cancelCarry(${r.id})">إلغاء</button>` : ''}</td></tr>`,
+      manage ? 'لا حركات مرحّلة' : 'لا مستحقات ولا خصومات مرحّلة عليك');
+    window._carryRows = rows;
+  };
+
+  el('cyLoad').onclick = () => load().catch((e) => toast(e.message, 'err'));
+  ['cyStatus', 'cyKind'].forEach((id) =>
+    el(id).onchange = () => load().catch((e) => toast(e.message, 'err')));
+
+  const form = (row) => modal({
+    title: row ? 'تعديل الحركة' : 'تسجيل حركة مرحّلة',
+    body: `<div class="help" style="margin-bottom:12px">الأيام هنا <b>لا تُقيَّد إجازةً ولا غياباً</b>
+        في الشهر الحالي — هي حركة مالية مستقلة تُصرف أو تُخصم في أقرب مسير.</div>
+      ${row ? '' : `<div class="field"><label>الموظف</label>
+        <select id="cfEmp">${options(employees, '', 'id', 'full_name')}</select></div>
+      <div class="field"><label>نوع الحركة</label><select id="cfKind">
+        <option value="earning">مستحق سابق (يُضاف للراتب)</option>
+        <option value="deduction">خصم سابق (يُخصم من الراتب)</option></select></div>
+      <div class="inline">
+        <div class="field" style="flex:1"><label>الشهر الذي تخصّه</label><select id="cfMonth">${
+          MONTHS.map((m, i) => `<option value="${i + 1}" ${i === (now.getMonth() + 11) % 12 ? 'selected' : ''}>${m}</option>`).join('')
+        }</select></div>
+        <div class="field" style="flex:1"><label>السنة</label>
+          <input type="number" id="cfYear" value="${now.getFullYear()}" /></div>
+      </div>`}
+      <div class="inline">
+        <div class="field" style="flex:1"><label>عدد الأيام</label>
+          <input type="number" step="0.5" id="cfDays" value="${row ? row.days : 1}" /></div>
+        <div class="field" style="flex:1"><label>قيمة اليوم</label>
+          <input type="number" step="0.01" id="cfRate" value="${row ? row.day_rate : 0}"
+                 placeholder="يُحتسب تلقائياً" /></div>
+      </div>
+      <div class="help" id="cfTotal" style="margin-bottom:10px"></div>
+      <div class="field"><label>السبب</label>
+        <input id="cfReason" value="${esc(row ? row.reason : '')}"
+               placeholder="مستحق راتب مرحّل من الشهر السابق - 4 أيام" /></div>
+      <div class="field"><label>ملاحظة الإدارة (اختيارية)</label>
+        <textarea id="cfNote" rows="2">${esc(row ? (row.admin_note || '') : '')}</textarea></div>`,
+    footer: '<button class="btn" id="cfSave">حفظ</button><button class="btn gray" data-close>إلغاء</button>',
+    onOpen: (root) => {
+      const total = () => {
+        const value = Number($('#cfDays', root).value || 0) * Number($('#cfRate', root).value || 0);
+        $('#cfTotal', root).innerHTML = value
+          ? `إجمالي المبلغ: <b>${money(value)}</b> ريال`
+          : 'اترك قيمة اليوم فارغة ليُحتسب أجر اليوم من راتب الموظف.';
+      };
+      ['cfDays', 'cfRate'].forEach((id) => { $('#' + id, root).oninput = total; });
+      total();
+      // جلب أجر اليوم المقترح عند اختيار الموظف
+      const empSel = $('#cfEmp', root);
+      const fillRate = async () => {
+        try {
+          const r = await api('/api/carryovers/day-rate?employee_id=' + empSel.value);
+          if (!Number($('#cfRate', root).value)) { $('#cfRate', root).value = r.day_rate; total(); }
+        } catch (e) { /* تجاهل */ }
+      };
+      if (empSel) { empSel.onchange = fillRate; fillRate(); }
+
+      $('#cfSave', root).onclick = async () => {
+        const reason = $('#cfReason', root).value.trim();
+        if (reason.length < 2) return toast('اكتب سبب الحركة', 'err');
+        try {
+          if (row) {
+            await api('/api/carryovers/' + row.id, { method: 'PATCH', body: {
+              days: Number($('#cfDays', root).value || 0),
+              day_rate: Number($('#cfRate', root).value || 0),
+              reason, admin_note: $('#cfNote', root).value.trim() || null } });
+          } else {
+            await api('/api/carryovers', { method: 'POST', body: {
+              employee_id: Number(empSel.value),
+              kind: $('#cfKind', root).value,
+              source_year: Number($('#cfYear', root).value),
+              source_month: Number($('#cfMonth', root).value),
+              days: Number($('#cfDays', root).value || 0),
+              day_rate: Number($('#cfRate', root).value || 0),
+              reason, admin_note: $('#cfNote', root).value.trim() || null } });
+          }
+          toast('حُفظت الحركة', 'ok'); closeModal(); load();
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    },
+  });
+
+  if (el('cyNew')) el('cyNew').onclick = () => form(null);
+  window.editCarry = (id) => form((window._carryRows || []).find((r) => r.id === id));
+  window.cancelCarry = (id) => modal({
+    title: 'إلغاء الحركة',
+    body: `<div class="help" style="margin-bottom:12px">تبقى في السجل ولا تُحتسب في المسير.</div>
+      <div class="field"><label>سبب الإلغاء (إلزامي)</label>
+        <input id="ccReason" placeholder="مثال: سُجّلت بالخطأ" /></div>`,
+    footer: '<button class="btn danger" id="ccSave">إلغاء الحركة</button><button class="btn gray" data-close>تراجع</button>',
+    onOpen: (root) => {
+      $('#ccSave', root).onclick = async () => {
+        const reason = $('#ccReason', root).value.trim();
+        if (reason.length < 3) return toast('اكتب سبب الإلغاء', 'err');
+        try {
+          await api(`/api/carryovers/${id}/cancel`, { method: 'POST', body: { reason } });
+          toast('أُلغيت الحركة', 'ok'); closeModal(); load();
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    },
+  });
+  load().catch((e) => toast(e.message, 'err'));
+};
+
 /* ------------------------------ طلبات «نسيت البصمة» ------------------------------ */
 views.punchRequests = async () => {
   render(`
@@ -3417,12 +3610,61 @@ views.payroll = async () => {
         MONTHS.map((m, i) => `<option value="${i + 1}" ${i === now.getMonth() ? 'selected' : ''}>${m}</option>`).join('')
       }</select></div>
       <button class="btn ok" id="prRun">احتساب المسير</button>
-      <span class="help">يُحتسب من الحضور والإجازات والمخالفات المعتمدة تلقائياً.</span>
+      <button class="btn gray" id="prCheck">${icon('shield')} فحص ما قبل الإقفال</button>
+      <span class="help">افحص الشهر قبل الاحتساب لتعالج الغياب والمستحقات المعلّقة.</span>
     </div></div>
+    <div id="prIssues"></div>
     <div class="grid cols-4 stagger" id="prKpis"></div>
     <div class="card"><div class="card-head"><h3>مسيّرات الرواتب</h3></div>
       <div id="prRuns"><div class="sk-rows">${'<div class="sk line"></div>'.repeat(3)}</div></div></div>
     <div id="prDetail"></div>`);
+
+  // فحص ما قبل الإقفال: خمس حالات تُراجَع قبل احتساب المسير
+  const preClose = async (notify) => {
+    const year = el('prYear').value, month = el('prMonth').value;
+    el('prIssues').innerHTML = `<div class="card"><div class="card-body">
+      <div class="sk-rows">${'<div class="sk line"></div>'.repeat(2)}</div></div></div>`;
+    let result;
+    try {
+      result = notify
+        ? await api(`/api/payroll/pre-close/notify?year=${year}&month=${month}`, { method: 'POST' })
+        : await api(`/api/payroll/pre-close?year=${year}&month=${month}`);
+    } catch (e) { el('prIssues').innerHTML = ''; return toast(e.message, 'err'); }
+
+    if (result.clean) {
+      el('prIssues').innerHTML = `<div class="card"><div class="card-body">
+        <div class="soft-alert" style="background:var(--ok-soft);color:var(--ok)">
+          ${icon('check')} لا ملاحظات على ${MONTHS[month - 1]} ${year} — الشهر جاهز للإقفال
+          (فُحص ${result.employees_checked} موظف).</div></div></div>`;
+      if (notify) toast('أُرسل الملخّص للإدارة', 'ok');
+      return;
+    }
+
+    const chips = Object.entries(result.totals).filter(([, n]) => n)
+      .map(([key, n]) => `<span class="tag ${key === 'absent_days' || key === 'leave_overdraft'
+        ? 'absent' : 'pending'}">${esc(result.labels[key])}: ${n}</span>`).join(' ');
+    el('prIssues').innerHTML = `<div class="card">
+      <div class="card-head"><h3>${icon('alert')} ملاحظات قبل إقفال ${MONTHS[month - 1]} ${year}</h3>
+        <button class="btn sm ghost" id="prNotify">إرسال الملخّص للإدارة</button></div>
+      <div class="card-body"><div class="inline" style="flex-wrap:wrap;gap:6px">${chips}</div>
+        <div class="help" style="margin-top:8px">${result.rows.length} موظف بحاجة مراجعة
+          من أصل ${result.employees_checked}.</div></div>
+      ${result.rows.map((row) => `
+        <div class="row-item" style="align-items:flex-start">
+          <span class="ri danger">${icon('employees')}</span>
+          <div class="rt"><b>${esc(row.employee_name)}</b>
+            <span>${row.issues.map((i) =>
+              `<span class="tag ${i.tone === 'danger' ? 'absent' : 'pending'}"
+                     style="margin-inline-end:4px">${esc(i.label)} (${i.count})</span>`).join('')}</span>
+            <div class="muted" style="font-size:11.5px;margin-top:4px">${row.issues.map((i) =>
+              esc(i.detail)).join(' · ')}</div></div>
+          <div class="rv"><button class="btn sm ghost"
+            onclick="go('attendance')">مراجعة</button></div></div>`).join('')}
+    </div>`;
+    if (el('prNotify')) el('prNotify').onclick = () => preClose(true);
+    if (notify) toast('أُرسل الملخّص للإدارة', 'ok');
+  };
+  el('prCheck').onclick = () => preClose(false);
 
   const loadRuns = async () => {
     const runs = await api('/api/payroll/runs');
@@ -3479,7 +3721,7 @@ views.payroll = async () => {
         <span class="muted">صافي المسير: <b class="money">${money(run.net_total)}</b> ريال</span></div>
       ${table(['رقم الموظف', 'الاسم', 'الأساسي', 'البدلات', 'حضور', 'غياب', 'تأخير (د)', 'إضافي (د)',
                'خصم غياب', 'خصم تأخير', 'إجازة بلا راتب', 'خصم مخالفات', 'قسط سلفة', 'مشتريات',
-               'بدل إضافي', 'إضافات', 'خصومات', 'الصافي', ''],
+               'مستحق مرحّل', 'خصم مرحّل', 'بدل إضافي', 'إضافات', 'خصومات', 'الصافي', ''],
         slips,
         (s) => `<tr><td>${esc(s.employee_code)}</td><td>${esc(s.employee_name)}</td>
           <td class="money">${money(s.basic_salary)}</td><td class="money">${money(s.allowances)}</td>
@@ -3489,6 +3731,8 @@ views.payroll = async () => {
           <td class="money">${money(s.unpaid_leave_deduction)}</td><td class="money">${money(s.violation_deduction)}</td>
           <td class="money">${money(s.loan_deduction)}</td>
           <td class="money">${money(s.purchases_deduction || 0)}</td>
+          <td class="money">${money(s.carryover_earning || 0)}</td>
+          <td class="money">${money(s.carryover_deduction || 0)}</td>
           <td class="money">${money(s.overtime_amount)}</td><td class="money">${money(s.other_additions)}</td>
           <td class="money">${money(s.other_deductions)}</td><td class="money"><b>${money(s.net_pay)}</b></td>
           <td><button class="btn sm ghost" onclick="printPayslip(${s.id})">${icon('printer')} قسيمة</button>
@@ -3798,7 +4042,14 @@ settingsTabs.alerts = async () => {
       <div class="card-body">
         <div class="grid cols-3">
           <div class="field"><label>أيام الراحة الشهرية لكل موظف</label>
-            <input type="number" id="alRest" min="0" max="15" value="${st.monthly_rest_quota}" /></div>
+            <select id="alRest">${[0, 1, 2, 4, 6, 8].map((n) =>
+              `<option value="${n}" ${n === st.monthly_rest_quota ? 'selected' : ''}>${
+                n === 0 ? 'بلا راحة مجدولة' : n + ' ' + (n === 1 ? 'يوم' : n === 2 ? 'يومان' : 'أيام')
+              }</option>`).join('')}${
+              [0, 1, 2, 4, 6, 8].includes(st.monthly_rest_quota) ? ''
+                : `<option value="${st.monthly_rest_quota}" selected>${st.monthly_rest_quota} أيام</option>`}
+            </select>
+            <div class="help">الشائع: يوم واحد، أو يومان، أو أربعة أيام في الشهر.</div></div>
           <div class="field"><label>إظهار رصيد الإجازات للموظف</label><select id="alBal">
             <option value="false" ${st.show_leave_balance_to_employee ? '' : 'selected'}>مخفي</option>
             <option value="true" ${st.show_leave_balance_to_employee ? 'selected' : ''}>ظاهر</option></select></div>

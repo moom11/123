@@ -42,6 +42,7 @@ ENTITY_LABELS = {
     "loan": "سلفة",
     "purchase": "فاتورة مشتريات",
     "punch_request": "طلب بصمة",
+    "carryover": "حركة مرحّلة",
     "department": "إدارة",
 }
 

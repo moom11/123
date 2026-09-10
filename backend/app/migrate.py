@@ -43,6 +43,8 @@ NEW_COLUMNS: list[tuple[str, str, str]] = [
     ("users", "password_changed_at", "DATETIME"),
     ("users", "totp_secret", "VARCHAR(64)"),
     ("users", "totp_enabled", "BOOLEAN DEFAULT 0"),
+    ("payslips", "carryover_earning", "FLOAT DEFAULT 0"),
+    ("payslips", "carryover_deduction", "FLOAT DEFAULT 0"),
 ]
 
 

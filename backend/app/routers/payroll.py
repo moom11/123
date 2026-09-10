@@ -20,7 +20,8 @@ from ..security import (
     require_hr,
     visible_employee_ids,
 )
-from ..services import audit, notifications, payroll_xlsx, payslip_doc, sheets
+from ..services import audit, carryovers as carryovers_service
+from ..services import month_close, notifications, payroll_xlsx, payslip_doc, sheets
 from ..services import payroll as service
 
 router = APIRouter(prefix="/api/payroll", tags=["payroll"])
@@ -61,6 +62,8 @@ def payslip_out(slip: Payslip) -> PayslipOut:
         unpaid_leave_deduction=slip.unpaid_leave_deduction,
         violation_deduction=slip.violation_deduction,
         purchases_deduction=slip.purchases_deduction or 0,
+        carryover_earning=slip.carryover_earning or 0,
+        carryover_deduction=slip.carryover_deduction or 0,
         open_break_days=slip.open_break_days or 0,
         open_break_deduction=slip.open_break_deduction or 0,
         overtime_amount=slip.overtime_amount,
@@ -137,6 +140,48 @@ def adjust_payslip(
     return payslip_out(slip)
 
 
+@router.get("/pre-close")
+def pre_close_check(
+    year: int,
+    month: int = Query(ge=1, le=12),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_hr),
+):
+    """فحص ما قبل إقفال الشهر: ما الذي يجب معالجته قبل احتساب المسير."""
+    return month_close.scan(db, year, month)
+
+
+@router.post("/pre-close/notify")
+def pre_close_notify(
+    year: int,
+    month: int = Query(ge=1, le=12),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_hr),
+):
+    """إرسال ملخّص الفحص تنبيهاً للموارد البشرية ومديري النظام."""
+    result = month_close.scan(db, year, month)
+    admins = db.scalars(
+        select(User).where(User.role.in_([Role.admin, Role.hr]), User.is_active.is_(True))
+    ).all()
+    body_lines = [
+        f"{row['employee_name']}: "
+        + "، ".join(f"{issue['label']} ({issue['count']})" for issue in row["issues"])
+        for row in result["rows"][:12]
+    ]
+    if len(result["rows"]) > 12:
+        body_lines.append(f"… و{len(result['rows']) - 12} موظفاً آخر")
+    notifications.notify_users(
+        db, list(admins), f"فحص ما قبل إقفال {month:02d}/{year}",
+        body=month_close.summary_text(result) + ("\n" + "\n".join(body_lines) if body_lines else ""),
+        category="payroll", link_page="payroll", commit=False,
+    )
+    audit.log(db, user, "payroll", "payroll", None,
+              f"فحص ما قبل الإقفال {month:02d}/{year}: {month_close.summary_text(result)}",
+              commit=False)
+    db.commit()
+    return {"ok": True, "sent": len(admins), **result}
+
+
 @router.get("/to-date", response_model=list[SalaryToDateOut])
 def salaries_to_date(
     employee_id: int | None = None,
@@ -163,7 +208,11 @@ def approve_run(run_id: int, db: Session = Depends(get_db), user: User = Depends
     if not run:
         raise HTTPException(status_code=404, detail="المسير غير موجود")
     run = service.approve_run(db, run)
-    audit.log(db, user, "approve", "payroll", run.id, f"اعتماد مسير {run.month}/{run.year}")
+    # الحركات المرحّلة صُرفت بهذا المسير
+    paid = carryovers_service.mark_paid(db, run)
+    audit.log(db, user, "approve", "payroll", run.id,
+              f"اعتماد مسير {run.month}/{run.year}"
+              + (f" (صُرفت {paid} حركة مرحّلة)" if paid else ""), commit=False)
     slips_all = db.scalars(select(Payslip).where(Payslip.run_id == run.id)).all()
     sheets.push(db, "payroll", sheets.payslip_rows(run, slips_all))
     for slip in slips_all:
@@ -203,6 +252,8 @@ def revoke_run(
 
     run.status = PayrollStatus.draft
     run.approved_at = None
+    # ما صُرف بهذا المسير من حركات مرحّلة يعود «غير مصروف»
+    carryovers_service.unmark_paid(db, run)
     db.flush()
     audit.log(
         db, user, "update", "payroll", run.id,
@@ -353,7 +404,8 @@ def export_run(run_id: int, db: Session = Depends(get_db)):
         "رقم الموظف", "الاسم", "الإدارة", "الراتب الأساسي", "البدلات", "أيام الحضور", "أيام الغياب",
         "إجازة مدفوعة", "إجازة بدون راتب", "دقائق التأخير", "دقائق الإضافي",
         "خصم الغياب", "خصم التأخير", "خصم إجازة بدون راتب", "خصم المخالفات", "قسط السلفة",
-        "مشتريات", "استراحة بلا عودة", "بدل الإضافي", "إضافات أخرى", "خصومات أخرى", "صافي الراتب",
+        "مشتريات", "استراحة بلا عودة", "مستحق مرحّل", "خصم مرحّل",
+        "بدل الإضافي", "إضافات أخرى", "خصومات أخرى", "صافي الراتب",
     ])
     for s in sorted(slips, key=lambda x: x.employee.code if x.employee else ""):
         writer.writerow([
@@ -362,7 +414,8 @@ def export_run(run_id: int, db: Session = Depends(get_db)):
             s.basic_salary, s.allowances or 0, s.present_days, s.absent_days, s.paid_leave_days, s.unpaid_leave_days,
             s.late_minutes, s.overtime_minutes, s.absence_deduction, s.late_deduction,
             s.unpaid_leave_deduction, s.violation_deduction, s.loan_deduction or 0,
-            s.purchases_deduction or 0, s.open_break_deduction or 0, s.overtime_amount,
+            s.purchases_deduction or 0, s.open_break_deduction or 0,
+            s.carryover_earning or 0, s.carryover_deduction or 0, s.overtime_amount,
             s.other_additions, s.other_deductions, s.net_pay,
         ])
     return Response(

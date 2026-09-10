@@ -3380,3 +3380,176 @@ def test_rate_limit_blocks_flood(client, auth):
         security_extra.RATE_MAX = original
         security_extra.reset_rate()
     assert client.get("/api/health").status_code == 200
+
+
+# --------------------------- المستحقات والخصومات المرحّلة ---------------------------
+
+def test_carryover_paid_with_next_run(client, auth):
+    """أيام لم تُصرف الشهر الماضي تُسجَّل حركة مالية مستقلة، وتُصرف في المسير التالي."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9420", "full_name": "موظف المستحق المرحّل", "basic_salary": 3000}).json()
+    previous = date.today().replace(day=1) - timedelta(days=1)
+    year, month = previous.year, previous.month
+    _unlock_month(client, auth, year, month)
+
+    rate = client.get(f"/api/carryovers/day-rate?employee_id={emp['id']}", headers=auth).json()
+    assert rate["day_rate"] == 100         # 3000 ÷ 30
+
+    created = client.post("/api/carryovers", headers=auth, json={
+        "employee_id": emp["id"], "kind": "earning",
+        "source_year": year, "source_month": month,
+        "days": 4, "day_rate": 0,          # يُحتسب تلقائياً
+        "reason": "مستحق راتب مرحّل من الشهر السابق - 4 أيام",
+        "admin_note": "لم يُصرف بسبب تأخر الاعتماد"})
+    assert created.status_code == 201, created.text
+    row = created.json()
+    assert row["kind_label"] == "مستحق سابق" and row["status_label"] == "غير مصروف"
+    assert row["days"] == 4 and row["day_rate"] == 100 and row["amount"] == 400
+    assert row["period_label"].endswith(str(year))
+
+    # خصم سابق أيضاً
+    client.post("/api/carryovers", headers=auth, json={
+        "employee_id": emp["id"], "kind": "deduction",
+        "source_year": year, "source_month": month,
+        "days": 1, "day_rate": 100, "reason": "خصم يوم لم يُطبَّق في حينه"})
+
+    summary = client.get("/api/carryovers/summary", headers=auth).json()
+    assert summary["earning_total"] >= 400 and summary["deduction_total"] >= 100
+
+    # تدخل في مسير الشهر الحالي
+    today = date.today()
+    _unlock_month(client, auth, today.year, today.month)
+    run = client.post(f"/api/payroll/runs?year={today.year}&month={today.month}",
+                      headers=auth).json()
+    slip = next(s for s in client.get(
+        f"/api/payroll/runs/{run['id']}/payslips", headers=auth).json()
+        if s["employee_code"] == "9420")
+    assert slip["carryover_earning"] == 400
+    assert slip["carryover_deduction"] == 100
+
+    # الاعتماد يعلّمها «مصروف»، والإلغاء يعيدها
+    client.post(f"/api/payroll/runs/{run['id']}/approve", headers=auth)
+    rows = client.get(f"/api/carryovers?employee_id={emp['id']}", headers=auth).json()
+    assert all(r["status"] == "paid" and r["paid_run_id"] == run["id"] for r in rows)
+
+    client.post(f"/api/payroll/runs/{run['id']}/revoke", headers=auth,
+                json={"reason": "مراجعة"})
+    rows = client.get(f"/api/carryovers?employee_id={emp['id']}", headers=auth).json()
+    assert all(r["status"] == "pending" and r["paid_run_id"] is None for r in rows)
+
+
+def test_carryover_edit_cancel_and_scope(client, auth):
+    """التعديل يعيد حساب المبلغ، والإلغاء بسبب، والموظف يرى حركاته فقط."""
+    from app import security_extra
+
+    security_extra.reset_all()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9421", "full_name": "موظف الحركات", "phone": "0521119988",
+        "basic_salary": 6000}).json()
+    other = client.post("/api/employees", headers=auth, json={
+        "code": "9422", "full_name": "موظف آخر للحركات", "basic_salary": 3000}).json()
+
+    row = client.post("/api/carryovers", headers=auth, json={
+        "employee_id": emp["id"], "kind": "earning", "source_year": 2026, "source_month": 7,
+        "days": 2, "day_rate": 200, "reason": "أيام لم تُصرف"}).json()
+    assert row["amount"] == 400
+
+    edited = client.patch(f"/api/carryovers/{row['id']}", headers=auth,
+                          json={"days": 3, "admin_note": "بعد المراجعة"}).json()
+    assert edited["amount"] == 600 and edited["admin_note"] == "بعد المراجعة"
+
+    client.post("/api/carryovers", headers=auth, json={
+        "employee_id": other["id"], "kind": "deduction", "source_year": 2026,
+        "source_month": 7, "days": 1, "day_rate": 100, "reason": "خصم غيره"})
+
+    token = client.post("/api/auth/login", data={
+        "username": "0521119988", "password": "0521119988"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+    mine = client.get("/api/carryovers", headers=h).json()
+    assert [r["employee_id"] for r in mine] == [emp["id"]]
+    assert client.post("/api/carryovers", headers=h, json={
+        "employee_id": other["id"], "kind": "earning", "source_year": 2026,
+        "source_month": 7, "days": 1, "day_rate": 50, "reason": "محاولة"}).status_code == 403
+
+    cancelled = client.post(f"/api/carryovers/{row['id']}/cancel", headers=auth,
+                            json={"reason": "سُجّلت بالخطأ"}).json()
+    assert cancelled["status"] == "cancelled" and "سُجّلت بالخطأ" in cancelled["admin_note"]
+    # والملغاة لا تدخل الحساب
+    with SessionLocal() as db:
+        from app.services import carryovers as service
+
+        assert service.totals_for(db, emp["id"]) == (0.0, 0.0)
+
+
+# --------------------------- فحص ما قبل إقفال الشهر ---------------------------
+
+def test_pre_close_check_lists_all_five_cases(client, auth):
+    """الفحص يرصد: الغياب، تجاوز الرصيد، مستحق مرحّل، خصم غير معتمد، ودخول بلا خروج."""
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية الإقفال", "start_time": "08:00:00", "end_time": "17:00:00",
+        "work_days": "0,1,2,3,4,5,6"}).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9430", "full_name": "موظف الإقفال", "shift_id": shift["id"],
+        "basic_salary": 3000}).json()
+
+    previous = date.today().replace(day=1) - timedelta(days=1)
+    year, month = previous.year, previous.month
+    _unlock_month(client, auth, year, month)
+
+    # (١) يوم غياب و(٥) دخول بلا خروج
+    _punch(client, auth, emp["id"], f"{previous.replace(day=6)}T08:00:00")
+    client.post(f"/api/attendance/recompute?date_from={previous.replace(day=1)}"
+                f"&date_to={previous}", headers=auth)
+
+    # (٣) مستحق مرحّل من شهر أسبق
+    older = (previous.replace(day=1) - timedelta(days=1))
+    client.post("/api/carryovers", headers=auth, json={
+        "employee_id": emp["id"], "kind": "earning",
+        "source_year": older.year, "source_month": older.month,
+        "days": 4, "day_rate": 100, "reason": "مستحق راتب مرحّل"})
+
+    # (٤) مخالفة غير معتمدة
+    vtype = client.get("/api/violation-types", headers=auth).json()[0]
+    client.post("/api/violations", headers=auth, json={
+        "employee_id": emp["id"], "violation_type_id": vtype["id"],
+        "occurred_on": previous.replace(day=7).isoformat(), "description": "لم تُعتمد بعد"})
+
+    # (٢) تجاوز رصيد الإجازة
+    with SessionLocal() as db:
+        from app.models import LeaveBalance, LeaveType
+
+        ltype = db.query(LeaveType).first()
+        db.add(LeaveBalance(employee_id=emp["id"], leave_type_id=ltype.id, year=year,
+                            entitled_days=5, carried_over_days=0, used_days=9))
+        db.commit()
+
+    result = client.get(f"/api/payroll/pre-close?year={year}&month={month}", headers=auth).json()
+    assert result["clean"] is False
+    row = next(r for r in result["rows"] if r["employee_id"] == emp["id"])
+    keys = {issue["key"] for issue in row["issues"]}
+    assert keys == {"absent_days", "leave_overdraft", "unpaid_carryover",
+                    "pending_violation", "open_shift"}
+    overdraft = next(i for i in row["issues"] if i["key"] == "leave_overdraft")
+    assert "تجاوز 4.0 يوم" in overdraft["detail"] or "تجاوز 4 يوم" in overdraft["detail"]
+    carry = next(i for i in row["issues"] if i["key"] == "unpaid_carryover")
+    assert "400.00 ريال" in carry["detail"]
+    assert result["totals"]["absent_days"] >= 1
+    assert result["labels"]["open_shift"] == "بصمة دخول بلا خروج"
+
+    # الإرسال تنبيهاً للإدارة
+    sent = client.post(f"/api/payroll/pre-close/notify?year={year}&month={month}",
+                       headers=auth).json()
+    assert sent["ok"] is True and sent["sent"] >= 1
+    notes = client.get("/api/notifications", headers=auth).json()
+    assert any("فحص ما قبل إقفال" in n["title"] for n in notes)
+
+    # الموظف لا يملك صلاحية الفحص
+    from app import security_extra
+
+    security_extra.reset_all()
+    client.post("/api/employees", headers=auth, json={
+        "code": "9431", "full_name": "موظف بلا صلاحية إقفال", "phone": "0520008877"})
+    token = client.post("/api/auth/login", data={
+        "username": "0520008877", "password": "0520008877"}).json()["access_token"]
+    assert client.get(f"/api/payroll/pre-close?year={year}&month={month}",
+                      headers={"Authorization": f"Bearer {token}"}).status_code == 403

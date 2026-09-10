@@ -117,6 +117,7 @@ def payslip_html(db: Session, slip: Payslip, run: PayrollRun) -> str:
         ("الراتب الأساسي", slip.basic_salary),
         ("البدلات", slip.allowances or 0),
         ("بدل العمل الإضافي", slip.overtime_amount),
+        ("مستحقات مرحّلة", slip.carryover_earning or 0),
         ("إضافات أخرى", slip.other_additions),
     ]
     deductions = [
@@ -127,6 +128,7 @@ def payslip_html(db: Session, slip: Payslip, run: PayrollRun) -> str:
         ("قسط السلفة", slip.loan_deduction or 0),
         ("مشتريات", slip.purchases_deduction or 0),
         ("استراحة بلا عودة", slip.open_break_deduction or 0),
+        ("خصومات مرحّلة", slip.carryover_deduction or 0),
         ("خصومات أخرى", slip.other_deductions),
     ]
     total_earnings = round(sum(value for _, value in earnings), 2)
@@ -323,6 +325,8 @@ _TABLE_COLUMNS = [
     ("سلف", lambda s: _money(s.loan_deduction or 0), "money ded"),
     ("مشتريات", lambda s: _money(s.purchases_deduction or 0), "money ded"),
     ("استراحة بلا عودة", lambda s: _money(s.open_break_deduction or 0), "money ded"),
+    ("مستحق مرحّل", lambda s: _money(s.carryover_earning or 0), "money"),
+    ("خصم مرحّل", lambda s: _money(s.carryover_deduction or 0), "money ded"),
     ("إضافات", lambda s: _money(s.other_additions), "money"),
     ("خصومات أخرى", lambda s: _money(s.other_deductions), "money ded"),
     ("الصافي", lambda s: _money(s.net_pay), "money net"),
@@ -335,8 +339,9 @@ _TABLE_SUMS = {
     10: lambda s: s.late_deduction, 11: lambda s: s.unpaid_leave_deduction,
     12: lambda s: s.violation_deduction, 13: lambda s: s.loan_deduction or 0,
     14: lambda s: s.purchases_deduction or 0, 15: lambda s: s.open_break_deduction or 0,
-    16: lambda s: s.other_additions, 17: lambda s: s.other_deductions,
-    18: lambda s: s.net_pay,
+    16: lambda s: s.carryover_earning or 0, 17: lambda s: s.carryover_deduction or 0,
+    18: lambda s: s.other_additions, 19: lambda s: s.other_deductions,
+    20: lambda s: s.net_pay,
 }
 
 
@@ -363,7 +368,7 @@ def payroll_table(db: Session, run: PayrollRun, slips: list[Payslip]) -> str:
             foot_cells += "<td></td>"
         else:
             total = round(sum(getter(slip) or 0 for slip in slips), 2)
-            cls = "money net" if index == 18 else "money"
+            cls = "money net" if index == 20 else "money"
             foot_cells += f'<td class="{cls}">{_money(total)}</td>'
 
     total_net = round(sum(slip.net_pay for slip in slips), 2)
