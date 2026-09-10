@@ -3553,3 +3553,110 @@ def test_pre_close_check_lists_all_five_cases(client, auth):
         "username": "0520008877", "password": "0520008877"}).json()["access_token"]
     assert client.get(f"/api/payroll/pre-close?year={year}&month={month}",
                       headers={"Authorization": f"Bearer {token}"}).status_code == 403
+
+
+# --------------------------- شاشة الطلبات الموحّدة ---------------------------
+
+def test_unified_requests_screen(client, auth):
+    """كل أنواع الطلبات تُرفع وتُتابع من مكان واحد."""
+    from app import security_extra
+
+    security_extra.reset_all()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9440", "full_name": "موظف الطلبات", "phone": "0519998877",
+        "basic_salary": 4000}).json()
+    token = client.post("/api/auth/login", data={
+        "username": "0519998877", "password": "0519998877"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+
+    # في البداية لا طلبات
+    assert client.get("/api/me/requests", headers=h).json()["rows"] == []
+
+    # ١) إجازة
+    ltype = client.get("/api/leave-types", headers=h).json()[0]
+    leave = client.post("/api/leave-requests", headers=h, json={
+        "leave_type_id": ltype["id"], "start_date": "2026-10-05",
+        "end_date": "2026-10-06", "reason": "ظرف خاص"})
+    assert leave.status_code == 201, leave.text
+
+    # ٢) بصمة فائتة
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    client.post("/api/punch-requests", headers=h, json={
+        "requested_time": f"{yesterday}T17:00:00", "kind": "clock_out",
+        "reason": "نسيت الانصراف"})
+
+    # ٣) سلفة
+    client.post("/api/loans/request", headers=h, json={
+        "amount": 900, "installment_amount": 300,
+        "start_year": 2026, "start_month": 11, "reason": "ظرف عائلي"})
+
+    # ٤) طلب عام
+    general = client.post("/api/requests", headers=h, json={
+        "category": "certificate", "subject": "طلب تعريف بالراتب",
+        "body": "أحتاج تعريفاً بالراتب للبنك"})
+    assert general.status_code == 201, general.text
+    assert general.json()["category_label"] == "تعريف أو شهادة"
+    assert general.json()["status_label"] == "قيد الاعتماد"
+
+    data = client.get("/api/me/requests", headers=h).json()
+    kinds = {row["kind"] for row in data["rows"]}
+    assert kinds == {"leave", "punch", "loan", "general"}
+    assert data["pending"] >= 4
+    assert all(row["status_label"] for row in data["rows"])
+
+    # الإدارة ترى الطلب العام وتحسمه، ويصل الموظف الرد
+    pending = client.get("/api/requests?status=pending", headers=auth).json()
+    mine = next(r for r in pending if r["employee_id"] == emp["id"])
+    decided = client.post(f"/api/requests/{mine['id']}/decide", headers=auth,
+                          json={"approve": True, "note": "التعريف جاهز للاستلام"})
+    assert decided.status_code == 200 and decided.json()["status"] == "approved"
+    assert any("اعتُمد طلبك" in n["title"]
+               for n in client.get("/api/notifications", headers=h).json())
+
+    after = client.get("/api/me/requests", headers=h).json()
+    row = next(r for r in after["rows"] if r["kind"] == "general")
+    assert row["status"] == "approved" and row["decision_note"] == "التعريف جاهز للاستلام"
+    assert row["can_cancel"] is False
+
+    # السلفة المعتمدة تظهر «بانتظار إقرارك»
+    loans = client.get("/api/loans", headers=h).json()
+    client.post(f"/api/loans/{loans[0]['id']}/decide", headers=auth, json={"approve": True})
+    data = client.get("/api/me/requests", headers=h).json()
+    loan_row = next(r for r in data["rows"] if r["kind"] == "loan")
+    assert loan_row["needs_ack"] is True and "إقرارك" in loan_row["status_label"]
+
+    # الموظف يسحب طلباً معلّقاً، ولا يرى طلبات غيره
+    punch_row = next(r for r in data["rows"] if r["kind"] == "punch")
+    assert client.delete(f"/api/punch-requests/{punch_row['id']}", headers=h).status_code == 200
+    assert all(r["employee_id"] == emp["id"]
+               for r in client.get("/api/requests", headers=h).json())
+
+
+def test_general_request_rules(client, auth):
+    """الطلب المحسوم لا يُحسم مرتين، والموظف لا يقدّم نيابة عن غيره."""
+    from app import security_extra
+
+    security_extra.reset_all()
+    client.post("/api/employees", headers=auth, json={
+        "code": "9441", "full_name": "موظف الطلب العام", "phone": "0518887766"})
+    other = client.post("/api/employees", headers=auth, json={
+        "code": "9442", "full_name": "زميل"}).json()
+    token = client.post("/api/auth/login", data={
+        "username": "0518887766", "password": "0518887766"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+
+    assert client.post("/api/requests", headers=h, json={
+        "employee_id": other["id"], "category": "other",
+        "subject": "نيابة عن غيري", "body": "محاولة"}).status_code == 403
+
+    row = client.post("/api/requests", headers=h, json={
+        "category": "complaint", "subject": "شكوى من جدول الورديات",
+        "body": "الوردية المسائية متتالية بلا راحة"}).json()
+    assert client.post(f"/api/requests/{row['id']}/decide", headers=h,
+                       json={"approve": True}).status_code == 403
+
+    client.post(f"/api/requests/{row['id']}/decide", headers=auth,
+                json={"approve": False, "note": "سيُعاد النظر في الجدول"})
+    assert client.post(f"/api/requests/{row['id']}/decide", headers=auth,
+                       json={"approve": True}).status_code == 400
+    assert client.delete(f"/api/requests/{row['id']}", headers=h).status_code == 400

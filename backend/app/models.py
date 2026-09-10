@@ -765,6 +765,40 @@ class EmployeePurchase(Base):
     employee: Mapped[Employee] = relationship()
 
 
+class RequestCategory(str, enum.Enum):
+    """أنواع الطلب العام الذي يرفعه الموظف."""
+
+    certificate = "certificate"      # تعريف بالراتب أو شهادة خبرة
+    shift_change = "shift_change"    # تغيير وردية أو يوم راحة
+    data_update = "data_update"      # تصحيح بيانات
+    complaint = "complaint"          # شكوى
+    suggestion = "suggestion"        # اقتراح
+    other = "other"                  # طلب آخر
+
+
+class EmployeeRequest(Base):
+    """طلب عام من الموظف للإدارة: تعريف، تغيير وردية، شكوى، اقتراح، أو غيرها."""
+
+    __tablename__ = "employee_requests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    category: Mapped[RequestCategory] = mapped_column(
+        Enum(RequestCategory), default=RequestCategory.other
+    )
+    subject: Mapped[str] = mapped_column(String(160))
+    body: Mapped[str] = mapped_column(Text)
+    status: Mapped[LeaveStatus] = mapped_column(
+        Enum(LeaveStatus), default=LeaveStatus.pending, index=True
+    )
+    decided_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime)
+    decision_note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    employee: Mapped[Employee] = relationship()
+
+
 class PunchRequest(Base):
     """طلب «نسيت البصمة»: الموظف يطلب تسجيل بصمة فائتة، والإدارة تعتمدها."""
 

@@ -34,6 +34,7 @@ from .routers import (
     push,
     rest_days,
     reports,
+    requests as requests_router,
     sheets,
     sites,
     users,
@@ -153,6 +154,7 @@ for router in (
     hr_extra.router,
     sheets.router,
     reports.router,
+    requests_router.router,
     iclock.router,
     webapp.router,
 ):

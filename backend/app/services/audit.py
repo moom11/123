@@ -43,6 +43,7 @@ ENTITY_LABELS = {
     "purchase": "فاتورة مشتريات",
     "punch_request": "طلب بصمة",
     "carryover": "حركة مرحّلة",
+    "request": "طلب موظف",
     "department": "إدارة",
 }
 

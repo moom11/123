@@ -26,6 +26,7 @@ const PAGES = [
   { id: 'purchases',  title: 'مشتريات الموظفين', icon: 'cart', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
   { id: 'carryovers', title: 'المستحقات المرحّلة', icon: 'money', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
   { id: 'punchRequests', title: 'طلبات البصمة', icon: 'edit', group: 'الحضور', roles: ['admin','hr','manager'] },
+  { id: 'requests',   title: 'طلبات الموظفين', icon: 'documents', group: 'الإجازات', roles: ['admin','hr','manager'] },
   { id: 'employees',  title: 'الموظفون',       icon: 'employees', group: 'شؤون الموظفين', roles: ['admin','hr','manager'] },
   { id: 'documents',  title: 'الوثائق',        icon: 'documents', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
   { id: 'devices',    title: 'أجهزة البصمة',   icon: 'device', group: 'الإدارة',  roles: ['admin','hr'] },
@@ -62,7 +63,7 @@ const PENALTY_ACTIONS = { warning:'إنذار كتابي', deduction_percent_day
   deduction_days:'خصم أجر أيام', suspension:'إيقاف بدون أجر', termination:'الفصل من العمل' };
 const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
 const money = (v) => (Number(v || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const APP_VERSION = '2026.09.10f';
+const APP_VERSION = '2026.09.10g';
 
 /* يفرض تحديث عامل الخدمة فور توفر نسخة جديدة (مهم على آيفون) */
 function watchForUpdates() {
@@ -1151,10 +1152,26 @@ const HELP = {
       <li><b>السبب</b> و<b>ملاحظة الإدارة</b> و<b>حالة الصرف</b>.</li>
     </ul>`],
 
-  myLeaves: ['طلباتي', `
-    <h4>${icon('leave')} تقديم طلب</h4>
-    <p>اختر النوع والتاريخين واكتب السبب. يصل الطلب لمديرك مباشرة، ويصلك إشعار بالقرار.</p>
-    <p>الطلب <b>قيد الاعتماد</b> يمكنك إلغاؤه، وبعد الاعتماد راجع إدارتك.</p>`],
+  myLeaves: ['الطلبات', `
+    <h4>${icon('documents')} كل طلباتك من هنا</h4>
+    <p>أربعة أنواع ترفعها بضغطة من أعلى الشاشة:</p>
+    <ul>
+      <li><b>إجازة</b>: النوع والتاريخان والسبب، مع إمكانية إرفاق مستند.</li>
+      <li><b>بصمة فائتة</b>: الوقت الفعلي ونوع البصمة وسبب نسيانها.</li>
+      <li><b>سلفة</b>: المبلغ والقسط وشهر البداية — وبعد الاعتماد تقرّ باستلامها.</li>
+      <li><b>طلب آخر</b>: تعريف أو شهادة، تغيير وردية، تصحيح بيانات، شكوى، اقتراح، أو غيرها.</li>
+    </ul>
+    <h4>${icon('clock')} المتابعة</h4>
+    <p>القائمة أدناه تجمع طلباتك كلها بحالتها ورد الإدارة عليها. الطلب <b>قيد الاعتماد</b>
+      يمكنك سحبه، والمعتمد يظهر معه رد الإدارة.</p>`],
+
+  requests: ['طلبات الموظفين', `
+    <h4>${icon('documents')} صندوق الطلبات</h4>
+    <p>الطلبات العامة التي يرفعها الموظفون: تعريف أو شهادة، تغيير وردية، تصحيح بيانات،
+      شكوى، اقتراح، أو غيرها.</p>
+    <p>الاعتماد أو الرفض يصل الموظف إشعاراً مع <b>ردّك المكتوب</b>، ويظهر في شاشة طلباته.</p>
+    <div class="hp-tip">طلبات الإجازة في شاشة «الإجازات»، وطلبات البصمة في «طلبات البصمة»،
+      وطلبات السلف في «السلف».</div>`],
 
   schedule: ['جدولي', `
     <h4>${icon('calendar')} ما تراه</h4>
@@ -2179,11 +2196,27 @@ function leaveModal(employees, leaveTypes, after) {
 }
 
 /* ------------------------------ إجازاتي (واجهة الموظف) ------------------------------ */
+const REQ_KINDS = {
+  leave: ['leave', 'إجازة'],
+  punch: ['edit', 'بصمة فائتة'],
+  loan: ['loans', 'سلفة'],
+  general: ['documents', 'طلب عام'],
+};
+const REQ_CATEGORIES = {
+  certificate: 'تعريف أو شهادة',
+  shift_change: 'تغيير وردية أو راحة',
+  data_update: 'تصحيح بيانات',
+  complaint: 'شكوى',
+  suggestion: 'اقتراح',
+  other: 'طلب آخر',
+};
+
+/** شاشة الطلبات: كل ما يرفعه الموظف من هنا — إجازة، بصمة فائتة، سلفة، وطلب عام */
 views.myLeaves = async () => {
   const year = new Date().getFullYear();
   if (!state.user.employee_id) {
     render(`<div class="card"><div class="card-body">
-      <div class="empty">حسابك غير مرتبط بملف موظف، لذلك لا يظهر لك رصيد إجازات ولا يمكنك تقديم طلب.
+      <div class="empty">حسابك غير مرتبط بملف موظف، لذلك لا يمكنك تقديم طلبات.
       راجع الموارد البشرية لربط الحساب باسمك في قائمة الموظفين.</div></div></div>`);
     return;
   }
@@ -2192,20 +2225,31 @@ views.myLeaves = async () => {
     api('/api/settings').catch(() => ({ show_leave_balance_to_employee: false })),
   ]);
   const showBalance = !!settings.show_leave_balance_to_employee;
+
   render(`
-    <div class="card"><div class="card-body inline">
-      <button class="btn" id="mlNew">طلب إجازة جديد</button>
-      <span class="help">تظهر هنا طلباتك أنت فقط.</span>
-    </div></div>
+    <div class="card"><div class="card-head"><h3>تقديم طلب جديد</h3></div>
+      <div class="card-body">
+        <div class="quick4">
+          <a class="q blue" id="reqLeave"><span class="qi">${icon('leave')}</span>إجازة</a>
+          <a class="q amber" id="reqPunch"><span class="qi">${icon('edit')}</span>بصمة فائتة</a>
+          <a class="q green" id="reqLoan"><span class="qi">${icon('loans')}</span>سلفة</a>
+          <a class="q rose" id="reqOther"><span class="qi">${icon('documents')}</span>طلب آخر</a>
+        </div>
+        <div class="help" style="margin-top:10px">كل طلباتك ترفعها من هنا، وتتابع حالتها في
+          القائمة أدناه. تظهر لك طلباتك أنت فقط.</div>
+      </div></div>
+
     ${showBalance ? `<div class="card"><div class="card-head"><h3>رصيدي لعام ${year}</h3></div>
       <div id="mlBal"><div class="empty">جارٍ التحميل…</div></div></div>` : ''}
-    <div class="card"><div class="card-head"><h3>طلباتي</h3><span class="muted" id="mlCount"></span></div>
-      <div id="mlTable"><div class="empty">جارٍ التحميل…</div></div></div>`);
+
+    <div class="card"><div class="card-head"><h3>طلباتي</h3>
+      <span class="muted" id="mlCount"></span></div>
+      <div id="mlList"><div class="sk-rows">${'<div class="sk line"></div>'.repeat(3)}</div></div></div>`);
 
   const load = async () => {
-    const [balances, rows] = await Promise.all([
+    const [balances, data] = await Promise.all([
       showBalance ? api('/api/leave-balances?year=' + year) : Promise.resolve([]),
-      api('/api/leave-requests'),
+      api('/api/me/requests'),
     ]);
     if (el('mlBal')) el('mlBal').innerHTML = balances.length
       ? `<div class="card-body">${balances.map((b) => {
@@ -2216,412 +2260,193 @@ views.myLeaves = async () => {
             pct > 50 ? 'ok' : pct > 20 ? 'warn' : 'danger');
         }).join('')}</div>`
       : '<div class="empty">لا توجد أرصدة مسجّلة</div>';
-    el('mlCount').textContent = `${rows.length} طلب`;
-    el('mlTable').innerHTML = table(
-      ['#', 'النوع', 'من', 'إلى', 'الأيام', 'الحالة', 'السبب', 'إجراءات'],
-      rows,
-      (r) => {
-        let actions = '';
-        if (r.status === 'pending') {
-          actions += `<button class="btn sm gray" onclick="cancelMyLeave(${r.id})">إلغاء</button>
-                      <button class="btn sm ghost" onclick="attachMyLeave(${r.id})">إرفاق</button> `;
-        }
-        if (r.attachment_path) actions += `<a class="btn sm ghost" href="/uploads/${encodeURIComponent(r.attachment_path)}" target="_blank">المرفق</a>`;
-        return `<tr><td>${r.id}</td><td>${esc(r.leave_type_name)}</td>
-          <td>${r.start_date}</td><td>${r.end_date}</td><td>${r.days}</td>
-          <td><span class="tag ${r.status}">${LEAVE_STATUS[r.status]}</span></td>
-          <td>${esc(r.reason || '')}</td><td>${actions}</td></tr>`;
-      },
-      'لم تقدّم أي طلب إجازة بعد');
+
+    const rows = data.rows || [];
+    el('mlCount').textContent = `${rows.length} طلب` +
+      (data.pending ? ` — ${data.pending} قيد الاعتماد` : '');
+    el('mlList').innerHTML = rows.length ? rows.map((r) => {
+      const [iconName] = REQ_KINDS[r.kind] || ['documents', ''];
+      const actions = [];
+      if (r.can_cancel) actions.push(
+        `<button class="btn sm gray" onclick="cancelRequest('${r.kind}',${r.id})">إلغاء</button>`);
+      if (r.kind === 'leave' && r.status === 'pending') actions.push(
+        `<button class="btn sm ghost" onclick="attachMyLeave(${r.id})">إرفاق</button>`);
+      if (r.needs_ack) actions.push(
+        `<button class="btn sm ok" onclick="acknowledgeLoanRow(${r.id})">أقرّ بالاستلام</button>`);
+      if (r.attachment) actions.push(
+        `<a class="btn sm ghost" href="/uploads/${encodeURIComponent(r.attachment)}"
+            target="_blank" rel="noopener">المرفق</a>`);
+      return `<div class="row-item" style="align-items:flex-start">
+        <span class="ri ${r.status === 'approved' ? 'ok' : r.status === 'rejected' ? 'danger' : ''}">${icon(iconName)}</span>
+        <div class="rt"><b>${esc(r.title)}</b>
+          <span>${esc(r.kind_label)}${r.detail ? ' · ' + esc(r.detail) : ''}</span>
+          ${r.note ? `<div class="muted" style="font-size:11.5px;margin-top:3px">${esc(r.note)}</div>` : ''}
+          ${r.decision_note ? `<div class="muted" style="font-size:11.5px;margin-top:3px">
+            رد الإدارة: ${esc(r.decision_note)}</div>` : ''}
+          ${actions.length ? `<div class="inline" style="margin-top:7px;gap:6px">${actions.join('')}</div>` : ''}
+        </div>
+        <div class="rv"><span class="tag ${r.status}">${esc(r.status_label)}</span>
+          <small>${r.at ? String(r.at).slice(0, 10) : ''}</small></div>
+      </div>`;
+    }).join('') : '<div class="empty">لم تقدّم أي طلب بعد</div>';
   };
 
-  el('mlNew').onclick = () => leaveModal([], leaveTypes, load);
-  window.cancelMyLeave = async (id) => {
+  el('reqLeave').onclick = () => leaveModal([], leaveTypes, load);
+  el('reqPunch').onclick = () => missedPunchModal(load);
+  el('reqLoan').onclick = () => loanRequestModal(load);
+  el('reqOther').onclick = () => generalRequestModal(load);
+
+  window.cancelRequest = async (kind, id) => {
     if (!confirm('تأكيد إلغاء الطلب؟')) return;
-    try {
-      await api(`/api/leave-requests/${id}/cancel`, { method: 'POST', body: { decision_note: null } });
-      toast('تم إلغاء الطلب', 'ok'); load();
-    } catch (e) { toast(e.message, 'err'); }
+    const paths = {
+      leave: () => api(`/api/leave-requests/${id}/cancel`, { method: 'POST', body: { decision_note: null } }),
+      punch: () => api('/api/punch-requests/' + id, { method: 'DELETE' }),
+      general: () => api('/api/requests/' + id, { method: 'DELETE' }),
+    };
+    try { await (paths[kind] || paths.general)(); toast('أُلغي الطلب', 'ok'); load(); }
+    catch (e) { toast(e.message, 'err'); }
   };
-  window.attachMyLeave = (id) => {
+  window.acknowledgeLoanRow = async (id) => {
+    if (!confirm('أقرّ باستلام مبلغ السلفة؟ سيبدأ خصم الأقساط من راتبك.')) return;
+    try { await api(`/api/loans/${id}/acknowledge`, { method: 'POST' });
+      toast('سُجّل إقرارك بالاستلام', 'ok'); load(); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+  window.attachMyLeave = async (id) => {
     const input = document.createElement('input');
-    input.type = 'file'; input.accept = '.pdf,.png,.jpg,.jpeg,.webp';
+    input.type = 'file';
+    input.accept = '.pdf,.png,.jpg,.jpeg';
     input.onchange = async () => {
-      const fd = new FormData(); fd.append('file', input.files[0]);
-      try {
-        await api(`/api/leave-requests/${id}/attachment`, { method: 'POST', body: fd });
-        toast('تم رفع المرفق', 'ok'); load();
-      } catch (e) { toast(e.message, 'err'); }
+      if (!input.files.length) return;
+      const fd = new FormData();
+      fd.append('file', input.files[0]);
+      try { await api(`/api/leave-requests/${id}/attachment`, { method: 'POST', body: fd });
+        toast('أُرفق الملف', 'ok'); load(); }
+      catch (e) { toast(e.message, 'err'); }
     };
     input.click();
   };
-  load();
+  load().catch((e) => toast(e.message, 'err'));
 };
 
-/* ------------------------------ أرصدة الإجازات ------------------------------ */
-views.balances = async () => {
-  const { employees } = await loadLookups();
-  const year = new Date().getFullYear();
-  render(`
-    <div class="card"><div class="card-body inline">
-      ${isHR() ? `<div class="field"><label>الموظف</label><select id="bEmp"><option value="">الكل</option>${options(employees, '', 'id', 'full_name')}</select></div>` : ''}
-      <div class="field"><label>السنة</label><input type="number" id="bYear" value="${year}" /></div>
-      <button class="btn" id="bLoad">عرض</button>
-    </div></div>
-    <div class="card"><div class="card-head"><h3>الأرصدة</h3></div><div id="bTable"><div class="empty">جارٍ التحميل…</div></div></div>`);
-  const load = async () => {
-    const q = new URLSearchParams({ year: el('bYear').value });
-    if (el('bEmp') && el('bEmp').value) q.set('employee_id', el('bEmp').value);
-    const rows = await api('/api/leave-balances?' + q);
-    el('bTable').innerHTML = table(
-      ['الموظف', 'نوع الإجازة', 'السنة', 'المستحق', 'مرحّل', 'المستخدم', 'المتبقي', ''],
-      rows,
-      (r) => `<tr><td>${esc(r.employee_name)}</td><td>${esc(r.leave_type_name)}</td><td>${r.year}</td>
-        <td>${r.entitled_days}</td><td>${r.carried_over_days}</td><td>${r.used_days}</td>
-        <td><b>${r.remaining_days}</b></td>
-        <td>${isHR() ? `<button class="btn sm ghost" onclick="editBalance(${r.employee_id},${r.leave_type_id},${r.year},${r.entitled_days},${r.carried_over_days})">تعديل</button>` : ''}</td></tr>`,
-      'لا توجد أرصدة');
-  };
-  el('bLoad').onclick = () => load().catch((e) => toast(e.message, 'err'));
-  window.editBalance = (employee_id, leave_type_id, y, entitled, carried) => {
-    modal({
-      title: 'تعديل الرصيد',
-      body: `<div class="field"><label>الأيام المستحقة</label><input type="number" step="0.5" id="beEnt" value="${entitled}" /></div>
-             <div class="field"><label>الأيام المرحّلة</label><input type="number" step="0.5" id="beCar" value="${carried}" /></div>`,
-      footer: `<button class="btn" id="beSave">حفظ</button><button class="btn gray" data-close>إلغاء</button>`,
-      onOpen: (root) => { $('#beSave', root).onclick = async () => {
+/** طلب سلفة من شاشة الطلبات */
+function loanRequestModal(after) {
+  const now = new Date();
+  modal({
+    title: 'طلب سلفة على الراتب',
+    body: `<div class="help" style="margin-bottom:12px">يُرفع الطلب للموارد البشرية،
+        وبعد اعتماده تُقرّ أنت باستلام المبلغ ليبدأ الخصم.</div>
+      <div class="inline">
+        <div class="field" style="flex:1"><label>المبلغ المطلوب</label>
+          <input type="number" id="lrAmount" value="1000" /></div>
+        <div class="field" style="flex:1"><label>القسط الشهري</label>
+          <input type="number" id="lrInst" value="250" /></div>
+      </div>
+      <div class="inline">
+        <div class="field" style="flex:1"><label>يبدأ الخصم من شهر</label><select id="lrMonth">${
+          MONTHS.map((m, i) => `<option value="${i + 1}" ${i === now.getMonth() ? 'selected' : ''}>${m}</option>`).join('')
+        }</select></div>
+        <div class="field" style="flex:1"><label>السنة</label>
+          <input type="number" id="lrYear" value="${now.getFullYear()}" /></div>
+      </div>
+      <div class="field"><label>السبب</label><input id="lrReason" placeholder="ظرف عائلي" /></div>`,
+    footer: '<button class="btn" id="lrSave">إرسال الطلب</button><button class="btn gray" data-close>إلغاء</button>',
+    onOpen: (root) => {
+      $('#lrSave', root).onclick = async () => {
         try {
-          await api('/api/leave-balances', { method: 'PUT', body: { employee_id, leave_type_id, year: y,
-            entitled_days: Number(el('beEnt').value), carried_over_days: Number(el('beCar').value) } });
-          toast('تم تحديث الرصيد', 'ok'); closeModal(); load();
+          await api('/api/loans/request', { method: 'POST', body: {
+            amount: Number($('#lrAmount', root).value),
+            installment_amount: Number($('#lrInst', root).value),
+            start_year: Number($('#lrYear', root).value),
+            start_month: Number($('#lrMonth', root).value),
+            reason: $('#lrReason', root).value.trim() || null } });
+          toast('أُرسل طلب السلفة', 'ok'); closeModal(); if (after) after();
         } catch (e) { toast(e.message, 'err'); }
-      }; },
-    });
-  };
-  load();
-};
+      };
+    },
+  });
+}
 
-/* ------------------------------ الموظفون ------------------------------ */
-views.employees = async () => {
-  const { departments, shifts } = await loadLookups(true);
-  const mode = localStorage.getItem('hr_emp_view') || 'cards';
+/** طلب عام: تعريف، تغيير وردية، شكوى، اقتراح، أو غيرها */
+function generalRequestModal(after) {
+  modal({
+    title: 'طلب جديد',
+    body: `<div class="field"><label>نوع الطلب</label><select id="grCat">${
+      Object.entries(REQ_CATEGORIES).map(([k, v]) =>
+        `<option value="${k}">${v}</option>`).join('')}</select></div>
+      <div class="field"><label>الموضوع</label>
+        <input id="grSubject" placeholder="مثال: طلب تعريف بالراتب للبنك" /></div>
+      <div class="field"><label>التفاصيل</label>
+        <textarea id="grBody" rows="4" placeholder="اكتب ما تريد بالتفصيل"></textarea></div>`,
+    footer: '<button class="btn" id="grSave">إرسال</button><button class="btn gray" data-close>إلغاء</button>',
+    onOpen: (root) => {
+      $('#grSave', root).onclick = async () => {
+        const subject = $('#grSubject', root).value.trim();
+        const body = $('#grBody', root).value.trim();
+        if (subject.length < 3 || body.length < 3) return toast('اكتب الموضوع والتفاصيل', 'err');
+        try {
+          await api('/api/requests', { method: 'POST', body: {
+            category: $('#grCat', root).value, subject, body } });
+          toast('أُرسل الطلب', 'ok'); closeModal(); if (after) after();
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    },
+  });
+}
+
+/* ------------------------------ صندوق الطلبات العامة (الإدارة) ------------------------------ */
+views.requests = async () => {
   render(`
     <div class="card"><div class="card-body inline">
-      <div class="field"><label>بحث</label><input id="eQ" placeholder="الاسم أو رقم الموظف" /></div>
-      <div class="field"><label>الإدارة</label><select id="eDep"><option value="">الكل</option>${options(departments)}</select></div>
-      <button class="btn" id="eLoad">${icon('search')} بحث</button>
-      ${isHR() ? `<button class="btn ok" id="eNew">${icon('plus')} إضافة موظف</button>` : ''}
-      ${isHR() ? `<button class="btn ghost" id="eExport">${icon('download')} تصدير CSV</button>` : ''}
-      ${isHR() ? `<button class="btn gray" id="eImport">${icon('upload')} استيراد من Excel</button>` : ''}
+      <div class="field"><label>الحالة</label><select id="rqStatus">
+        <option value="pending">قيد الاعتماد</option><option value="">الكل</option>
+        <option value="approved">معتمد</option><option value="rejected">مرفوض</option>
+        <option value="cancelled">ملغى</option></select></div>
+      <button class="btn ghost" id="rqLoad">عرض</button>
+      <span class="help">طلبات الموظفين العامة: تعريف، تغيير وردية، شكوى، اقتراح، وغيرها.</span>
     </div></div>
-    <div class="card"><div class="card-head">
-        <h3>قائمة الموظفين <span class="muted" id="eCount" style="font-weight:400;font-size:13px"></span></h3>
-        <div class="sub-tabs" style="margin:0">
-          <button id="eModeCards" class="${mode === 'cards' ? 'active' : ''}">${icon('dashboard')} بطاقات</button>
-          <button id="eModeTable" class="${mode === 'table' ? 'active' : ''}">${icon('menu')} جدول</button>
-        </div></div>
-      <div id="eTable"><div class="sk-rows">${'<div class="sk line"></div>'.repeat(5)}</div></div></div>`);
+    <div class="card"><div class="card-head"><h3>طلبات الموظفين</h3>
+      <span class="muted" id="rqCount"></span></div>
+      <div id="rqList"><div class="sk-rows">${'<div class="sk line"></div>'.repeat(3)}</div></div></div>`);
 
-  const statusTag = (r) => r.status === 'active'
-    ? '<span class="tag active">على رأس العمل</span>'
-    : r.status === 'suspended' ? '<span class="tag suspended">موقوف</span>'
-    : '<span class="tag terminated">منتهية خدمته</span>';
-
-  const cardsHtml = (rows) => rows.length ? `<div class="card-body"><div class="grid cards stagger">
-      ${rows.map((r) => `<div class="emp-card" onclick="openProfile(${r.id})">
-        <div class="top">${avatar(r.full_name)}
-          <div style="min-width:0">
-            <div class="name">${esc(r.full_name)}</div>
-            <div class="role">${esc(r.job_title || 'بدون مسمى')}</div>
-          </div></div>
-        <div class="meta">
-          <span class="chip">${icon('idcard', 'sm')} ${esc(r.code)}</span>
-          <span class="chip">${icon('employees', 'sm')} ${esc(r.department_name || 'بدون إدارة')}</span>
-          ${r.shift_name ? `<span class="chip">${icon('clock', 'sm')} ${esc(r.shift_name)}</span>` : ''}
-        </div>
-        <div class="foot">${statusTag(r)}
-          <span>${r.has_user ? icon('key', 'sm') + ' له حساب دخول' : (r.phone ? '' : icon('phone', 'sm') + ' بلا جوال')}
-            ${r.has_user ? '' : ' — خدمة ' + esc(serviceLength(r.hire_date))}</span></div>
-      </div>`).join('')}
-    </div></div>` : `<div class="empty">${icon('employees', 'lg')}<br>لا يوجد موظفون مطابقون</div>`;
-
-  const tableHtml = (rows) => table(
-    ['الموظف', 'الإدارة', 'المسمى الوظيفي', 'الوردية', 'تاريخ التعيين', 'مدة الخدمة', 'الحالة', ''],
-    rows,
-    (r) => `<tr>
-      <td><div style="display:flex;align-items:center;gap:9px;cursor:pointer" onclick="openProfile(${r.id})">
-        ${avatar(r.full_name, 'sm')}<div><div style="font-weight:600">${esc(r.full_name)}</div>
-        <div class="muted" style="font-size:11.5px">${esc(r.code)}</div></div></div></td>
-      <td>${esc(r.department_name || '—')}</td><td>${esc(r.job_title || '—')}</td>
-      <td>${esc(r.shift_name || '—')}</td><td>${r.hire_date || '—'}</td>
-      <td>${esc(serviceLength(r.hire_date))}</td>
-      <td>${statusTag(r)}</td>
-      <td><button class="btn sm ghost" onclick="openProfile(${r.id})">الملف</button>
-        ${isHR() ? `<button class="btn sm ghost" onclick="editEmployee(${r.id})">تعديل</button>
-             <button class="btn sm gray" onclick="makeUser(${r.id},'${esc(r.code)}')">حساب دخول</button>` : ''}</td></tr>`,
-    'لا يوجد موظفون');
-
-  let current = [];
-  const paint = () => {
-    const view = localStorage.getItem('hr_emp_view') || 'cards';
-    el('eModeCards').classList.toggle('active', view === 'cards');
-    el('eModeTable').classList.toggle('active', view === 'table');
-    el('eTable').innerHTML = view === 'cards' ? cardsHtml(current) : tableHtml(current);
-  };
   const load = async () => {
     const q = new URLSearchParams();
-    if (el('eQ').value) q.set('q', el('eQ').value);
-    if (el('eDep').value) q.set('department_id', el('eDep').value);
-    current = await api('/api/employees?' + q);
-    state.cache.lookups.employees = current;
-    el('eCount').textContent = `(${current.length} موظف)`;
-    paint();
+    if (el('rqStatus').value) q.set('status', el('rqStatus').value);
+    const rows = await api('/api/requests?' + q);
+    el('rqCount').textContent = `${rows.length} طلب`;
+    el('rqList').innerHTML = rows.length ? rows.map((r) => `
+      <div class="row-item" style="align-items:flex-start">
+        <span class="ri">${icon('documents')}</span>
+        <div class="rt"><b>${esc(r.subject)}</b>
+          <span>${esc(r.employee_name || '')} · ${esc(r.category_label)}</span>
+          <div class="muted" style="font-size:12px;margin-top:4px">${esc(r.body)}</div>
+          ${r.decision_note ? `<div class="muted" style="font-size:11.5px;margin-top:3px">
+            الرد: ${esc(r.decision_note)}</div>` : ''}
+          ${r.status === 'pending' ? `<div class="inline" style="margin-top:7px;gap:6px">
+            <button class="btn sm ok" onclick="decideRequest(${r.id},true)">اعتماد</button>
+            <button class="btn sm danger" onclick="decideRequest(${r.id},false)">رفض</button>
+          </div>` : ''}
+        </div>
+        <div class="rv"><span class="tag ${r.status}">${esc(r.status_label)}</span>
+          <small>${r.created_at ? String(r.created_at).slice(0, 10) : ''}</small></div>
+      </div>`).join('') : '<div class="empty">لا طلبات</div>';
   };
-  el('eModeCards').onclick = () => { localStorage.setItem('hr_emp_view', 'cards'); paint(); };
-  el('eModeTable').onclick = () => { localStorage.setItem('hr_emp_view', 'table'); paint(); };
-  el('eQ').onkeydown = (ev) => { if (ev.key === 'Enter') load().catch((e) => toast(e.message, 'err')); };
-  el('eLoad').onclick = () => load().catch((e) => toast(e.message, 'err'));
-  if (el('eExport')) el('eExport').onclick = () => downloadCsv('/api/employees-export.csv', 'employees.csv');
-  if (el('eNew')) el('eNew').onclick = () => employeeModal(null, departments, shifts, load);
-  if (el('eImport')) el('eImport').onclick = () => importModal(load);
-  window.editEmployee = async (id) => {
-    const emp = await api('/api/employees/' + id);
-    employeeModal(emp, departments, shifts, load);
-  };
-  window.makeUser = (employee_id, code) => {
-    modal({
-      title: 'إنشاء حساب دخول للموظف',
-      body: `<div class="field"><label>اسم المستخدم</label><input id="uName" value="${esc(code)}" /></div>
-        <div class="field"><label>كلمة المرور</label><input id="uPass" type="text" value="Aa123456" /></div>
-        <div class="field"><label>الصلاحية</label><select id="uRole">
-          <option value="employee">موظف</option><option value="manager">مدير إدارة</option>
-          <option value="hr">موارد بشرية</option><option value="admin">مدير النظام</option></select></div>
-        <div class="help">يستطيع الموظف الدخول باسم المستخدم أعلاه <b>أو برقم جواله المسجّل في ملفه</b>
-          (بأي صيغة: 05… أو ‎+966…‎). تأكّد أن رقم جواله مسجّل وغير مكرر مع موظف آخر.</div>`,
-      footer: `<button class="btn" id="uSave">إنشاء</button><button class="btn gray" data-close>إلغاء</button>`,
-      onOpen: (root) => { $('#uSave', root).onclick = async () => {
-        try {
-          await api('/api/users', { method: 'POST', body: { username: el('uName').value,
-            password: el('uPass').value, role: el('uRole').value, employee_id } });
-          toast('تم إنشاء الحساب', 'ok'); closeModal(); load();
-        } catch (e) { toast(e.message, 'err'); }
-      }; },
-    });
-  };
-  load();
-};
+  el('rqLoad').onclick = () => load().catch((e) => toast(e.message, 'err'));
+  el('rqStatus').onchange = () => load().catch((e) => toast(e.message, 'err'));
 
-function employeeModal(emp, departments, shifts, after) {
-  const v = (k, d = '') => (emp && emp[k] !== null && emp[k] !== undefined ? emp[k] : d);
-  modal({
-    title: emp ? `تعديل بيانات ${emp.full_name}` : 'إضافة موظف',
-    body: `<div class="grid cols-2">
-      <div class="field"><label>رقم الموظف (نفس الرقم في جهاز البصمة)</label><input id="fCode" value="${esc(v('code'))}" /></div>
-      <div class="field"><label>الاسم الكامل</label><input id="fName" value="${esc(v('full_name'))}" /></div>
-      <div class="field"><label>الهوية / الإقامة</label><input id="fNid" value="${esc(v('national_id'))}" /></div>
-      <div class="field"><label>الجوال</label><input id="fPhone" value="${esc(v('phone'))}" />
-        <div class="help">بمجرد حفظ الرقم يُنشأ حساب دخول للموظف: اسم المستخدم وكلمة المرور
-          المؤقتة هما الرقم نفسه، ويُطالَب بتغييرها عند أول دخول.</div></div>
-      <div class="field"><label>البريد</label><input id="fEmail" value="${esc(v('email'))}" /></div>
-      <div class="field"><label>المسمى الوظيفي</label><input id="fTitle" value="${esc(v('job_title'))}" /></div>
-      <div class="field"><label>الإدارة</label><select id="fDep"><option value="">—</option>${options(departments, v('department_id'))}</select></div>
-      <div class="field"><label>الوردية</label><select id="fShift"><option value="">—</option>${options(shifts, v('shift_id'))}</select></div>
-      <div class="field" style="grid-column:1/-1"><label>أيام الراحة الأسبوعية (خاصة بهذا الموظف)</label>
-        <div class="inline" style="gap:6px">${WEEK_DAYS.map(([d, name]) => {
-          const rest = String(v('weekly_rest_days', '') || '').split(',').filter(Boolean);
-          return `<label class="chip" style="cursor:pointer;gap:6px">
-            <input type="checkbox" class="fRest" value="${d}" style="width:auto;margin:0"
-              ${rest.includes(d) ? 'checked' : ''} /> ${name}</label>`;
-        }).join('')}</div>
-        <div class="help">اتركها فارغة ليتبع الموظف أيام عمل الوردية. تحديد يوم راحة يعني أنه يعمل بقية الأيام.</div>
-      </div>
-      <div class="field"><label>موقع العمل (للبصم من التطبيق)</label><select id="fSite"><option value="">كل المواقع المعتمدة</option>${options(state.cache.sites || [], v('site_id'))}</select></div>
-      <div class="field"><label>تاريخ التعيين</label><input type="date" id="fHire" value="${v('hire_date')}" /></div>
-      <div class="field"><label>الراتب الأساسي</label><input type="number" id="fSalary" value="${v('basic_salary', 0)}" /></div>
-      <div class="field"><label>البدلات</label><input type="number" id="fAllow" value="${v('allowances', 0)}" />
-        <div class="help">إجمالي الراتب = الأساسي + البدلات</div></div>
-      <div class="field"><label>الاستراحة</label><select id="fNoBreak">
-        <option value="false" ${!v('no_break') ? 'selected' : ''}>يأخذ استراحة</option>
-        <option value="true" ${v('no_break') ? 'selected' : ''}>لا يأخذ استراحة</option></select>
-        <div class="help">«لا يأخذ استراحة» تعني ألا تُخصم استراحة الوردية الثابتة من ساعاته،
-          وأي استراحة يسجّلها تُحتسب تجاوزاً.</div></div>
-      <div class="field"><label>الحالة</label><select id="fStatus">
-        <option value="active" ${v('status') === 'active' ? 'selected' : ''}>على رأس العمل</option>
-        <option value="suspended" ${v('status') === 'suspended' ? 'selected' : ''}>موقوف</option>
-        <option value="terminated" ${v('status') === 'terminated' ? 'selected' : ''}>منتهية خدمته</option></select></div>
-      </div>`,
-    footer: `<button class="btn" id="fSave">حفظ</button>
-      ${emp ? `<button class="btn danger" id="fDel">حذف</button>` : ''}
+  window.decideRequest = (id, approve) => modal({
+    title: approve ? 'اعتماد الطلب' : 'رفض الطلب',
+    body: `<div class="field"><label>رد الإدارة${approve ? ' (اختياري)' : ' / السبب'}</label>
+      <textarea id="rdNote" rows="3" placeholder="${approve
+        ? 'مثال: التعريف جاهز للاستلام من المكتب' : 'مثال: لا يمكن تغيير الوردية هذا الشهر'}"></textarea></div>`,
+    footer: `<button class="btn ${approve ? '' : 'danger'}" id="rdSave">${approve ? 'اعتماد' : 'رفض'}</button>
       <button class="btn gray" data-close>إلغاء</button>`,
-    width: 720,
     onOpen: (root) => {
-      $('#fSave', root).onclick = async () => {
-        const body = {
-          code: el('fCode').value.trim(), full_name: el('fName').value.trim(),
-          national_id: el('fNid').value || null, phone: el('fPhone').value || null,
-          email: el('fEmail').value || null, job_title: el('fTitle').value || null,
-          department_id: el('fDep').value ? Number(el('fDep').value) : null,
-          shift_id: el('fShift').value ? Number(el('fShift').value) : null,
-          site_id: el('fSite').value ? Number(el('fSite').value) : null,
-          hire_date: el('fHire').value || null, basic_salary: Number(el('fSalary').value || 0),
-          allowances: Number(el('fAllow').value || 0),
-          weekly_rest_days: [...document.querySelectorAll('.fRest:checked')].map((c) => c.value).join(',') || null,
-          no_break: el('fNoBreak').value === 'true',
-          status: el('fStatus').value,
-        };
+      $('#rdSave', root).onclick = async () => {
         try {
-          if (emp) await api('/api/employees/' + emp.id, { method: 'PATCH', body });
-          else await api('/api/employees', { method: 'POST', body });
-          toast('تم الحفظ', 'ok'); closeModal(); loadLookups(true).then(after);
-        } catch (e) { toast(e.message, 'err'); }
-      };
-      if (emp && $('#fDel', root)) $('#fDel', root).onclick = async () => {
-        if (!confirm('حذف الموظف وكل سجلاته؟')) return;
-        try { await api('/api/employees/' + emp.id, { method: 'DELETE' });
-          toast('تم الحذف', 'ok'); closeModal(); loadLookups(true).then(after); }
-        catch (e) { toast(e.message, 'err'); }
-      };
-    },
-  });
-}
-
-
-function importModal(after) {
-  modal({
-    title: 'استيراد الموظفين من ملف',
-    body: `<div class="help" style="margin-bottom:14px">
-        ارفع ملف <b>Excel (.xlsx)</b> أو <b>CSV</b> بالأعمدة التالية بالترتيب:
-        <br><code>رقم الموظف | الاسم | الإدارة | المسمى الوظيفي | الجوال | البريد | الهوية | تاريخ التعيين | الراتب الأساسي | الوردية</code>
-        <br>الإدارة تُنشأ تلقائياً إن لم تكن موجودة، ورقم الموظف يجب أن يطابق رقم المستخدم في جهاز البصمة.
-      </div>
-      <button class="btn ghost" id="imTemplate">تنزيل قالب جاهز</button>
-      <div class="field" style="margin-top:14px"><label>الملف</label><input type="file" id="imFile" accept=".xlsx,.xlsm,.csv" /></div>
-      <div class="field"><label>الموظفون الموجودون مسبقاً</label><select id="imUpdate">
-        <option value="true">تحديث بياناتهم</option><option value="false">تخطيهم</option></select></div>
-      <div id="imResult"></div>`,
-    width: 640,
-    footer: '<button class="btn" id="imSave">استيراد</button><button class="btn gray" data-close>إغلاق</button>',
-    onOpen: (root) => {
-      $('#imTemplate', root).onclick = () =>
-        downloadCsv('/api/employees-import-template.csv', 'employees_template.csv');
-      $('#imSave', root).onclick = async () => {
-        const input = el('imFile');
-        if (!input.files.length) { toast('اختر ملفاً أولاً', 'err'); return; }
-        const fd = new FormData();
-        fd.append('file', input.files[0]);
-        fd.append('update_existing', el('imUpdate').value);
-        try {
-          const r = await api('/api/employees/import', { method: 'POST', body: fd });
-          el('imResult').innerHTML = `<div class="help" style="margin-top:12px">
-            ${icon('check', 'sm')} ${esc(r.message)}
-            ${r.errors.length ? `<div style="margin-top:8px;color:var(--danger)">تحذيرات:<br>${r.errors.map(esc).join('<br>')}</div>` : ''}
-          </div>`;
-          toast(r.message, 'ok');
-          loadLookups(true).then(after);
-        } catch (e) { toast(e.message, 'err'); }
-      };
-    },
-  });
-}
-
-/* ------------------------------ السلف على الراتب ------------------------------ */
-/* ------------------------------ مشتريات الموظفين ------------------------------ */
-views.purchases = async () => {
-  const manage = isHR();
-  const { employees } = manage ? await loadLookups() : { employees: [] };
-  const now = new Date();
-  render(`
-    <div class="card"><div class="card-body inline">
-      ${manage ? `<button class="btn ok" id="puNew">${icon('plus')} تسجيل فاتورة</button>` : ''}
-      <div class="field"><label>السنة</label><input type="number" id="puYear" value="${now.getFullYear()}" /></div>
-      <div class="field"><label>الشهر</label><select id="puMonth">${
-        MONTHS.map((m, i) => `<option value="${i + 1}" ${i === now.getMonth() ? 'selected' : ''}>${m}</option>`).join('')
-      }</select></div>
-      ${manage ? `<div class="field"><label>الموظف</label><select id="puEmp"><option value="">الكل</option>${
-        options(employees, '', 'id', 'full_name')}</select></div>` : ''}
-      <button class="btn ghost" id="puLoad">عرض</button>
-      <span class="help">فواتير الشهر تُخصم تلقائياً في مسير رواتبه.</span>
-    </div></div>
-    <div class="grid cols-3 stagger" id="puKpis"></div>
-    <div class="card"><div class="card-head"><h3>الفواتير</h3><span class="muted" id="puCount"></span></div>
-      <div id="puTable"><div class="sk-rows">${'<div class="sk line"></div>'.repeat(4)}</div></div></div>`);
-
-  const load = async () => {
-    const q = new URLSearchParams({ year: el('puYear').value, month: el('puMonth').value });
-    if (el('puEmp') && el('puEmp').value) q.set('employee_id', el('puEmp').value);
-    const rows = await api('/api/purchases?' + q);
-    const live = rows.filter((r) => !r.is_cancelled);
-    el('puCount').textContent = `${rows.length} فاتورة`;
-    el('puKpis').innerHTML = `
-      <div class="kpi primary"><div class="label">فواتير الشهر<span class="ico">${icon('cart')}</span></div>
-        <div class="value">${live.length}</div></div>
-      <div class="kpi danger"><div class="label">إجمالي الخصم<span class="ico">${icon('money')}</span></div>
-        <div class="value danger">${money(live.reduce((t, r) => t + r.amount, 0))}</div></div>
-      <div class="kpi info"><div class="label">ملغاة<span class="ico">${icon('close')}</span></div>
-        <div class="value info">${rows.length - live.length}</div></div>`;
-    el('puTable').innerHTML = table(
-      ['التاريخ', 'الموظف', 'البيان', 'رقم الفاتورة', 'المبلغ', 'الحالة', ''],
-      rows,
-      (r) => `<tr${r.is_cancelled ? ' style="opacity:.55"' : ''}>
-        <td>${esc(r.purchase_date)}</td>
-        <td>${esc(r.employee_name || '')}<div class="muted" style="font-size:11.5px">${esc(r.employee_code || '')}</div></td>
-        <td>${esc(r.description)}</td><td>${esc(r.invoice_no || '—')}</td>
-        <td class="money"><b>${money(r.amount)}</b></td>
-        <td>${r.is_cancelled
-          ? `<span class="tag cancelled">ملغاة</span>
-             <div class="muted" style="font-size:11px">${esc(r.cancel_reason || '')}</div>`
-          : '<span class="tag on">تُخصم</span>'}</td>
-        <td>${manage && !r.is_cancelled
-          ? `<button class="btn sm danger" onclick="cancelPurchase(${r.id})">إلغاء</button>` : ''}</td></tr>`,
-      manage ? 'لا فواتير في هذا الشهر' : 'لا توجد فواتير عليك');
-  };
-
-  el('puLoad').onclick = () => load().catch((e) => toast(e.message, 'err'));
-  if (el('puNew')) el('puNew').onclick = () => modal({
-    title: 'تسجيل فاتورة مشتريات',
-    body: `<div class="help" style="margin-bottom:12px">تُخصم من راتب الشهر الذي يقع فيه
-        تاريخ الفاتورة، ويصل الموظف إشعار بها.</div>
-      <div class="field"><label>الموظف</label>
-        <select id="pfEmp">${options(employees, '', 'id', 'full_name')}</select></div>
-      <div class="inline">
-        <div class="field" style="flex:1"><label>التاريخ</label>
-          <input type="date" id="pfDate" value="${today()}" /></div>
-        <div class="field" style="flex:1"><label>المبلغ</label>
-          <input type="number" step="0.01" id="pfAmount" value="10" /></div>
-      </div>
-      <div class="field"><label>البيان</label>
-        <input id="pfDesc" placeholder="مثال: وجبة من المتجر" /></div>
-      <div class="field"><label>رقم الفاتورة (اختياري)</label><input id="pfNo" /></div>`,
-    footer: '<button class="btn" id="pfSave">حفظ</button><button class="btn gray" data-close>إلغاء</button>',
-    onOpen: (root) => {
-      $('#pfSave', root).onclick = async () => {
-        const description = $('#pfDesc', root).value.trim();
-        if (description.length < 2) return toast('اكتب بيان الفاتورة', 'err');
-        try {
-          await api('/api/purchases', { method: 'POST', body: {
-            employee_id: Number($('#pfEmp', root).value),
-            purchase_date: $('#pfDate', root).value,
-            amount: Number($('#pfAmount', root).value),
-            description,
-            invoice_no: $('#pfNo', root).value.trim() || null } });
-          toast('سُجّلت الفاتورة', 'ok'); closeModal(); load();
-        } catch (e) { toast(e.message, 'err'); }
-      };
-    },
-  });
-  window.cancelPurchase = (id) => modal({
-    title: 'إلغاء الفاتورة',
-    body: `<div class="help" style="margin-bottom:12px">تبقى في السجل ولا تُخصم من الراتب.</div>
-      <div class="field"><label>سبب الإلغاء (إلزامي)</label>
-        <input id="pcReason" placeholder="مثال: أُعيدت البضاعة" /></div>`,
-    footer: '<button class="btn danger" id="pcSave">إلغاء الفاتورة</button><button class="btn gray" data-close>تراجع</button>',
-    onOpen: (root) => {
-      $('#pcSave', root).onclick = async () => {
-        const reason = $('#pcReason', root).value.trim();
-        if (reason.length < 3) return toast('اكتب سبب الإلغاء', 'err');
-        try {
-          await api(`/api/purchases/${id}/cancel`, { method: 'POST', body: { reason } });
-          toast('أُلغيت الفاتورة', 'ok'); closeModal(); load();
+          await api(`/api/requests/${id}/decide`, { method: 'POST', body: {
+            approve, note: $('#rdNote', root).value.trim() || null } });
+          toast(approve ? 'اعتُمد الطلب' : 'رُفض الطلب', 'ok'); closeModal(); load();
         } catch (e) { toast(e.message, 'err'); }
       };
     },
