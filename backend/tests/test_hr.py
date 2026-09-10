@@ -1874,6 +1874,89 @@ def test_monthly_rest_days(client, auth):
     client.put("/api/settings", headers=auth, json={"monthly_rest_quota": 4})
 
 
+def test_employee_rest_quota_overrides_global_default(client, auth):
+    """رصيد الراحة في ملف الموظف يغلب الرقم الافتراضي في الإعدادات."""
+    client.put("/api/settings", headers=auth, json={"monthly_rest_quota": 4})
+    generic = client.post("/api/employees", headers=auth, json={
+        "code": "9781", "full_name": "موظف بالرصيد الافتراضي", "basic_salary": 3000}).json()
+    special = client.post("/api/employees", headers=auth, json={
+        "code": "9782", "full_name": "موظف برصيد خاص", "basic_salary": 3000,
+        "monthly_rest_quota": 1}).json()
+
+    assert generic["monthly_rest_quota"] is None
+    assert generic["rest_quota"] == 4 and generic["rest_quota_default"] == 4
+    assert special["monthly_rest_quota"] == 1 and special["rest_quota"] == 1
+
+    first = date.today().replace(day=1)
+    previous_end = first - timedelta(days=1)
+    year, month = previous_end.year, previous_end.month
+
+    # صاحب الرصيد الخاص: يوم واحد فقط
+    assert client.post("/api/rest-days", headers=auth, json={
+        "employee_id": special["id"], "rest_date": str(date(year, month, 6))}).status_code == 201
+    denied = client.post("/api/rest-days", headers=auth, json={
+        "employee_id": special["id"], "rest_date": str(date(year, month, 7))})
+    assert denied.status_code == 400
+    assert "ملفه" in denied.json()["detail"]
+
+    # وزميله يبقى على الافتراضي
+    assert client.post("/api/rest-days", headers=auth, json={
+        "employee_id": generic["id"], "rest_date": str(date(year, month, 7))}).status_code == 201
+
+    summary = client.get(f"/api/rest-days/summary?year={year}&month={month}", headers=auth).json()
+    rows = {r["employee_code"]: r for r in summary}
+    assert rows["9782"]["quota"] == 1 and rows["9782"]["custom_quota"] is True
+    assert rows["9782"]["remaining"] == 0
+    assert rows["9781"]["quota"] == 4 and rows["9781"]["custom_quota"] is False
+
+    # الرجوع إلى الافتراضي بإفراغ الحقل
+    back = client.patch(f"/api/employees/{special['id']}", headers=auth,
+                        json={"monthly_rest_quota": None}).json()
+    assert back["monthly_rest_quota"] is None and back["rest_quota"] == 4
+    assert client.post("/api/rest-days", headers=auth, json={
+        "employee_id": special["id"], "rest_date": str(date(year, month, 8))}).status_code == 201
+
+
+def test_employee_account_managed_from_employee_file(client, auth):
+    """إنشاء حساب الدخول وإعادة كلمة مروره وإيقافه — كله من ملف الموظف."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9783", "full_name": "موظف حساب الملف", "basic_salary": 3000}).json()
+    assert emp["has_user"] is False and emp["username"] is None
+
+    state = client.get(f"/api/employees/{emp['id']}/account", headers=auth).json()
+    assert state["has_user"] is False and "جوال" in state["blocker"]
+
+    # بلا رقم جوال لا حساب
+    assert client.post(f"/api/employees/{emp['id']}/account", headers=auth).status_code == 400
+
+    client.patch(f"/api/employees/{emp['id']}", headers=auth, json={"phone": "0551239783"})
+    created = client.post(f"/api/employees/{emp['id']}/account", headers=auth)
+    if created.status_code == 400:
+        # أُنشئ تلقائياً عند حفظ الجوال — وهذا سلوك مقبول
+        created = client.get(f"/api/employees/{emp['id']}/account", headers=auth)
+    body = created.json()
+    assert body["has_user"] is True and body["username"] == "0551239783"
+    assert body["must_change_password"] is True
+
+    # دخول الموظف بكلمة المرور المؤقتة (رقم جواله)
+    login = client.post("/api/auth/login", data={
+        "username": "0551239783", "password": "0551239783"})
+    assert login.status_code == 200, login.text
+
+    reset = client.post(f"/api/employees/{emp['id']}/account/reset", headers=auth).json()
+    assert reset["temp_password"] == "0551239783" and reset["must_change_password"] is True
+
+    off = client.post(f"/api/employees/{emp['id']}/account/toggle?active=false", headers=auth).json()
+    assert off["is_active"] is False
+    blocked = client.post("/api/auth/login", data={
+        "username": "0551239783", "password": "0551239783"})
+    assert blocked.status_code in (401, 403)
+
+    on = client.post(f"/api/employees/{emp['id']}/account/toggle?active=true", headers=auth).json()
+    assert on["is_active"] is True
+    assert client.get(f"/api/employees/{emp['id']}", headers=auth).json()["has_user"] is True
+
+
 # ------------------------------ الحماية ------------------------------
 def test_security_headers_present(client):
     res = client.get("/api/health")

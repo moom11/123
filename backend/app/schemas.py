@@ -113,6 +113,7 @@ class EmployeeIn(BaseModel):
     allowances: float = 0
     weekly_rest_days: str | None = None
     no_break: bool = False
+    monthly_rest_quota: int | None = Field(default=None, ge=0, le=31)
     status: EmployeeStatus = EmployeeStatus.active
 
 
@@ -132,6 +133,7 @@ class EmployeeUpdate(BaseModel):
     allowances: float | None = None
     weekly_rest_days: str | None = None
     no_break: bool | None = None
+    monthly_rest_quota: int | None = Field(default=None, ge=0, le=31)
     status: EmployeeStatus | None = None
 
 
@@ -156,8 +158,14 @@ class EmployeeOut(ORMModel):
     total_salary: float = 0
     weekly_rest_days: str | None = None
     no_break: bool = False
+    monthly_rest_quota: int | None = None      # الرصيد الخاص بالموظف (فارغ = الافتراضي)
+    rest_quota: int = 0                        # الرصيد المطبَّق فعلياً هذا الشهر
+    rest_quota_default: int = 0                # الافتراضي في إعدادات المنشأة
     status: EmployeeStatus
     has_user: bool = False
+    username: str | None = None
+    user_active: bool = False
+    must_change_password: bool = False
 
 
 # ------------------------------ الحضور ------------------------------
@@ -978,6 +986,7 @@ class RestSummaryRow(BaseModel):
     employee_name: str
     used: int = 0
     quota: int = 0
+    custom_quota: bool = False    # الرصيد من ملف الموظف لا من الإعدادات العامة
     remaining: int = 0
     dates: list[date] = []
 

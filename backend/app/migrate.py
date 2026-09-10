@@ -32,6 +32,7 @@ NEW_COLUMNS: list[tuple[str, str, str]] = [
     ("attendance_days", "break_overrun_minutes", "INTEGER DEFAULT 0"),
     ("attendance_days", "open_break", "BOOLEAN DEFAULT 0"),
     ("employees", "no_break", "BOOLEAN DEFAULT 0"),
+    ("employees", "monthly_rest_quota", "INTEGER"),
     ("employee_loans", "approved_by_id", "INTEGER"),
     ("employee_loans", "approved_at", "DATETIME"),
     ("employee_loans", "acknowledged_at", "DATETIME"),

@@ -249,6 +249,8 @@ class Employee(Base):
     # موظف لا يأخذ استراحة: لا تُخصم استراحة الوردية الثابتة من ساعاته،
     # وأي استراحة يأخذها تُحتسب تجاوزاً من أول دقيقة بعد السماح
     no_break: Mapped[bool] = mapped_column(Boolean, default=False)
+    # رصيد أيام الراحة الشهرية الخاص بهذا الموظف، فارغ = يتبع الرقم الافتراضي في الإعدادات
+    monthly_rest_quota: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[EmployeeStatus] = mapped_column(Enum(EmployeeStatus), default=EmployeeStatus.active)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 

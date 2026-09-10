@@ -13,7 +13,7 @@ from ..models import Employee, EmployeeStatus, RestDay, Role, User
 from ..schemas import RestDayIn, RestDayOut, RestSummaryRow
 from ..security import can_view_employee, get_current_user, require_hr, visible_employee_ids
 from ..services import attendance as attendance_service
-from ..services import audit, notifications, settings_store
+from ..services import audit, notifications, rest_policy
 
 router = APIRouter(prefix="/api", tags=["rest-days"])
 
@@ -65,7 +65,7 @@ def rest_summary(
 ):
     """المستهلك والمتبقي من الراحة الشهرية لكل موظف."""
     start, end = _month_range(year, month)
-    quota = settings_store.get_int(db, "monthly_rest_quota", 4) or 0
+    default_quota = rest_policy.default_quota(db)
 
     emp_stmt = select(Employee).where(Employee.status == EmployeeStatus.active)
     allowed = visible_employee_ids(db, user)
@@ -89,12 +89,14 @@ def rest_summary(
     result = []
     for employee in employees:
         dates = sorted(by_employee.get(employee.id, []))
+        quota = rest_policy.quota_for(db, employee, default_quota)
         result.append(RestSummaryRow(
             employee_id=employee.id,
             employee_code=employee.code,
             employee_name=employee.full_name,
             used=len(dates),
             quota=quota,
+            custom_quota=rest_policy.has_own_quota(employee),
             remaining=max(quota - len(dates), 0),
             dates=dates,
         ))
@@ -114,7 +116,7 @@ def add_rest_day(payload: RestDayIn, db: Session = Depends(get_db), user: User =
     if existing:
         raise HTTPException(status_code=400, detail="اليوم مسجّل راحة مسبقاً لهذا الموظف")
 
-    quota = settings_store.get_int(db, "monthly_rest_quota", 4) or 0
+    quota = rest_policy.quota_for(db, employee)
     start, end = _month_range(payload.rest_date.year, payload.rest_date.month)
     used = len(db.scalars(
         select(RestDay).where(
@@ -126,7 +128,8 @@ def add_rest_day(payload: RestDayIn, db: Session = Depends(get_db), user: User =
     if quota and used >= quota:
         raise HTTPException(
             status_code=400,
-            detail=f"استُهلك رصيد الراحة الشهري ({quota} أيام) لهذا الموظف في هذا الشهر",
+            detail=f"استُهلك رصيد الراحة الشهري ({quota} أيام) لهذا الموظف في هذا الشهر"
+                   + (" — الرصيد محدَّد في ملفه" if rest_policy.has_own_quota(employee) else ""),
         )
 
     row = RestDay(

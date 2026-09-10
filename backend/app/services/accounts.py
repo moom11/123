@@ -45,22 +45,26 @@ def phone_conflict(db: Session, phone: str | None, exclude_employee_id: int | No
     return None
 
 
-def ensure_account(db: Session, employee: Employee, *, commit: bool = False) -> User | None:
-    """ينشئ حساب دخول للموظف إن كان له رقم جوال ولا حساب له. يعيد الحساب المنشأ أو None."""
-    if not settings_store.get_bool(db, "auto_account_on_phone"):
-        return None
-    if employee is None or not is_valid_phone(employee.phone):
-        return None
+def account_blocker(db: Session, employee: Employee | None) -> str | None:
+    """سبب تعذّر إنشاء حساب دخول لهذا الموظف، أو None إن كان ممكناً."""
+    if employee is None:
+        return "الموظف غير موجود"
     if db.scalar(select(User).where(User.employee_id == employee.id)):
-        return None   # للموظف حساب بالفعل
-
+        return "للموظف حساب دخول بالفعل"
+    if not is_valid_phone(employee.phone):
+        return "لا حساب بلا رقم جوال — سجّل رقم جوال الموظف في ملفه أولاً"
     phone = normalize_phone(employee.phone)
-    if phone_conflict(db, phone, employee.id):
-        logger.info("لم يُنشأ حساب تلقائي: الرقم %s مسجّل لموظف آخر", phone)
-        return None
+    other = phone_conflict(db, phone, employee.id)
+    if other:
+        return f"رقم الجوال مسجّل للموظف {other.full_name} ({other.code})"
     if db.scalar(select(User).where(User.username == phone)):
-        return None   # اسم المستخدم محجوز لحساب آخر
+        return "رقم الجوال محجوز كاسم مستخدم لحساب آخر"
+    return None
 
+
+def create_account(db: Session, employee: Employee, *, commit: bool = False) -> User:
+    """ينشئ حساب الدخول: اسم المستخدم وكلمة المرور المؤقتة هما رقم الجوال."""
+    phone = normalize_phone(employee.phone)
     user = User(
         username=phone,
         password_hash=hash_password(phone),   # كلمة مرور مؤقتة = رقم الجوال
@@ -72,5 +76,30 @@ def ensure_account(db: Session, employee: Employee, *, commit: bool = False) -> 
     db.flush()
     if commit:
         db.commit()
-    logger.info("أُنشئ حساب دخول تلقائي للموظف %s (%s)", employee.full_name, phone)
+    logger.info("أُنشئ حساب دخول للموظف %s (%s)", employee.full_name, phone)
     return user
+
+
+def reset_password(db: Session, user: User, employee: Employee) -> str:
+    """يعيد كلمة المرور إلى رقم الجوال ويُبطل الجلسات المفتوحة. يعيد الكلمة المؤقتة."""
+    from ..security import revoke_sessions
+
+    phone = normalize_phone(employee.phone) if is_valid_phone(employee.phone) else ""
+    temp = phone or "12345678"
+    user.password_hash = hash_password(temp)
+    user.must_change_password = True
+    revoke_sessions(user)
+    db.flush()
+    return temp
+
+
+def ensure_account(db: Session, employee: Employee, *, commit: bool = False) -> User | None:
+    """ينشئ حساب دخول تلقائياً عند تسجيل رقم الجوال — إن كان الخيار مفعّلاً."""
+    if not settings_store.get_bool(db, "auto_account_on_phone"):
+        return None
+    blocker = account_blocker(db, employee)
+    if blocker:
+        if employee is not None and is_valid_phone(employee.phone):
+            logger.info("لم يُنشأ حساب تلقائي للموظف %s: %s", employee.full_name, blocker)
+        return None
+    return create_account(db, employee, commit=commit)

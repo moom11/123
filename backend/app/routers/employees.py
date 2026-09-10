@@ -20,12 +20,13 @@ from ..schemas import (
     ShiftOut,
 )
 from ..security import get_current_user, require_hr
-from ..services import accounts, audit
+from ..services import accounts, audit, rest_policy
 
 router = APIRouter(prefix="/api", tags=["employees"])
 
 
-def employee_out(emp: Employee) -> EmployeeOut:
+def employee_out(emp: Employee, default_quota: int = 0) -> EmployeeOut:
+    account = emp.user
     return EmployeeOut(
         id=emp.id,
         code=emp.code,
@@ -47,8 +48,15 @@ def employee_out(emp: Employee) -> EmployeeOut:
         total_salary=round((emp.basic_salary or 0) + (emp.allowances or 0), 2),
         weekly_rest_days=emp.weekly_rest_days,
         no_break=bool(emp.no_break),
+        monthly_rest_quota=emp.monthly_rest_quota,
+        rest_quota=(int(emp.monthly_rest_quota)
+                    if emp.monthly_rest_quota is not None else default_quota),
+        rest_quota_default=default_quota,
         status=emp.status,
-        has_user=emp.user is not None,
+        has_user=account is not None,
+        username=account.username if account else None,
+        user_active=bool(account.is_active) if account else False,
+        must_change_password=bool(account.must_change_password) if account else False,
     )
 
 
@@ -76,7 +84,8 @@ def list_employees(
     if status:
         stmt = stmt.where(Employee.status == status)
     rows = db.scalars(stmt.order_by(Employee.code)).all()
-    return [employee_out(e) for e in rows]
+    default_quota = rest_policy.default_quota(db)
+    return [employee_out(e, default_quota) for e in rows]
 
 
 @router.post("/employees", response_model=EmployeeOut, status_code=201)
@@ -103,7 +112,7 @@ def create_employee(
     db.commit()
     db.refresh(emp)
     _link_orphan_punches(db, emp)
-    return employee_out(emp)
+    return employee_out(emp, rest_policy.default_quota(db))
 
 
 def _link_orphan_punches(db: Session, emp: Employee) -> None:
@@ -131,7 +140,7 @@ def get_employee(employee_id: int, db: Session = Depends(get_db), user: User = D
         raise HTTPException(status_code=404, detail="الموظف غير موجود")
     if not can_view_employee(user, employee_id, db):
         raise HTTPException(status_code=403, detail="لا تملك صلاحية عرض هذا الموظف")
-    return employee_out(emp)
+    return employee_out(emp, rest_policy.default_quota(db))
 
 
 @router.patch("/employees/{employee_id}", response_model=EmployeeOut)
@@ -167,7 +176,7 @@ def update_employee(
                       f"حساب تلقائي بالجوال للموظف {emp.full_name}", commit=False)
     db.commit()
     db.refresh(emp)
-    return employee_out(emp)
+    return employee_out(emp, rest_policy.default_quota(db))
 
 
 @router.post("/employees/ensure-accounts")
@@ -181,9 +190,10 @@ def ensure_accounts(db: Session = Depends(get_db), user: User = Depends(require_
         if accounts.phone_conflict(db, emp.phone, emp.id):
             skipped_duplicates.append(f"{emp.full_name} ({emp.code})")
             continue
-        account = accounts.ensure_account(db, emp)
-        if account:
-            created.append(f"{emp.full_name}: {account.username}")
+        if accounts.account_blocker(db, emp):
+            continue
+        account = accounts.create_account(db, emp)
+        created.append(f"{emp.full_name}: {account.username}")
     if created:
         audit.log(db, user, "create", "user", None,
                   f"إنشاء {len(created)} حساب دخول بأرقام الجوال", commit=False)
@@ -193,6 +203,121 @@ def ensure_accounts(db: Session = Depends(get_db), user: User = Depends(require_
         message += f"، وتُخطّي {len(skipped_duplicates)} لتكرار الرقم"
     return {"ok": True, "created": len(created), "accounts": created,
             "duplicates": skipped_duplicates, "message": message}
+
+
+# --------------------- حساب دخول الموظف (من داخل ملفه) ---------------------
+def _last_login(db: Session, account: User | None):
+    """آخر دخول ناجح لهذا الحساب من سجل الدخول."""
+    if account is None:
+        return None
+    from ..models import LoginEvent
+
+    return db.scalar(
+        select(LoginEvent.created_at)
+        .where(LoginEvent.user_id == account.id, LoginEvent.success.is_(True))
+        .order_by(LoginEvent.created_at.desc())
+        .limit(1)
+    )
+
+
+def _account_state(db: Session, emp: Employee) -> dict:
+    account = emp.user
+    return {
+        "employee_id": emp.id,
+        "employee_name": emp.full_name,
+        "has_user": account is not None,
+        "username": account.username if account else None,
+        "role": account.role.value if account else None,
+        "is_active": bool(account.is_active) if account else False,
+        "must_change_password": bool(account.must_change_password) if account else False,
+        "totp_enabled": bool(account.totp_enabled) if account else False,
+        "last_login": _last_login(db, account),
+        "blocker": None if account else accounts.account_blocker(db, emp),
+    }
+
+
+@router.get("/employees/{employee_id}/account")
+def employee_account(
+    employee_id: int, db: Session = Depends(get_db), user: User = Depends(require_hr)
+):
+    """حالة حساب دخول الموظف كما تظهر في ملفه."""
+    emp = db.get(Employee, employee_id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="الموظف غير موجود")
+    return _account_state(db, emp)
+
+
+@router.post("/employees/{employee_id}/account")
+def create_employee_account(
+    employee_id: int, db: Session = Depends(get_db), user: User = Depends(require_hr)
+):
+    """ينشئ حساب دخول لهذا الموظف من ملفه — اسم المستخدم وكلمة المرور المؤقتة رقم جواله."""
+    emp = db.get(Employee, employee_id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="الموظف غير موجود")
+    blocker = accounts.account_blocker(db, emp)
+    if blocker:
+        raise HTTPException(status_code=400, detail=blocker)
+    account = accounts.create_account(db, emp)
+    audit.log(db, user, "create", "user", account.id,
+              f"حساب دخول للموظف {emp.full_name} من ملفه", commit=False)
+    db.commit()
+    db.refresh(emp)
+    state = _account_state(db, emp)
+    state["temp_password"] = account.username
+    state["message"] = (f"أُنشئ حساب الدخول: اسم المستخدم {account.username} "
+                        "وكلمة المرور المؤقتة هي الرقم نفسه، ويغيّرها عند أول دخول")
+    return state
+
+
+@router.post("/employees/{employee_id}/account/reset")
+def reset_employee_account(
+    employee_id: int, db: Session = Depends(get_db), user: User = Depends(require_hr)
+):
+    """يعيد كلمة مرور الموظف إلى رقم جواله ويُبطل جلساته المفتوحة."""
+    emp = db.get(Employee, employee_id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="الموظف غير موجود")
+    if not emp.user:
+        raise HTTPException(status_code=400, detail="لا يوجد حساب دخول لهذا الموظف")
+    temp = accounts.reset_password(db, emp.user, emp)
+    audit.log(db, user, "update", "user", emp.user.id,
+              f"إعادة تعيين كلمة مرور {emp.full_name} من ملفه", commit=False)
+    db.commit()
+    db.refresh(emp)
+    state = _account_state(db, emp)
+    state["temp_password"] = temp
+    state["message"] = f"كلمة المرور المؤقتة الآن: {temp} — تُغيَّر عند أول دخول"
+    return state
+
+
+@router.post("/employees/{employee_id}/account/toggle")
+def toggle_employee_account(
+    employee_id: int,
+    active: bool = Query(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_hr),
+):
+    """يوقف دخول الموظف أو يعيد تفعيله من ملفه."""
+    from ..security import revoke_sessions
+
+    emp = db.get(Employee, employee_id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="الموظف غير موجود")
+    if not emp.user:
+        raise HTTPException(status_code=400, detail="لا يوجد حساب دخول لهذا الموظف")
+    if emp.user.id == user.id:
+        raise HTTPException(status_code=400, detail="لا يمكنك إيقاف حسابك الحالي")
+    emp.user.is_active = active
+    if not active:
+        revoke_sessions(emp.user)     # الحساب الموقوف لا تبقى جلساته حيّة
+    audit.log(db, user, "update", "user", emp.user.id,
+              f"{'تفعيل' if active else 'إيقاف'} دخول {emp.full_name}", commit=False)
+    db.commit()
+    db.refresh(emp)
+    state = _account_state(db, emp)
+    state["message"] = "أُعيد تفعيل الدخول" if active else "أُوقف دخول الموظف وأُنهيت جلساته"
+    return state
 
 
 @router.delete("/employees/{employee_id}")
