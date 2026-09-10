@@ -12,6 +12,7 @@ from ..config import MAX_UPLOAD_BYTES, UPLOAD_DIR
 from ..database import get_db
 from ..models import User
 from ..security import require_hr
+from ..security_extra import content_problem
 from ..services import appicon, audit, quotes, settings_store
 
 router = APIRouter(prefix="/api/branding", tags=["branding"])
@@ -81,6 +82,9 @@ def upload_logo(
         raise HTTPException(status_code=400, detail="حجم الملف أكبر من الحد المسموح")
     if not content:
         raise HTTPException(status_code=400, detail="الملف فارغ")
+    problem = content_problem(content, suffix)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
 
     stored = f"logo_{secrets.token_hex(6)}{suffix}"
     (UPLOAD_DIR / stored).write_bytes(content)

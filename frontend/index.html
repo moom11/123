@@ -51,6 +51,11 @@
         <label for="password">كلمة المرور</label>
         <input id="password" type="password" autocomplete="current-password" required />
       </div>
+      <div class="field hidden" id="otpField">
+        <label for="otp">رمز التحقق من تطبيق المصادقة</label>
+        <input id="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6"
+               placeholder="000000" />
+      </div>
       <button class="btn" style="width:100%;justify-content:center" type="submit">دخول</button>
       <button type="button" class="btn ghost" id="loginLang"
         style="width:100%;justify-content:center;margin-top:10px">English / العربية</button>

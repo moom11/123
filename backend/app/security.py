@@ -29,14 +29,22 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 def create_access_token(user: User) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    """توكن يحمل «نسخة الجلسة»؛ أي تغيير لها يُبطل كل التوكنات السابقة."""
+    now = datetime.now(timezone.utc)
     payload = {
         "sub": str(user.id),
         "username": user.username,
         "role": user.role.value,
-        "exp": expire,
+        "tv": int(user.token_version or 1),
+        "iat": now,
+        "exp": now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def revoke_sessions(user: User) -> None:
+    """يُبطل كل جلسات المستخدم فوراً (تغيير كلمة مرور، إيقاف، أو خروج من كل الأجهزة)."""
+    user.token_version = int(user.token_version or 1) + 1
 
 
 def get_current_user(
@@ -56,6 +64,13 @@ def get_current_user(
     user = db.get(User, int(payload.get("sub", 0)))
     if not user or not user.is_active:
         raise credentials_error
+    # توكن صادر قبل تغيير كلمة المرور أو الخروج من كل الأجهزة لم يعد صالحاً
+    if int(payload.get("tv", 0)) != int(user.token_version or 1):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="انتهت الجلسة بعد تغيير كلمة المرور — سجّل الدخول من جديد",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return user
 
 

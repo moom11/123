@@ -22,6 +22,7 @@ from ..schemas import (
     ViolationTypeOut,
 )
 from ..security import can_view_employee, get_current_user, require_hr, require_manager
+from ..security_extra import content_problem
 from ..services import audit, notifications, sheets
 from ..services import violations as service
 
@@ -211,6 +212,9 @@ def upload_attachment(
     content = file.file.read(MAX_UPLOAD_BYTES + 1)
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=400, detail="حجم الملف أكبر من الحد المسموح")
+    problem = content_problem(content, suffix)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
     name = f"violation_{violation.id}_{secrets.token_hex(6)}{suffix}"
     (UPLOAD_DIR / name).write_bytes(content)
     violation.attachment_path = name

@@ -20,6 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from sqlalchemy import select  # noqa: E402
+
 from app.database import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import DayStatus, Employee, Shift  # noqa: E402
@@ -33,6 +35,15 @@ def client():
         yield c
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limit():
+    """الاختبارات تُطلق طلبات كثيرة من عنوان واحد؛ نصفّر حدّ المعدل بينها."""
+    from app import security_extra
+
+    security_extra.reset_rate()
+    yield
+
+
 @pytest.fixture(scope="session")
 def admin_token(client):
     res = client.post("/api/auth/login", data={"username": "admin", "password": "admin123"})
@@ -43,6 +54,16 @@ def admin_token(client):
 @pytest.fixture(scope="session")
 def auth(admin_token):
     return {"Authorization": f"Bearer {admin_token}"}
+
+
+def _relogin(client, auth, password: str = "admin123") -> None:
+    """تغيير كلمة المرور يُبطل التوكنات القديمة، فنجدّد ترويسة المدير المشتركة."""
+    from app import security_extra
+
+    security_extra.reset_all()      # اختبارات سابقة قد تكون بلغت حد المحاولات
+    res = client.post("/api/auth/login", data={"username": "admin", "password": password})
+    assert res.status_code == 200, res.text
+    auth["Authorization"] = f"Bearer {res.json()['access_token']}"
 
 
 def test_health(client):
@@ -1039,7 +1060,7 @@ def test_sheets_follows_apps_script_redirect():
         server.shutdown()
 
 
-def test_health_reports_setup_pending_until_password_changed(client):
+def test_health_reports_setup_pending_until_password_changed(client, auth):
     """تنبيه كلمة المرور الافتراضية يظهر قبل تغييرها ويختفي بعده."""
     assert client.get("/api/health").json()["setup_pending"] is True
 
@@ -1054,15 +1075,22 @@ def test_health_reports_setup_pending_until_password_changed(client):
     assert res.status_code == 200
     assert client.get("/api/health").json()["setup_pending"] is False
 
-    # إرجاع كلمة المرور حتى لا تتأثر بقية الاختبارات
-    token = client.post(
-        "/api/auth/login", data={"username": "admin", "password": "Str0ng-Pass-2026"}
-    ).json()["access_token"]
-    client.post(
-        "/api/auth/change-password",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"current_password": "Str0ng-Pass-2026", "new_password": "admin123"},
-    )
+    # التوكن القديم أُبطل بتغيير كلمة المرور، والاستجابة تعطي توكناً جديداً
+    fresh = res.json()["access_token"]
+    assert client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"}
+                      ).status_code == 401
+    assert client.get("/api/auth/me", headers={"Authorization": f"Bearer {fresh}"}
+                      ).status_code == 200
+
+    # إرجاع كلمة المرور الافتراضية مباشرةً في القاعدة (المسار العام يرفضها لضعفها)
+    with SessionLocal() as db:
+        from app.models import User as UserModel
+        from app.security import hash_password as _hash
+
+        admin = db.scalar(select(UserModel).where(UserModel.username == "admin"))
+        admin.password_hash = _hash("admin123")
+        db.commit()
+    _relogin(client, auth)
 
 
 # ------------------------------ هوية المنشأة والعبارة اليومية ------------------------------
@@ -1616,6 +1644,9 @@ def test_temp_password_must_be_changed_on_first_login(client, auth):
     changed = client.post("/api/auth/change-password", headers=h, json={
         "current_password": "0533221101", "new_password": "Jawal@2026"})
     assert changed.status_code == 200
+    # التوكن القديم أُبطل، والاستجابة تعطي بديلاً
+    assert client.get("/api/auth/me", headers=h).status_code == 401
+    h = {"Authorization": f"Bearer {changed.json()['access_token']}"}
     assert client.get("/api/auth/me", headers=h).json()["must_change_password"] is False
     assert client.post("/api/auth/login", data={
         "username": "0533221101", "password": "0533221101"}).status_code == 401
@@ -1743,8 +1774,10 @@ def test_employee_updates_own_profile(client, auth):
     token = client.post("/api/auth/login", data={
         "username": "0533444001", "password": "0533444001"}).json()["access_token"]
     h = {"Authorization": f"Bearer {token}"}
-    client.post("/api/auth/change-password", headers=h, json={
+    fresh = client.post("/api/auth/change-password", headers=h, json={
         "current_password": "0533444001", "new_password": "Data@2026"})
+    assert fresh.status_code == 200, fresh.text
+    h = {"Authorization": f"Bearer {fresh.json()['access_token']}"}
 
     profile = client.get("/api/me/profile", headers=h).json()
     assert profile["full_name"] == "موظف البيانات" and profile["code"] == "9980"
@@ -3152,3 +3185,198 @@ def test_payroll_excel_export(client, auth):
         "username": "0529998877", "password": "0529998877"}).json()["access_token"]
     assert client.get(f"/api/payroll/runs/{run['id']}/export.xlsx",
                       headers={"Authorization": f"Bearer {token}"}).status_code == 403
+
+
+# --------------------------- الحماية: الجلسات والتحقق بخطوتين ---------------------------
+
+def test_password_change_kills_old_sessions(client, auth):
+    """التوكن المسروق لا ينفع بعد تغيير كلمة المرور."""
+    from app import security_extra
+
+    security_extra.reset_all()
+    client.post("/api/employees", headers=auth, json={
+        "code": "9410", "full_name": "موظف الجلسات", "phone": "0528887766"})
+    stolen = client.post("/api/auth/login", data={
+        "username": "0528887766", "password": "0528887766"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {stolen}"}
+    assert client.get("/api/auth/me", headers=h).status_code == 200
+
+    changed = client.post("/api/auth/change-password", headers=h, json={
+        "current_password": "0528887766", "new_password": "Secure@2026"})
+    assert changed.status_code == 200
+
+    # التوكن القديم مات فوراً
+    res = client.get("/api/auth/me", headers=h)
+    assert res.status_code == 401 and "الجلسة" in res.json()["detail"]
+    # والجديد يعمل
+    fresh = {"Authorization": f"Bearer {changed.json()['access_token']}"}
+    assert client.get("/api/auth/me", headers=fresh).status_code == 200
+
+
+def test_logout_all_devices(client, auth):
+    """«الخروج من كل الأجهزة» يُبطل كل التوكنات بما فيها الحالي."""
+    from app import security_extra
+
+    security_extra.reset_all()
+    client.post("/api/employees", headers=auth, json={
+        "code": "9411", "full_name": "موظف الأجهزة", "phone": "0527776655"})
+    first = client.post("/api/auth/login", data={
+        "username": "0527776655", "password": "0527776655"}).json()["access_token"]
+    second = client.post("/api/auth/login", data={
+        "username": "0527776655", "password": "0527776655"}).json()["access_token"]
+    h1 = {"Authorization": f"Bearer {first}"}
+    h2 = {"Authorization": f"Bearer {second}"}
+    assert client.get("/api/auth/me", headers=h2).status_code == 200
+
+    assert client.post("/api/auth/logout-all", headers=h1).status_code == 200
+    assert client.get("/api/auth/me", headers=h1).status_code == 401
+    assert client.get("/api/auth/me", headers=h2).status_code == 401
+
+
+def test_admin_reset_and_suspend_kill_sessions(client, auth):
+    """إعادة تعيين كلمة المرور أو إيقاف الحساب يُنهيان جلسات صاحبه."""
+    from app import security_extra
+
+    security_extra.reset_all()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9412", "full_name": "موظف الإيقاف", "phone": "0526665544"}).json()
+    token = client.post("/api/auth/login", data={
+        "username": "0526665544", "password": "0526665544"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+    users = client.get("/api/users", headers=auth).json()
+    account = next(u for u in users if u["employee_id"] == emp["id"])
+
+    client.patch(f"/api/users/{account['id']}", headers=auth,
+                 json={"password": "Reset@2026"})
+    assert client.get("/api/auth/me", headers=h).status_code == 401
+
+    token = client.post("/api/auth/login", data={
+        "username": "0526665544", "password": "Reset@2026"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+    assert client.get("/api/auth/me", headers=h).status_code == 200
+    # ويُطلب منه تغييرها لأنها مؤقتة من الإدارة
+    assert client.get("/api/auth/me", headers=h).json()["must_change_password"] is True
+
+    client.patch(f"/api/users/{account['id']}", headers=auth, json={"is_active": False})
+    assert client.get("/api/auth/me", headers=h).status_code == 401
+
+
+def test_two_factor_login_flow(client, auth):
+    """التحقق بخطوتين: التفعيل يمنع الدخول بلا رمز، والرمز الصحيح يمرّ."""
+    import time as _time
+
+    from app import security_extra
+    from app.services import totp as totp_service
+
+    security_extra.reset_all()
+    client.post("/api/employees", headers=auth, json={
+        "code": "9413", "full_name": "موظف التحقق", "phone": "0525554433"})
+    token = client.post("/api/auth/login", data={
+        "username": "0525554433", "password": "0525554433"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+
+    assert client.get("/api/auth/2fa/status", headers=h).json()["enabled"] is False
+    setup = client.post("/api/auth/2fa/setup", headers=h).json()
+    secret = setup["secret"]
+    assert setup["uri"].startswith("otpauth://totp/") and secret in setup["uri"]
+    assert setup["secret_grouped"].count(" ") >= 3      # مجموعات رباعية للنسخ اليدوي
+
+    # رمز خاطئ لا يفعّل
+    assert client.post("/api/auth/2fa/enable", headers=h,
+                       json={"code": "000000"}).status_code == 400
+    enabled = client.post("/api/auth/2fa/enable", headers=h,
+                          json={"code": totp_service.code_now(secret)})
+    assert enabled.status_code == 200
+    assert client.get("/api/auth/2fa/status", headers=h).json()["enabled"] is True
+
+    # الدخول بلا رمز مرفوض
+    security_extra.reset_all()
+    no_code = client.post("/api/auth/login", data={
+        "username": "0525554433", "password": "0525554433"})
+    assert no_code.status_code == 401 and "رمز التحقق" in no_code.json()["detail"]
+
+    # رمز خاطئ مرفوض
+    bad = client.post("/api/auth/login", data={
+        "username": "0525554433", "password": "0525554433", "client_secret": "123456"})
+    assert bad.status_code == 401
+
+    # الرمز الصحيح يمرّ
+    security_extra.reset_all()
+    ok = client.post("/api/auth/login", data={
+        "username": "0525554433", "password": "0525554433",
+        "client_secret": totp_service.code_now(secret)})
+    assert ok.status_code == 200, ok.text
+
+    # التعطيل يحتاج كلمة المرور
+    h = {"Authorization": f"Bearer {ok.json()['access_token']}"}
+    assert client.post("/api/auth/2fa/disable", headers=h,
+                       json={"password": "wrong"}).status_code == 400
+    assert client.post("/api/auth/2fa/disable", headers=h,
+                       json={"password": "0525554433"}).status_code == 200
+    security_extra.reset_all()
+    assert client.post("/api/auth/login", data={
+        "username": "0525554433", "password": "0525554433"}).status_code == 200
+
+
+def test_login_history_and_new_device_alert(client, auth):
+    """كل محاولة دخول تُسجَّل، ويصل الموظف تنبيه عند جهاز جديد."""
+    from app import security_extra
+
+    security_extra.reset_all()
+    client.post("/api/employees", headers=auth, json={
+        "code": "9414", "full_name": "موظف السجل", "phone": "0524443322"})
+    ok = client.post("/api/auth/login",
+                     data={"username": "0524443322", "password": "0524443322"},
+                     headers={"User-Agent": "TestPhone/1.0"})
+    h = {"Authorization": f"Bearer {ok.json()['access_token']}"}
+
+    security_extra.reset_all()
+    client.post("/api/auth/login", data={"username": "0524443322", "password": "خطأ"})
+    # دخول ناجح من «جهاز» مختلف
+    security_extra.reset_all()
+    client.post("/api/auth/login",
+                data={"username": "0524443322", "password": "0524443322"},
+                headers={"User-Agent": "OtherBrowser/9.9"})
+
+    history = client.get("/api/auth/login-history", headers=h).json()
+    assert len(history) >= 3
+    assert any(row["success"] is False and row["reason"] for row in history)
+    assert any(row["device"] == "TestPhone/1.0" for row in history)
+
+    notes = client.get("/api/notifications", headers=h).json()
+    assert any("دخول جديد" in n["title"] for n in notes)
+
+
+def test_upload_rejects_disguised_file(client, auth):
+    """ملف تنفيذي بامتداد صورة مرفوض، وSVG فيه سكربت مرفوض."""
+    fake = client.post("/api/branding/logo", headers=auth,
+                       files={"file": ("logo.png", b"MZ\x90\x00 executable", "image/png")})
+    assert fake.status_code == 400 and "لا يطابق امتداده" in fake.json()["detail"]
+
+    evil = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
+    xss = client.post("/api/branding/logo", headers=auth,
+                      files={"file": ("logo.svg", evil, "image/svg+xml")})
+    assert xss.status_code == 400 and "سكربت" in xss.json()["detail"]
+
+    clean = b'<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>'
+    good = client.post("/api/branding/logo", headers=auth,
+                       files={"file": ("logo.svg", clean, "image/svg+xml")})
+    assert good.status_code == 200
+    client.delete("/api/branding/logo", headers=auth)
+
+
+def test_rate_limit_blocks_flood(client, auth):
+    """سيل الطلبات من عنوان واحد يُوقف بـ 429 ثم يعود بعد التصفير."""
+    from app import security_extra
+
+    security_extra.reset_rate()
+    original = security_extra.RATE_MAX
+    security_extra.RATE_MAX = 5
+    try:
+        codes = [client.get("/api/health").status_code for _ in range(9)]
+        assert 429 in codes
+        assert codes.index(429) >= 5          # لم يُمنع قبل بلوغ الحد
+    finally:
+        security_extra.RATE_MAX = original
+        security_extra.reset_rate()
+    assert client.get("/api/health").status_code == 200

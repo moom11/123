@@ -25,6 +25,7 @@ from ..models import (
 )
 from ..schemas import AuditLogOut, DocumentIn, DocumentOut, ImportReport, NotificationOut
 from ..security import can_view_employee, get_current_user, require_admin, require_hr
+from ..security_extra import content_problem
 from ..services import accounts, audit, notifications, settings_store
 
 router = APIRouter(prefix="/api", tags=["hr-extra"])
@@ -185,6 +186,9 @@ def upload_document_file(
     content = file.file.read(MAX_UPLOAD_BYTES + 1)
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=400, detail="حجم الملف أكبر من الحد المسموح")
+    problem = content_problem(content, suffix)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
     name = f"doc_{doc.id}_{secrets.token_hex(6)}{suffix}"
     (UPLOAD_DIR / name).write_bytes(content)
     doc.file_path = name

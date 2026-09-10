@@ -61,7 +61,7 @@ const PENALTY_ACTIONS = { warning:'إنذار كتابي', deduction_percent_day
   deduction_days:'خصم أجر أيام', suspension:'إيقاف بدون أجر', termination:'الفصل من العمل' };
 const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
 const money = (v) => (Number(v || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const APP_VERSION = '2026.09.10d';
+const APP_VERSION = '2026.09.10e';
 
 /* يفرض تحديث عامل الخدمة فور توفر نسخة جديدة (مهم على آيفون) */
 function watchForUpdates() {
@@ -300,19 +300,49 @@ const isHR = () => can('admin', 'hr');
 async function login(ev) {
   ev.preventDefault();
   try {
-    const data = await api('/api/auth/login', {
-      method: 'POST',
-      form: { username: el('username').value.trim(), password: el('password').value },
-    });
+    const form = {
+      username: el('username').value.trim(),
+      password: el('password').value,
+    };
+    // رمز التحقق بخطوتين يُرسل في client_secret كما يقبله معيار OAuth2
+    const code = el('otp') ? el('otp').value.trim() : '';
+    if (code) form.client_secret = code;
+    const data = await api('/api/auth/login', { method: 'POST', form });
     state.token = data.access_token;
     state.user = data.user;
     localStorage.setItem('hr_token', state.token);
     localStorage.setItem('hr_user', JSON.stringify(state.user));
+    if (el('otpField')) el('otpField').classList.add('hidden');
     startApp();
-  } catch (e) { toast(e.message, 'err'); }
+  } catch (e) {
+    // الحساب محمي بخطوتين: أظهر حقل الرمز بدل رسالة غامضة
+    if (/رمز التحقق/.test(e.message) && el('otpField')) {
+      el('otpField').classList.remove('hidden');
+      el('otp').focus();
+    }
+    toast(e.message, 'err');
+  }
 }
 
+/* ------------------------------ خروج تلقائي عند السكون ------------------------------ */
+const IDLE_MINUTES = Number(localStorage.getItem('hr_idle_minutes') || 30);
+let idleTimer = null;
+function resetIdleTimer() {
+  clearTimeout(idleTimer);
+  if (!state.token || IDLE_MINUTES <= 0) return;
+  idleTimer = setTimeout(() => {
+    if (!state.token) return;
+    logout();
+    toast(`أُنهيت الجلسة تلقائياً بعد ${IDLE_MINUTES} دقيقة بلا استخدام`, 'ok');
+  }, IDLE_MINUTES * 60000);
+}
+['click', 'keydown', 'touchstart', 'visibilitychange'].forEach((event) =>
+  document.addEventListener(event, () => {
+    if (document.visibilityState !== 'hidden') resetIdleTimer();
+  }, { passive: true }));
+
 function logout() {
+  clearTimeout(idleTimer);
   state.token = ''; state.user = null;
   localStorage.removeItem('hr_token'); localStorage.removeItem('hr_user');
   el('app').classList.add('hidden');
@@ -351,6 +381,7 @@ function forcePasswordChange() {
 function startApp() {
   el('login').classList.add('hidden');
   el('app').classList.remove('hidden');
+  resetIdleTimer();
   const pages = PAGES.filter((p) => p.roles.includes(state.user.role));
   el('nav').innerHTML = NAV_GROUPS.map((group) => {
     const items = pages.filter((p) => p.group === group);
@@ -4750,6 +4781,30 @@ views.account = async () => {
       <div class="field"><label>كلمة المرور الجديدة</label><input type="password" id="acNew" /></div>
       <button class="btn" id="acSave">حفظ</button>
     </div></div>
+    <div class="card" style="max-width:520px">
+    <div class="card-head"><h3>${icon('shield')} حماية الحساب</h3></div>
+    <div class="card-body">
+      <div class="row-item" style="padding-inline:0">
+        <span class="ri" id="twoIcon">${icon('key')}</span>
+        <div class="rt"><b>التحقق بخطوتين</b><span id="twoState">جارٍ الفحص…</span></div>
+        <div class="rv"><button class="btn sm" id="twoBtn">…</button></div>
+      </div>
+      <div class="row-item" style="padding-inline:0">
+        <span class="ri">${icon('logout')}</span>
+        <div class="rt"><b>الخروج من كل الأجهزة</b>
+          <span>يُنهي كل الجلسات فوراً — استخدمه إن فقدت جهازك</span></div>
+        <div class="rv"><button class="btn sm gray" id="logoutAll">تنفيذ</button></div>
+      </div>
+      <div class="row-item" style="padding-inline:0;cursor:pointer" id="historyRow">
+        <span class="ri">${icon('clock')}</span>
+        <div class="rt"><b>سجل الدخول</b><span>آخر محاولات الدخول على حسابك</span></div>
+        <div class="rv">${icon('chevron')}</div>
+      </div>
+      <div class="help" style="margin-top:10px">
+        تغيير كلمة المرور يُنهي جلساتك على الأجهزة الأخرى تلقائياً.
+        وتُغلق الجلسة وحدها بعد ${IDLE_MINUTES} دقيقة بلا استخدام.
+      </div>
+    </div></div>
     <div class="card" style="max-width:520px"><div class="card-head"><h3>بيانات الحساب</h3></div>
     <div class="card-body help">
       إصدار الواجهة: <b>${APP_VERSION}</b><br>
@@ -4759,11 +4814,106 @@ views.account = async () => {
     </div></div>`);
   el('acSave').onclick = async () => {
     try {
-      await api('/api/auth/change-password', { method: 'POST',
+      const res = await api('/api/auth/change-password', { method: 'POST',
         body: { current_password: el('acOld').value, new_password: el('acNew').value } });
-      toast('تم تغيير كلمة المرور', 'ok'); el('acOld').value = ''; el('acNew').value = '';
+      // الجلسات الأخرى أُبطلت؛ نحدّث توكن هذا الجهاز حتى لا يخرج المستخدم
+      if (res.access_token) {
+        state.token = res.access_token;
+        localStorage.setItem('hr_token', state.token);
+      }
+      toast(res.message || 'تم تغيير كلمة المرور', 'ok');
+      el('acOld').value = ''; el('acNew').value = '';
     } catch (e) { toast(e.message, 'err'); }
   };
+
+  /* ------------------------------ حماية الحساب ------------------------------ */
+  const refreshTwoFactor = async () => {
+    try {
+      const st = await api('/api/auth/2fa/status');
+      el('twoState').innerHTML = st.enabled
+        ? '<span class="tag on">مفعّل</span> يُطلب رمز عند كل دخول'
+        : '<span class="tag pending">غير مفعّل</span> ننصح بتفعيله لحسابات الإدارة';
+      el('twoBtn').textContent = st.enabled ? 'إيقاف' : 'تفعيل';
+      el('twoBtn').className = st.enabled ? 'btn sm gray' : 'btn sm ok';
+      el('twoBtn').onclick = st.enabled ? disableTwoFactor : setupTwoFactor;
+    } catch (e) { el('twoState').textContent = e.message; }
+  };
+
+  const setupTwoFactor = async () => {
+    let setup;
+    try { setup = await api('/api/auth/2fa/setup', { method: 'POST' }); }
+    catch (e) { return toast(e.message, 'err'); }
+    modal({
+      title: 'تفعيل التحقق بخطوتين',
+      body: `<div class="help" style="margin-bottom:12px">افتح تطبيق مصادقة
+          (Google Authenticator أو Microsoft Authenticator)، أضف حساباً يدوياً،
+          والصق المفتاح التالي، ثم أدخل الرمز الظاهر لتأكيد التفعيل.</div>
+        <div class="field"><label>المفتاح السرّي</label>
+          <input id="twoSecret" value="${esc(setup.secret_grouped)}" readonly
+                 style="letter-spacing:2px;font-family:monospace" /></div>
+        <button class="btn ghost sm" id="twoCopy" type="button">نسخ المفتاح</button>
+        <div class="field" style="margin-top:12px"><label>الرمز من التطبيق</label>
+          <input id="twoCode" inputmode="numeric" maxlength="6" placeholder="000000" /></div>
+        <div class="help">احتفظ بالمفتاح في مكان آمن: تفقده يعني فقدان الدخول إن ضاع جوالك.</div>`,
+      footer: '<button class="btn" id="twoSave">تأكيد التفعيل</button><button class="btn gray" data-close>إلغاء</button>',
+      onOpen: (root) => {
+        $('#twoCopy', root).onclick = () => {
+          navigator.clipboard?.writeText(setup.secret).then(
+            () => toast('نُسخ المفتاح', 'ok'), () => toast('انسخه يدوياً', 'err'));
+        };
+        $('#twoSave', root).onclick = async () => {
+          try {
+            const r = await api('/api/auth/2fa/enable', { method: 'POST',
+              body: { code: $('#twoCode', root).value.trim() } });
+            toast(r.message, 'ok'); closeModal(); refreshTwoFactor();
+          } catch (e) { toast(e.message, 'err'); }
+        };
+      },
+    });
+  };
+
+  const disableTwoFactor = () => modal({
+    title: 'إيقاف التحقق بخطوتين',
+    body: `<div class="help" style="margin-bottom:12px">سيصبح حسابك محمياً بكلمة المرور وحدها.</div>
+      <div class="field"><label>كلمة المرور للتأكيد</label>
+        <input type="password" id="twoPass" /></div>`,
+    footer: '<button class="btn danger" id="twoOff">إيقاف</button><button class="btn gray" data-close>تراجع</button>',
+    onOpen: (root) => {
+      $('#twoOff', root).onclick = async () => {
+        try {
+          const r = await api('/api/auth/2fa/disable', { method: 'POST',
+            body: { password: $('#twoPass', root).value } });
+          toast(r.message, 'ok'); closeModal(); refreshTwoFactor();
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    },
+  });
+
+  el('logoutAll').onclick = async () => {
+    if (!confirm('إنهاء كل الجلسات على كل الأجهزة؟ ستحتاج لتسجيل الدخول من جديد.')) return;
+    try { await api('/api/auth/logout-all', { method: 'POST' }); logout(); }
+    catch (e) { toast(e.message, 'err'); }
+  };
+
+  el('historyRow').onclick = async () => {
+    let rows = [];
+    try { rows = await api('/api/auth/login-history?limit=25'); }
+    catch (e) { return toast(e.message, 'err'); }
+    modal({
+      title: 'سجل الدخول',
+      body: rows.length ? `<div class="timeline">${rows.map((r) => `
+          <div class="ev ${r.success ? 'CLOCK_IN' : 'CLOCK_OUT'}">
+            <b>${r.success ? 'دخول ناجح' : 'محاولة فاشلة'}</b>
+            <span>${fmtDateTime(r.at)}</span>
+            <div class="muted" style="font-size:11.5px;margin-top:3px">
+              ${esc(r.ip || '')}${r.reason ? ' · ' + esc(r.reason) : ''}<br>
+              ${esc((r.device || '').slice(0, 90))}</div>
+          </div>`).join('')}</div>`
+        : '<div class="empty">لا سجل بعد</div>',
+      footer: '<button class="btn gray" data-close>إغلاق</button>',
+    });
+  };
+  refreshTwoFactor();
 
   const refreshPushState = async () => {
     const st = await pushState();

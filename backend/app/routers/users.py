@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import Employee, User
 from ..schemas import UserCreate, UserOut, UserUpdate
-from ..security import hash_password, require_admin
+from ..security import hash_password, require_admin, revoke_sessions
 from ..services import audit
 from .auth import user_out
 
@@ -55,7 +55,11 @@ def update_user(
     data = payload.model_dump(exclude_unset=True)
     if "password" in data and data["password"]:
         user.password_hash = hash_password(data.pop("password"))
+        user.must_change_password = True     # يغيّرها صاحبها عند أول دخول
+        revoke_sessions(user)                # وتُبطل جلساته المفتوحة فوراً
     data.pop("password", None)
+    if data.get("is_active") is False:
+        revoke_sessions(user)                # الحساب الموقوف لا تبقى جلساته حيّة
     for key, value in data.items():
         setattr(user, key, value)
     audit.log(db, admin, "update", "user", user.id, user.username, commit=False)

@@ -34,6 +34,7 @@ from ..schemas import (
     LeaveTypeOut,
 )
 from ..security import can_view_employee, get_current_user, require_hr, require_manager
+from ..security_extra import content_problem
 from ..services import attendance as attendance_service
 from ..services import audit, notifications, settings_store, sheets
 from ..services import leave as leave_service
@@ -238,6 +239,9 @@ def upload_attachment(
     content = file.file.read(MAX_UPLOAD_BYTES + 1)
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=400, detail="حجم الملف أكبر من الحد المسموح")
+    problem = content_problem(content, suffix)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
     name = f"leave_{req.id}_{secrets.token_hex(6)}{suffix}"
     (UPLOAD_DIR / name).write_bytes(content)
     req.attachment_path = name

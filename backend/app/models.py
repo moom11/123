@@ -165,6 +165,14 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[Role] = mapped_column(Enum(Role), default=Role.employee)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # ------------------------------ حماية الجلسة ------------------------------
+    # كل زيادة تُبطل كل التوكنات الصادرة سابقاً (تغيير كلمة المرور، إيقاف الحساب،
+    # أو «الخروج من كل الأجهزة»)
+    token_version: Mapped[int] = mapped_column(Integer, default=1)
+    password_changed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # ------------------------------ التحقق بخطوتين ------------------------------
+    totp_secret: Mapped[str | None] = mapped_column(String(64))     # سرّ Base32
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     employee_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id", ondelete="SET NULL"))
     # حساب أُنشئ تلقائياً بكلمة مرور مؤقتة: يُطالَب صاحبه بتغييرها عند أول دخول
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -379,6 +387,21 @@ class BreakPeriod(Base):
     alerted: Mapped[bool] = mapped_column(Boolean, default=False)  # نُبِّهت الإدارة عن تجاوزها
 
     employee: Mapped[Employee] = relationship()
+
+
+class LoginEvent(Base):
+    """سجل محاولات الدخول: من أين ومتى وبأي جهاز، ناجحة كانت أم فاشلة."""
+
+    __tablename__ = "login_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    username: Mapped[str] = mapped_column(String(64), index=True)   # ما كُتب في الحقل
+    ip: Mapped[str | None] = mapped_column(String(64), index=True)
+    user_agent: Mapped[str | None] = mapped_column(String(255))
+    success: Mapped[bool] = mapped_column(Boolean, default=False)
+    reason: Mapped[str | None] = mapped_column(String(120))          # سبب الفشل
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
 
 
 class SentAlert(Base):
