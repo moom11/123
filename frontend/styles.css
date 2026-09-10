@@ -182,8 +182,11 @@ svg.i.lg{width:22px;height:22px}
 .layout.mini .nav a:hover::after{opacity:1;transform:none}
 
 .main{flex:1;min-width:0;display:flex;flex-direction:column}
+/* الشريط العلوي يحترم شريط حالة الجوال (النوتش) عند التثبيت كتطبيق */
 .topbar{background:rgba(255,255,255,.92);backdrop-filter:saturate(1.4) blur(8px);
-  border-bottom:1px solid var(--border);padding:11px 20px;display:flex;align-items:center;
+  border-bottom:1px solid var(--border);display:flex;align-items:center;
+  padding:calc(11px + env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) 11px
+          max(20px, env(safe-area-inset-left));
   justify-content:space-between;gap:14px;position:sticky;top:0;z-index:30}
 .topbar h1{margin:0;font-size:18.5px;letter-spacing:-.2px}
 .topbar .who{font-size:13px;color:var(--muted)}
@@ -670,7 +673,8 @@ html[dir="ltr"] .layout.mini .nav a::after{right:auto;left:calc(100% + 10px);tra
   .layout.mini .brand-text,.layout.mini .nav .lbl,.layout.mini .nav-group{display:block}
   .layout.mini .nav a{justify-content:flex-start;padding:10px 12px}
   .content{padding:14px}
-  .topbar{padding:10px 14px}
+  .topbar{padding:calc(10px + env(safe-area-inset-top)) max(14px, env(safe-area-inset-right))
+                  10px max(14px, env(safe-area-inset-left))}
   .topbar h1{font-size:16.5px}
   /* الشريط العلوي مختصر: البصمة والاسم يظهران في شريط التنقل السفلي */
   .topbar .who{display:none}
@@ -852,4 +856,45 @@ html[dir="rtl"] .helppanel{--hp-from:-100%}
   body.tidy-top #helpBtn,
   body.tidy-top #collapseBtn,
   body.tidy-top #selfPunchBtn{display:none}
+}
+
+/* اسم العلامة يبقى واضحاً في الوضعين */
+.brandbar b{color:var(--text)}
+.brandbar span{color:var(--muted)}
+
+/* ------------------------------ الوضع الداكن: نفس روح التصور ------------------------------ */
+/* بطاقة الحالة تبقى ملوّنة لا رمادية مسطّحة، والبطاقات تُبرز حوافها */
+:root[data-theme="dark"] .state-soft.in,
+:root[data-theme="dark"] .state-soft:not(.break):not(.off){
+  background:linear-gradient(135deg,rgba(74,222,128,.18),rgba(74,222,128,.07));
+  border:1px solid rgba(74,222,128,.28)}
+:root[data-theme="dark"] .state-soft.break{
+  background:linear-gradient(135deg,rgba(251,191,36,.20),rgba(251,191,36,.07));
+  border:1px solid rgba(251,191,36,.30)}
+:root[data-theme="dark"] .state-soft.off,
+:root[data-theme="dark"] .state-soft.done{
+  background:linear-gradient(135deg,rgba(148,163,184,.16),rgba(148,163,184,.06));
+  border:1px solid rgba(148,163,184,.22)}
+:root[data-theme="dark"] .state-soft .txt b{color:#f1f5f9}
+:root[data-theme="dark"] .tile{background:var(--surface);border-color:rgba(148,163,184,.20)}
+:root[data-theme="dark"] .punch-btn.big{box-shadow:0 8px 22px rgba(59,130,246,.35)}
+:root[data-theme="dark"] .punch-btn.ghost{background:var(--surface-2);color:#e2e8f0;
+  border-color:rgba(148,163,184,.26)}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]) .state-soft.in,
+  :root:not([data-theme="light"]) .state-soft:not(.break):not(.off){
+    background:linear-gradient(135deg,rgba(74,222,128,.18),rgba(74,222,128,.07));
+    border:1px solid rgba(74,222,128,.28)}
+  :root:not([data-theme="light"]) .state-soft.break{
+    background:linear-gradient(135deg,rgba(251,191,36,.20),rgba(251,191,36,.07));
+    border:1px solid rgba(251,191,36,.30)}
+  :root:not([data-theme="light"]) .state-soft.off,
+  :root:not([data-theme="light"]) .state-soft.done{
+    background:linear-gradient(135deg,rgba(148,163,184,.16),rgba(148,163,184,.06));
+    border:1px solid rgba(148,163,184,.22)}
+  :root:not([data-theme="light"]) .state-soft .txt b{color:#f1f5f9}
+  :root:not([data-theme="light"]) .tile{background:var(--surface);border-color:rgba(148,163,184,.20)}
+  :root:not([data-theme="light"]) .punch-btn.big{box-shadow:0 8px 22px rgba(59,130,246,.35)}
+  :root:not([data-theme="light"]) .punch-btn.ghost{background:var(--surface-2);color:#e2e8f0;
+    border-color:rgba(148,163,184,.26)}
 }

@@ -61,7 +61,7 @@ const PENALTY_ACTIONS = { warning:'إنذار كتابي', deduction_percent_day
   deduction_days:'خصم أجر أيام', suspension:'إيقاف بدون أجر', termination:'الفصل من العمل' };
 const MONTHS = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
 const money = (v) => (Number(v || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const APP_VERSION = '2026.09.10b';
+const APP_VERSION = '2026.09.10c';
 
 /* يفرض تحديث عامل الخدمة فور توفر نسخة جديدة (مهم على آيفون) */
 function watchForUpdates() {
@@ -447,8 +447,10 @@ function applyTheme(theme) {
   if (theme === 'auto') document.documentElement.removeAttribute('data-theme');
   else document.documentElement.setAttribute('data-theme', theme);
   localStorage.setItem('hr_theme', theme);
-  const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', isDarkNow() ? '#0f172a' : '#2563eb');
+  // لون شريط حالة الجوال يطابق الشريط العلوي للتطبيق
+  document.querySelectorAll('meta[name="theme-color"]').forEach((meta) => {
+    if (!meta.media) meta.setAttribute('content', isDarkNow() ? '#1e293b' : '#ffffff');
+  });
   const btn = el('themeBtn');
   if (btn) {
     const [iconName, label] = THEME_META[theme];
@@ -1392,11 +1394,21 @@ views.more = async () => {
         <span class="ri">${icon(ic)}</span>
         <div class="rt"><b>${title}</b><span>${sub}</span></div>
         <div class="rv">${icon('chevron')}</div></div>`).join('')}
+    <div class="row-item" id="moreTheme" style="cursor:pointer">
+      <span class="ri">${icon(THEME_META[currentTheme()][0])}</span>
+      <div class="rt"><b>مظهر التطبيق</b><span>${THEME_META[currentTheme()][1]}</span></div>
+      <div class="rv">${icon('chevron')}</div></div>
+    <div class="row-item" id="moreLang" style="cursor:pointer">
+      <span class="ri">${icon('globe')}</span>
+      <div class="rt"><b>اللغة</b><span>${I18N.isEnglish() ? 'English' : 'العربية'}</span></div>
+      <div class="rv">${icon('chevron')}</div></div>
     <div class="row-item" onclick="logout()" style="cursor:pointer">
       <span class="ri danger">${icon('logout')}</span>
       <div class="rt"><b>تسجيل الخروج</b><span>إنهاء الجلسة على هذا الجهاز</span></div>
       <div class="rv">${icon('chevron')}</div></div>
   </div>`);
+  el('moreTheme').onclick = () => { cycleTheme(); views.more(); };
+  el('moreLang').onclick = () => I18N.set(I18N.isEnglish() ? 'ar' : 'en');
 };
 
 /** طلب «نسيت البصمة»: يرسله الموظف فتعتمده الإدارة وتُسجَّل البصمة */
