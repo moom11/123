@@ -29,10 +29,12 @@ from ..schemas import (
     MyHomeOut,
     MyProfileIn,
     MyProfileOut,
+    MyRestDay,
+    MyRestOut,
     SalaryToDateOut,
 )
 from ..security import get_current_user
-from ..services import accounts, audit, notifications, policies, settings_store
+from ..services import accounts, audit, notifications, policies, rest_policy, settings_store
 from ..services import attendance as attendance_service
 from ..services import payroll as payroll_service
 from ..services import workstate
@@ -318,16 +320,26 @@ def my_home(db: Session = Depends(get_db), user: User = Depends(get_current_user
         row = rows.get(day)
         day_off = day.weekday() not in rules.work_days or day in rest_dates
         status = row.status if row else (DayStatus.weekend if day_off else DayStatus.scheduled)
+        scheduled_rest = day in rest_dates
         week.append(HomeDay(
             date=day,
             weekday=WEEKDAY_NAMES[day.weekday()],
             status=status,
-            label=STATUS_LABELS.get(status, ""),
+            label="راحة معتمدة" if scheduled_rest else STATUS_LABELS.get(status, ""),
             shift_label="راحة" if day_off else shift_label,
             check_in=row.check_in if row else None,
             check_out=row.check_out if row else None,
             is_today=(day == today),
+            is_scheduled_rest=scheduled_rest,
         ))
+
+    # يوم الراحة المعتمد القادم: من كل الشهر لا من الأسبوع وحده
+    next_rest = db.scalar(
+        select(RestDay.rest_date)
+        .where(RestDay.employee_id == employee.id, RestDay.rest_date >= today)
+        .order_by(RestDay.rest_date)
+        .limit(1)
+    )
 
     return MyHomeOut(
         employee_name=employee.full_name,
@@ -367,4 +379,66 @@ def my_home(db: Session = Depends(get_db), user: User = Depends(get_current_user
         recent_events=recent_events,
         alert=alert,
         week=week,
+        next_rest_date=next_rest,
+        next_rest_weekday=WEEKDAY_NAMES[next_rest.weekday()] if next_rest else None,
+    )
+
+
+MONTH_NAMES = ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو",
+               "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"]
+
+
+@router.get("/rest-days", response_model=MyRestOut)
+def my_rest_days(
+    year: int | None = None,
+    month: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """أيام الراحة المعتمدة للموظف في شهر، ورصيده منها.
+
+    يرى الموظف أيامه هو وحده: التواريخ المعتمدة له من الموارد البشرية،
+    ما مضى منها وما بقي، والمستحق الشهري من ملفه أو من إعدادات المنشأة.
+    """
+    employee = _employee_of(db, user)
+    today = date.today()
+    year = year or today.year
+    month = month or today.month
+    if not 1 <= month <= 12:
+        raise HTTPException(status_code=400, detail="الشهر غير صحيح")
+
+    start = date(year, month, 1)
+    end = date(year + (month == 12), (month % 12) + 1, 1) - timedelta(days=1)
+    rows = db.scalars(
+        select(RestDay)
+        .where(
+            RestDay.employee_id == employee.id,
+            RestDay.rest_date >= start,
+            RestDay.rest_date <= end,
+        )
+        .order_by(RestDay.rest_date)
+    ).all()
+
+    days = [
+        MyRestDay(
+            date=row.rest_date,
+            weekday=WEEKDAY_NAMES[row.rest_date.weekday()],
+            is_past=row.rest_date < today,
+            is_today=row.rest_date == today,
+            note=row.note,
+        )
+        for row in rows
+    ]
+    quota = rest_policy.quota_for(db, employee)
+    scheduled = len(days)
+    return MyRestOut(
+        year=year,
+        month=month,
+        month_name=MONTH_NAMES[month - 1],
+        quota=quota,
+        used=sum(1 for d in days if d.is_past),
+        scheduled=scheduled,
+        remaining=max(0, quota - scheduled),
+        days=days,
+        next_rest=next((d.date for d in days if not d.is_past), None),
     )

@@ -89,9 +89,10 @@ const CHART_COLORS = ['#2563eb','#14b8a6','#8b5cf6','#f59e0b','#22c55e','#0ea5e9
 
 /* تقويم شهري لحالات الحضور */
 const CAL_DOW = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
-function calendarMonth(rows, year, month) {
+function calendarMonth(rows, year, month, restDates = []) {
   const byDate = {};
   rows.forEach((r) => { byDate[r.work_date] = r; });
+  const rest = new Set(restDates);
   const first = new Date(year, month - 1, 1);
   const days = new Date(year, month, 0).getDate();
   const todayStr = today();
@@ -100,10 +101,13 @@ function calendarMonth(rows, year, month) {
   for (let d = 1; d <= days; d++) {
     const iso = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
     const row = byDate[iso];
-    const status = row ? row.status : '';
-    const label = row ? (DAY_STATUS[row.status] || '') : '';
-    const time = row && row.check_in ? fmtTime(row.check_in) : '';
-    cells += `<div class="day ${status} ${iso === todayStr ? 'today' : ''}" title="${esc(iso + ' — ' + label)}">
+    // يوم الراحة المعتمد يظهر ولو لم يحن بعد، فلا سجل حضور له
+    const isRest = rest.has(iso);
+    const status = isRest ? 'weekend' : (row ? row.status : '');
+    const label = isRest ? 'راحة معتمدة' : (row ? (DAY_STATUS[row.status] || '') : '');
+    const time = !isRest && row && row.check_in ? fmtTime(row.check_in) : '';
+    cells += `<div class="day ${status} ${isRest ? 'rest' : ''} ${iso === todayStr ? 'today' : ''}"
+      title="${esc(iso + ' — ' + label)}">
       <span class="n">${d}</span><span class="s">${esc(time || label)}</span></div>`;
   }
   return `<div class="calendar">${CAL_DOW.map((d) => `<div class="dow">${d}</div>`).join('')}${cells}</div>`;
@@ -1335,6 +1339,10 @@ views.home = async () => {
           ? home.break_count + ' استراحة من أصل ' + home.break_allowance_minutes + ' دقيقة مسموحة'
           : 'المسموح ' + home.break_allowance_minutes + ' دقيقة يومياً'}</span></div>
         <div class="rv ${home.break_overrun_minutes ? 'danger' : ''}">${home.break_minutes} دقيقة</div></div>
+      ${home.next_rest_date ? `<div class="row-item" onclick="go('schedule')" style="cursor:pointer">
+        <span class="ri ok">${icon('bed')}</span>
+        <div class="rt"><b>راحتك المعتمدة</b><span>${esc(home.next_rest_weekday || '')}</span></div>
+        <div class="rv"><b>${esc(home.next_rest_date)}</b></div></div>` : ''}
       <div class="row-item" id="missedPunch" style="cursor:pointer">
         <span class="ri">${icon('edit')}</span>
         <div class="rt"><b>نسيت البصمة؟</b><span>أرسل طلباً لتسجيل بصمة فائتة</span></div>
@@ -1528,11 +1536,17 @@ function missedPunchModal(after) {
 
 /* ------------------------------ جدولي ------------------------------ */
 views.schedule = async () => {
-  const home = await api('/api/me/home');
   const now = new Date();
-  const rows = await api(
-    `/api/attendance/employee/${state.user.employee_id}?date_from=${monthStart()}&date_to=${today()}`
-  ).catch(() => []);
+  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+    .toLocaleDateString('en-CA');
+  const [home, rows, rest] = await Promise.all([
+    api('/api/me/home'),
+    // إلى نهاية الشهر لا إلى اليوم، ليظهر ما لم يحن بعد من راحة ووردية
+    api(`/api/attendance/employee/${state.user.employee_id}?date_from=${monthStart()}&date_to=${monthEnd}`)
+      .catch(() => []),
+    api('/api/me/rest-days').catch(() => ({ days: [], quota: 0, used: 0, scheduled: 0, remaining: 0 })),
+  ]);
+  const restDates = (rest.days || []).map((d) => d.date);
 
   render(`
     <div class="card"><div class="card-head"><h3>أسبوعي</h3>
@@ -1540,22 +1554,45 @@ views.schedule = async () => {
       <div class="card-body">
         ${home.week.map((d) => `
           <div class="row-item">
-            <span class="ri">${icon(d.status === 'weekend' ? 'bed'
+            <span class="ri ${d.is_scheduled_rest ? 'ok' : ''}">${icon(d.status === 'weekend' ? 'bed'
               : d.status === 'leave' ? 'leave' : 'clock')}</span>
             <div class="rt"><b>${esc(d.weekday)} ${d.date.slice(5)}${d.is_today ? ' — اليوم' : ''}</b>
-              <span>${esc(d.shift_label || '')}</span></div>
+              <span>${esc(d.is_scheduled_rest ? 'راحتك المعتمدة' : (d.shift_label || ''))}</span></div>
             <div class="rv">${d.check_in
               ? fmtTime(d.check_in) + (d.check_out ? ' → ' + fmtTime(d.check_out) : '')
-              : `<span class="tag ${d.status || ''}">${esc(d.label || '')}</span>`}</div>
+              : `<span class="tag ${d.is_scheduled_rest ? 'leave' : (d.status || '')}">${esc(d.label || '')}</span>`}</div>
           </div>`).join('')}
+      </div></div>
+
+    <div class="card"><div class="card-head"><h3>أيام راحتي المعتمدة</h3>
+      <span class="muted">${esc(rest.month_name || '')} ${rest.year || ''}</span></div>
+      <div class="card-body">
+        <div class="kpis">
+          <div class="kpi ok"><div class="label">المعتمد لك هذا الشهر<span class="ico">${icon('bed')}</span></div>
+            <div class="value ok">${rest.scheduled || 0}</div></div>
+          <div class="kpi"><div class="label">مضى منها<span class="ico">${icon('check')}</span></div>
+            <div class="value">${rest.used || 0}</div></div>
+          <div class="kpi info"><div class="label">لم يُجدول بعد<span class="ico">${icon('calendar')}</span></div>
+            <div class="value info">${rest.remaining || 0} من ${rest.quota || 0}</div></div>
+        </div>
+        ${(rest.days || []).length ? (rest.days || []).map((d) => `
+          <div class="row-item">
+            <span class="ri ${d.is_past ? '' : 'ok'}">${icon('bed')}</span>
+            <div class="rt"><b>${esc(d.weekday)} ${esc(d.date)}</b>
+              <span>${esc(d.note || (d.is_today ? 'راحتك اليوم' : d.is_past ? 'مضت' : 'قادمة'))}</span></div>
+            <div class="rv">${d.is_today
+              ? '<span class="tag leave">اليوم</span>'
+              : d.is_past ? '<span class="tag">مضت</span>' : '<span class="tag ok">قادمة</span>'}</div>
+          </div>`).join('')
+        : '<div class="empty">لم تُعتمد لك أيام راحة هذا الشهر بعد. راجع مسؤولك.</div>'}
       </div></div>
 
     <div class="card"><div class="card-head"><h3>تقويم ${MONTHS[now.getMonth()]} ${now.getFullYear()}</h3>
       <div class="legend"><span><i style="background:#dcfce7"></i>حاضر</span>
         <span><i style="background:#fef3c7"></i>متأخر</span>
         <span><i style="background:#fee2e2"></i>غياب</span>
-        <span><i style="background:#ccfbf1"></i>إجازة</span></div></div>
-      <div class="card-body">${calendarMonth(rows, now.getFullYear(), now.getMonth() + 1)}</div></div>`);
+        <span><i style="background:#ccfbf1"></i>راحة معتمدة</span></div></div>
+      <div class="card-body">${calendarMonth(rows, now.getFullYear(), now.getMonth() + 1, restDates)}</div></div>`);
 };
 
 views.dashboard = async () => {

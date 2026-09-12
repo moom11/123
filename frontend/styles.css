@@ -365,6 +365,8 @@ tbody tr:last-child td{border-bottom:none}
 .calendar .day.leave{background:var(--info-soft);border-color:#99f6e4}
 .calendar .day.holiday{background:var(--violet-soft);border-color:#ddd6fe}
 .calendar .day.weekend{background:var(--surface-2)}
+/* راحة معتمدة: تُميَّز عن الراحة الأسبوعية العادية */
+.calendar .day.rest{background:var(--info-soft);border-color:#99f6e4;font-weight:600}
 .calendar .day.today{outline:2px solid var(--primary);outline-offset:1px}
 
 /* ------------------------------ الرسوم ------------------------------ */

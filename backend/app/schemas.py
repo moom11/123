@@ -1006,6 +1006,32 @@ class HomeDay(BaseModel):
     check_in: datetime | None = None
     check_out: datetime | None = None
     is_today: bool = False
+    # راحة مجدولة معتمدة من الموارد البشرية، تمييزاً لها عن الراحة الأسبوعية
+    is_scheduled_rest: bool = False
+
+
+class MyRestDay(BaseModel):
+    """يوم راحة معتمد للموظف بتاريخه."""
+
+    date: date
+    weekday: str
+    is_past: bool = False
+    is_today: bool = False
+    note: str | None = None
+
+
+class MyRestOut(BaseModel):
+    """أيام الراحة المعتمدة للموظف في شهر، ورصيده منها."""
+
+    year: int
+    month: int
+    month_name: str = ""
+    quota: int = 0            # المستحق شهرياً (من ملفه أو من إعدادات المنشأة)
+    used: int = 0             # ما مضى منها
+    scheduled: int = 0        # إجمالي المعتمد له هذا الشهر
+    remaining: int = 0        # ما لم يُجدول بعد من رصيده
+    days: list[MyRestDay] = []
+    next_rest: date | None = None
 
 
 class HomeEvent(BaseModel):
@@ -1056,6 +1082,9 @@ class MyHomeOut(BaseModel):
     recent_events: list[HomeEvent] = []
     alert: str | None = None
     week: list[HomeDay] = []
+    # يوم الراحة المعتمد القادم، ليعرفه الموظف قبل أن يحلّ
+    next_rest_date: date | None = None
+    next_rest_weekday: str | None = None
 
 
 class PushSubscriptionIn(BaseModel):

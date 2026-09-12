@@ -143,7 +143,7 @@ def add_rest_day(payload: RestDayIn, db: Session = Depends(get_db), user: User =
     notifications.notify_employee(
         db, employee.id, f"تم تحديد يوم راحتك: {payload.rest_date}",
         body=payload.note or "راحة شهرية مجدولة", category="attendance",
-        link_page="attendance", commit=False,
+        link_page="schedule", commit=False,
     )
     db.commit()
     attendance_service.recompute(db, payload.rest_date, payload.rest_date, [employee.id])

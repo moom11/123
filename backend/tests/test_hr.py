@@ -3100,6 +3100,8 @@ def test_salary_to_date_subtracts_purchases_and_loans(client, auth):
 def test_no_absence_before_shift_starts(client, auth):
     """الوردية المسائية لا تُكتب غياباً في الصباح — تبقى «لم يحن بعد»."""
     now = datetime.now()
+    if (now + timedelta(hours=2)).date() != now.date():
+        pytest.skip("قبل منتصف الليل بساعتين لا توجد وردية تبدأ لاحقاً في نفس اليوم")
     # وردية تبدأ بعد ساعتين من الآن
     later = (now + timedelta(hours=2)).time()
     shift = client.post("/api/shifts", headers=auth, json={
@@ -3813,3 +3815,53 @@ def test_attendance_policy_settings_read_back_what_was_saved(client, auth):
         "clock_out_from_minutes": before["clock_out_from_minutes"]})
     assert client.put("/api/settings", headers=auth, json={
         "payroll_early_leave_deduction_mode": "half"}).status_code == 400
+
+
+def test_employee_sees_his_approved_rest_days(client, auth):
+    """الموظف يرى يوم راحته المعتمد: تاريخه ورصيده، ولا يرى راحة غيره."""
+    mine, my_id = _emp_token(client, auth, "9104", "rest_mine")
+    other, other_id = _emp_token(client, auth, "9105", "rest_other")
+
+    today = date.today()
+    nxt = date(today.year + (today.month == 12), (today.month % 12) + 1, 1)
+    my_rest = nxt + timedelta(days=1)
+
+    res = client.post("/api/rest-days", headers=auth, json={
+        "employee_id": my_id, "rest_date": str(my_rest), "note": "راحة الشهر"})
+    assert res.status_code == 201, res.text
+    client.post("/api/rest-days", headers=auth, json={
+        "employee_id": other_id, "rest_date": str(nxt + timedelta(days=2))})
+
+    got = client.get(f"/api/me/rest-days?year={nxt.year}&month={nxt.month}", headers=mine).json()
+    assert [d["date"] for d in got["days"]] == [str(my_rest)]
+    day = got["days"][0]
+    assert day["is_past"] is False and day["is_today"] is False
+    assert day["note"] == "راحة الشهر" and day["weekday"]
+    assert got["scheduled"] == 1 and got["used"] == 0
+    assert got["quota"] >= 1 and got["remaining"] == got["quota"] - 1
+    assert got["next_rest"] == str(my_rest) and got["month_name"]
+
+    # راحة زميله لا تظهر له، وراحته لا تظهر لزميله
+    assert [d["date"] for d in client.get(
+        f"/api/me/rest-days?year={nxt.year}&month={nxt.month}", headers=other
+    ).json()["days"]] == [str(nxt + timedelta(days=2))]
+
+    # الشاشة الرئيسية تعرض له راحته القادمة قبل أن تحلّ
+    home = client.get("/api/me/home", headers=mine).json()
+    assert home["next_rest_date"] == str(my_rest)
+    assert home["next_rest_weekday"]
+
+    # وراحة داخل الأسبوع الجاري تُميَّز عن الراحة الأسبوعية العادية
+    week_start = today - timedelta(days=(today.weekday() + 1) % 7)
+    assert client.post("/api/rest-days", headers=auth, json={
+        "employee_id": my_id, "rest_date": str(week_start)}).status_code == 201
+    week = client.get("/api/me/home", headers=mine).json()["week"]
+    marked = [d for d in week if d["is_scheduled_rest"]]
+    assert [d["date"] for d in marked] == [str(week_start)]
+    assert marked[0]["label"] == "راحة معتمدة"
+    assert all(not d["is_scheduled_rest"] for d in week if d["date"] != str(week_start))
+
+
+def test_my_rest_days_rejects_bad_month(client, auth):
+    mine, _ = _emp_token(client, auth, "9106", "rest_badmonth")
+    assert client.get("/api/me/rest-days?year=2026&month=13", headers=mine).status_code == 400
