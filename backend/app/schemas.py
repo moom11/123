@@ -354,6 +354,7 @@ class SettingsOut(BaseModel):
     push_enabled: bool = True
     auto_account_on_phone: bool = True
     monthly_rest_quota: int = 4
+    leave_balances_enabled: bool = False
     show_leave_balance_to_employee: bool = False
     attendance_alert_enabled: bool = True
     attendance_alert_after_minutes: int = 60
@@ -390,6 +391,7 @@ class SettingsIn(BaseModel):
     push_enabled: bool | None = None
     auto_account_on_phone: bool | None = None
     monthly_rest_quota: int | None = Field(default=None, ge=0, le=15)
+    leave_balances_enabled: bool | None = None
     show_leave_balance_to_employee: bool | None = None
     attendance_alert_enabled: bool | None = None
     attendance_alert_after_minutes: int | None = Field(default=None, ge=5, le=600)

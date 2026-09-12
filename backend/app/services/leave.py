@@ -19,6 +19,17 @@ from ..models import (
 from .attendance import DEFAULT_WORK_DAYS
 
 from . import attendance as attendance_service
+from . import settings_store
+
+
+def balances_enabled(db: Session) -> bool:
+    """هل يعمل نظام أرصدة الإجازات؟
+
+    عند إيقافه لا يُرفض طلب لنفاد الرصيد ولا تُعرض الأرصدة في أي شاشة،
+    والقرار للإدارة عند اعتماد الطلب. والسجلات تبقى محفوظة كما هي، فيعود
+    كل شيء إلى ما كان بمجرد إعادة تفعيله.
+    """
+    return settings_store.get_bool(db, "leave_balances_enabled")
 
 
 def _work_days_for(employee: Employee) -> list[int]:
@@ -111,7 +122,7 @@ def validate_request(
         )
     if check_overlap(db, employee.id, start, end):
         raise HTTPException(status_code=400, detail="يوجد طلب إجازة آخر يتقاطع مع هذه الفترة")
-    if leave_type.deducts_balance:
+    if leave_type.deducts_balance and balances_enabled(db):
         balance = get_or_create_balance(db, employee.id, leave_type, start.year)
         if remaining_days(balance) < days:
             raise HTTPException(
@@ -127,8 +138,9 @@ def approve(db: Session, request: LeaveRequest, user_id: int, note: str | None =
     leave_type = request.leave_type
     if leave_type.deducts_balance:
         balance = get_or_create_balance(db, request.employee_id, leave_type, request.start_date.year)
-        if remaining_days(balance) < request.days:
+        if balances_enabled(db) and remaining_days(balance) < request.days:
             raise HTTPException(status_code=400, detail="الرصيد غير كافٍ لاعتماد الطلب")
+        # المستهلك يُسجَّل في الحالين: لا يُعرض وهي معطّلة، ويبقى صحيحاً إن أُعيد تفعيلها
         balance.used_days = round(balance.used_days + request.days, 2)
     request.status = LeaveStatus.approved
     request.decided_by_id = user_id

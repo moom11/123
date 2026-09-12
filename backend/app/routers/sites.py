@@ -132,6 +132,7 @@ def _settings_out(values: dict) -> SettingsOut:
         push_enabled=values.get("push_enabled") == "true",
         auto_account_on_phone=values.get("auto_account_on_phone") == "true",
         monthly_rest_quota=int(float(values.get("monthly_rest_quota") or 4)),
+        leave_balances_enabled=values.get("leave_balances_enabled") == "true",
         show_leave_balance_to_employee=values.get("show_leave_balance_to_employee") == "true",
         attendance_alert_enabled=values.get("attendance_alert_enabled") == "true",
         attendance_alert_after_minutes=int(float(values.get("attendance_alert_after_minutes") or 60)),

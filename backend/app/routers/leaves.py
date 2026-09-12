@@ -175,8 +175,11 @@ def preview_days(payload: LeaveRequestIn, db: Session = Depends(get_db), user: U
     days = leave_service.count_leave_days(db, emp, lt, payload.start_date, payload.end_date)
     balance = leave_service.get_or_create_balance(db, emp.id, lt, payload.start_date.year)
     db.commit()
-    if user.role == Role.employee and not settings_store.get_bool(db, "show_leave_balance_to_employee"):
-        # سياسة المنشأة: لا تُعرض الأرصدة المتبقية للموظف
+    if not leave_service.balances_enabled(db) or (
+        user.role == Role.employee
+        and not settings_store.get_bool(db, "show_leave_balance_to_employee")
+    ):
+        # الأرصدة معطّلة، أو سياسة المنشأة لا تعرضها للموظف
         return {"days": days, "remaining_days": None, "after_request": None}
     return {
         "days": days,
@@ -323,6 +326,8 @@ def list_balances(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    if not leave_service.balances_enabled(db):
+        return []   # الأرصدة معطّلة: الاعتماد على الطلبات، والسجلات محفوظة كما هي
     target = employee_id
     if user.role == Role.employee:
         # الموظف يرى رصيده وحده، وإن لم يكن حسابه مرتبطاً بملف موظف فلا رصيد له

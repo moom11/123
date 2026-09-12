@@ -409,6 +409,14 @@ function startApp() {
   refreshBell();
   go(pages.some((p) => p.id === state.page) ? state.page : 'dashboard');
   if (state.user.must_change_password) forcePasswordChange();
+  // أرصدة الإجازات قد تكون معطّلة (الاعتماد على الطلبات)، فتُخفى صفحتها
+  api('/api/settings').then((st) => {
+    state.cache.settings = st;
+    if (st.leave_balances_enabled) return;
+    const link = el('nav').querySelector('[data-page="balances"]');
+    if (link) link.remove();
+    if (state.page === 'balances') go('dashboard');
+  }).catch(() => {});
 }
 
 const EXTRA_TITLES = { profile: 'ملف الموظف', home: 'الرئيسية' };
@@ -2264,7 +2272,7 @@ views.myLeaves = async () => {
     api('/api/leave-types'),
     api('/api/settings').catch(() => ({ show_leave_balance_to_employee: false })),
   ]);
-  const showBalance = !!settings.show_leave_balance_to_employee;
+  const showBalance = !!settings.show_leave_balance_to_employee && !!settings.leave_balances_enabled;
 
   render(`
     <div class="card"><div class="card-head"><h3>تقديم طلب جديد</h3></div>
@@ -2496,6 +2504,14 @@ views.requests = async () => {
 
 /* ------------------------------ أرصدة الإجازات ------------------------------ */
 views.balances = async () => {
+  const settings = state.cache.settings || (state.cache.settings = await api('/api/settings'));
+  if (!settings.leave_balances_enabled) {
+    render(`<div class="card"><div class="card-body"><div class="empty">
+      نظام أرصدة الإجازات معطّل، والاعتماد على طلبات الموظفين وقرار الإدارة.<br />
+      لإعادة تفعيله: الإعدادات ← التنبيهات ← الإجازات والراحة الشهرية ← أرصدة الإجازات.
+      </div></div></div>`);
+    return;
+  }
   const { employees } = await loadLookups();
   const year = new Date().getFullYear();
   render(`
@@ -3683,11 +3699,11 @@ views.profile = async () => {
             <td><span class="tag ${r.status}">${DAY_STATUS[r.status]}</span></td></tr>`,
           'لا توجد سجلات لهذا الشهر')}</div>`,
     leaves: () => `
-      <div class="card"><div class="card-head"><h3>الأرصدة</h3></div>
+      ${balances.length ? `<div class="card"><div class="card-head"><h3>الأرصدة</h3></div>
         ${table(['النوع', 'المستحق', 'مرحّل', 'المستخدم', 'المتبقي'], balances,
           (b) => `<tr><td>${esc(b.leave_type_name)}</td><td>${b.entitled_days}</td>
             <td>${b.carried_over_days}</td><td>${b.used_days}</td><td><b>${b.remaining_days}</b></td></tr>`,
-          'لا توجد أرصدة')}</div>
+          'لا توجد أرصدة')}</div>` : ''}
       <div class="card"><div class="card-head"><h3>الطلبات</h3></div>
         <div class="card-body">${leaves.length ? `<div class="grid cards stagger">${leaves.map((l) => `
           <div class="emp-card" style="cursor:default">
@@ -4372,13 +4388,17 @@ settingsTabs.alerts = async () => {
             <div class="help">الشائع: يوم واحد، أو يومان، أو أربعة أيام في الشهر.
               هذا الرقم افتراضي فقط — ويمكن تحديد رصيد خاص لأي موظف من
               <a href="#" onclick="go('employees');return false">ملفه</a>.</div></div>
+          <div class="field"><label>نظام أرصدة الإجازات</label><select id="alBalOn">
+            <option value="false" ${st.leave_balances_enabled ? '' : 'selected'}>معطّل — الاعتماد على الطلبات</option>
+            <option value="true" ${st.leave_balances_enabled ? 'selected' : ''}>يعمل — رصيد لكل نوع</option></select>
+            <div class="help">وهو معطّل: لا تظهر الأرصدة في أي شاشة، ولا يُرفض طلب لنفاد الرصيد —
+              القرار للإدارة عند الاعتماد. والسجلات محفوظة فتعود كما كانت بالتفعيل.</div></div>
           <div class="field"><label>إظهار رصيد الإجازات للموظف</label><select id="alBal">
             <option value="false" ${st.show_leave_balance_to_employee ? '' : 'selected'}>مخفي</option>
-            <option value="true" ${st.show_leave_balance_to_employee ? 'selected' : ''}>ظاهر</option></select></div>
+            <option value="true" ${st.show_leave_balance_to_employee ? 'selected' : ''}>ظاهر</option></select>
+            <div class="help">لا أثر له وأرصدة الإجازات معطّلة.</div></div>
         </div>
         <button class="btn" id="alLeaveSave">حفظ</button>
-        <div class="help">عند الإخفاء لا يرى الموظف الأيام المتبقية لا في «إجازاتي» ولا عند تقديم الطلب،
-          وتبقى ظاهرة كاملة للموارد البشرية.</div>
       </div></div>
     <div class="card">
       <div class="card-head"><h3>حسابات دخول الموظفين</h3></div>
@@ -4420,8 +4440,10 @@ settingsTabs.alerts = async () => {
     try {
       await api('/api/settings', { method: 'PUT', body: {
         monthly_rest_quota: Number(el('alRest').value),
+        leave_balances_enabled: el('alBalOn').value === 'true',
         show_leave_balance_to_employee: el('alBal').value === 'true' } });
-      toast('تم الحفظ', 'ok');
+      delete state.cache.settings;   // القائمة الجانبية تقرأ المفتاح من هنا
+      toast('تم الحفظ — أعد تحميل الصفحة ليظهر أثر تغيير الأرصدة في القائمة', 'ok');
     } catch (e) { toast(e.message, 'err'); }
   };
   el('alAutoSave').onclick = async () => {

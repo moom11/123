@@ -185,6 +185,8 @@ def test_weekend_status(client, auth):
 
 
 def test_leave_workflow_and_balance(client, auth):
+    # الأرصدة معطّلة افتراضياً (الاعتماد على الطلبات)، وهذا الاختبار يخصّ عملها
+    client.put("/api/settings", headers=auth, json={"leave_balances_enabled": True})
     emp_id = _employee_id(client, auth)
     types = client.get("/api/leave-types", headers=auth).json()
     annual = next(t for t in types if t["code"] == "annual")
@@ -230,18 +232,29 @@ def test_leave_workflow_and_balance(client, auth):
     balances = client.get(f"/api/leave-balances?employee_id={emp_id}", headers=auth).json()
     annual_balance = next(b for b in balances if b["leave_type_id"] == annual["id"])
     assert annual_balance["used_days"] == 0
+    client.put("/api/settings", headers=auth, json={"leave_balances_enabled": False})
 
 
 def test_insufficient_balance_rejected(client, auth):
+    client.put("/api/settings", headers=auth, json={"leave_balances_enabled": True})
     emp_id = _employee_id(client, auth)
     types = client.get("/api/leave-types", headers=auth).json()
     emergency = next(t for t in types if t["code"] == "emergency")  # الرصيد 5 أيام
     start = date.today() + timedelta(days=60)
-    res = client.post("/api/leave-requests", headers=auth, json={
+    body = {
         "employee_id": emp_id, "leave_type_id": emergency["id"],
-        "start_date": str(start), "end_date": str(start + timedelta(days=20))})
+        "start_date": str(start), "end_date": str(start + timedelta(days=20))}
+    res = client.post("/api/leave-requests", headers=auth, json=body)
     assert res.status_code == 400
     assert "الرصيد" in res.json()["detail"]
+
+    # وبإيقاف الأرصدة يمرّ الطلب نفسه: القرار للإدارة لا للرصيد
+    client.put("/api/settings", headers=auth, json={"leave_balances_enabled": False})
+    passed = client.post("/api/leave-requests", headers=auth, json=body)
+    assert passed.status_code == 201, passed.text
+    approved = client.post(f"/api/leave-requests/{passed.json()['id']}/approve", headers=auth)
+    assert approved.status_code == 200, approved.text
+    client.post(f"/api/leave-requests/{passed.json()['id']}/cancel", headers=auth)
 
 
 def test_holiday_marks_day(client, auth):
@@ -1386,6 +1399,7 @@ def test_unlinked_employee_account_has_no_balances(client, auth):
 
 def test_leave_balance_hidden_from_employee_by_default(client, auth):
     """سياسة المنشأة: الأرصدة لا تظهر للموظف إلا بتفعيلها من الإعدادات."""
+    client.put("/api/settings", headers=auth, json={"leave_balances_enabled": True})
     emp = client.post("/api/employees", headers=auth, json={
         "code": "9760", "full_name": "موظف الرصيد"}).json()
     client.post("/api/users", headers=auth, json={
@@ -1419,6 +1433,8 @@ def test_leave_balance_hidden_from_employee_by_default(client, auth):
 
 
 # ------------------------------ السلف على الراتب ------------------------------
+    client.put("/api/settings", headers=auth, json={"leave_balances_enabled": False})
+
 def test_loan_schedule_and_payroll_deduction(client, auth):
     """السلفة تُقسَّم أقساطاً ثابتة، وتُخصم في مسير الشهر المطابق فقط."""
     emp = client.post("/api/employees", headers=auth, json={
@@ -3865,3 +3881,46 @@ def test_employee_sees_his_approved_rest_days(client, auth):
 def test_my_rest_days_rejects_bad_month(client, auth):
     mine, _ = _emp_token(client, auth, "9106", "rest_badmonth")
     assert client.get("/api/me/rest-days?year=2026&month=13", headers=mine).status_code == 400
+
+
+def test_leave_balances_disabled_by_default(client, auth):
+    """الافتراضي: لا أرصدة — الاعتماد على طلبات الموظفين وقرار الإدارة.
+
+    السجلات تبقى في قاعدة البيانات ولا تُعرض، فيعود كل شيء بالتفعيل.
+    """
+    from app.services import settings_store as store
+
+    assert store.DEFAULTS["leave_balances_enabled"] == "false"
+    client.put("/api/settings", headers=auth, json={"leave_balances_enabled": False})
+    assert client.get("/api/settings", headers=auth).json()["leave_balances_enabled"] is False
+
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9107", "full_name": "موظف بلا أرصدة"}).json()
+    annual = next(t for t in client.get("/api/leave-types", headers=auth).json()
+                  if t["code"] == "annual")
+    start = date.today() + timedelta(days=120)
+
+    # لا أرصدة تُعرض لأحد، ولا رصيد في معاينة الطلب
+    assert client.get(f"/api/leave-balances?employee_id={emp['id']}", headers=auth).json() == []
+    preview = client.post("/api/leave-requests/preview", headers=auth, json={
+        "employee_id": emp["id"], "leave_type_id": annual["id"],
+        "start_date": str(start), "end_date": str(start)}).json()
+    assert preview["days"] == 1
+    assert preview["remaining_days"] is None and preview["after_request"] is None
+
+    # طلب يتجاوز المستحق السنوي (21 يوماً) يمرّ ويُعتمد
+    big = client.post("/api/leave-requests", headers=auth, json={
+        "employee_id": emp["id"], "leave_type_id": annual["id"],
+        "start_date": str(start), "end_date": str(start + timedelta(days=40))})
+    assert big.status_code == 201, big.text
+    assert client.post(f"/api/leave-requests/{big.json()['id']}/approve",
+                       headers=auth).status_code == 200
+
+    # والسجل محفوظ: بتفعيل الأرصدة يظهر المستهلك كما هو
+    client.put("/api/settings", headers=auth, json={"leave_balances_enabled": True})
+    # الرصيد يُقيَّد بسنة تاريخ البداية لا بالسنة الجارية
+    rows = client.get(
+        f"/api/leave-balances?employee_id={emp['id']}&year={start.year}", headers=auth).json()
+    annual_row = next(r for r in rows if r["leave_type_id"] == annual["id"])
+    assert annual_row["used_days"] == big.json()["days"]
+    client.put("/api/settings", headers=auth, json={"leave_balances_enabled": False})
