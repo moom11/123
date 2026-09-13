@@ -48,6 +48,7 @@ NEW_COLUMNS: list[tuple[str, str, str]] = [
     ("payslips", "carryover_deduction", "FLOAT DEFAULT 0"),
     ("payslips", "early_leave_minutes", "INTEGER DEFAULT 0"),
     ("payslips", "early_leave_deduction", "FLOAT DEFAULT 0"),
+    ("attendance_days", "shift_snapshot", "TEXT"),
 ]
 
 
@@ -65,6 +66,42 @@ def run() -> list[str]:
                 continue
             conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
             applied.append(f"{table}.{column}")
+    if "attendance_days.shift_snapshot" in applied:
+        # الأيام المحفوظة سابقاً بلا لقطة: تُختم بوردية الموظف الحالية مرة واحدة،
+        # فتُحفظ من هذه اللحظة ولا يعيد تعديلُ الوردية لاحقاً حسابَ الماضي
+        frozen = _seal_past_days()
+        if frozen:
+            logger.info("تجميد أيام الحضور المحفوظة: %d يوم", frozen)
     if applied:
         logger.info("ترقية قاعدة البيانات: أُضيفت الأعمدة %s", ", ".join(applied))
     return applied
+
+
+def _seal_past_days() -> int:
+    """يختم كل يوم حضور محفوظ بلقطة وردية الموظف الحالية. يعيد عدد الأيام."""
+    import json
+
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
+
+    from .models import AttendanceDay, Employee
+    from .services.attendance import ShiftRules
+
+    with Session(engine) as db:
+        employees = {e.id: e for e in db.scalars(select(Employee)).all()}
+        rows = db.scalars(
+            select(AttendanceDay).where(AttendanceDay.shift_snapshot.is_(None))
+        ).all()
+        cache: dict[tuple, str] = {}
+        for row in rows:
+            emp = employees.get(row.employee_id)
+            if emp is None:
+                continue
+            key = (emp.shift_id, emp.weekly_rest_days)
+            if key not in cache:
+                cache[key] = json.dumps(
+                    ShiftRules(emp.shift, emp.weekly_rest_days).snapshot(), ensure_ascii=False
+                )
+            row.shift_snapshot = cache[key]
+        db.commit()
+        return len(rows)

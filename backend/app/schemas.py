@@ -217,6 +217,7 @@ class AttendanceDayOut(ORMModel):
     open_break: bool = False
     breaks: list["BreakOut"] = []
     note: str | None = None
+    shift_label: str | None = None   # الوردية التي حُسب بها هذا اليوم
 
 
 class BreakOut(ORMModel):

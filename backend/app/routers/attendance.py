@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -106,7 +107,19 @@ def day_out(row: AttendanceDay, breaks: list | None = None) -> AttendanceDayOut:
         open_break=row.open_break,
         breaks=[break_out(b) for b in breaks] if breaks else [],
         note=row.note,
+        shift_label=_shift_label(row),
     )
+
+
+def _shift_label(row: AttendanceDay) -> str | None:
+    """اسم الوردية وأوقاتها كما حُسب بها هذا اليوم فعلاً."""
+    if not row.shift_snapshot:
+        return None
+    try:
+        return attendance_service.ShiftRules.from_snapshot(
+            json.loads(row.shift_snapshot)).describe()
+    except (ValueError, TypeError):
+        return None
 
 
 def break_out(row: BreakPeriod) -> BreakOut:
@@ -500,14 +513,26 @@ def recompute_range(
     date_from: date,
     date_to: date,
     employee_id: int | None = None,
+    use_current_shift: bool = False,
     db: Session = Depends(get_db),
     user: User = Depends(require_hr),
 ):
+    """إعادة احتساب مدى.
+
+    افتراضياً تُحسب الأيام الماضية بلقطة وردية كل يوم، فلا يتغيّر ما مضى.
+    و`use_current_shift=true` يفرض إعادة حسابها بالوردية الحالية للموظف — يُستعمل
+    عند تصحيح إسناد وردية خاطئ، ويُسجَّل في سجل التدقيق لأنه يُعيد كتابة الماضي.
+    """
     count = attendance_service.recompute(
-        db, date_from, date_to, [employee_id] if employee_id else None
+        db, date_from, date_to, [employee_id] if employee_id else None,
+        use_current_shift=use_current_shift,
     )
-    audit.log(db, user, "recompute", "attendance_day", None, f"{date_from} → {date_to} ({count} يوم)")
-    return {"ok": True, "days": count, "message": f"تمت إعادة احتساب {count} يوم"}
+    detail = f"{date_from} → {date_to} ({count} يوم)"
+    if use_current_shift:
+        detail += " — بالوردية الحالية (أُعيد حساب الماضي)"
+    audit.log(db, user, "recompute", "attendance_day", None, detail)
+    return {"ok": True, "days": count, "message": f"تمت إعادة احتساب {count} يوم" + (
+        " بالوردية الحالية" if use_current_shift else "")}
 
 
 class MarkPresentIn(BaseModel):

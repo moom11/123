@@ -1788,7 +1788,8 @@ views.attendance = async () => {
       (r) => `<tr${r.status === 'needs_review' || r.break_overrun_minutes ? ' class="warn-row"' : ''}>
         <td><div style="display:flex;align-items:center;gap:9px">${avatar(r.employee_name, 'sm')}
           <div><div style="font-weight:600">${esc(r.employee_name)}</div>
-          <div class="muted" style="font-size:11.5px">${esc(r.employee_code)}</div></div></div></td>
+          <div class="muted" style="font-size:11.5px">${esc(r.employee_code)}${
+            r.shift_label ? ' · ' + esc(r.shift_label) : ''}</div></div></div></td>
         <td>${fmtTime(r.check_in)}</td><td>${fmtTime(r.check_out)}</td>
         <td>${hours(r.presence_minutes)}</td>
         <td>${breakCell(r)}</td>
@@ -1826,11 +1827,8 @@ views.attendance = async () => {
   el('attLoad').onclick = () => load().catch((e) => toast(e.message, 'err'));
   el('attExport').onclick = () => downloadCsv(
     `/api/attendance/export.csv?date_from=${el('attDate').value}&date_to=${el('attDate').value}`, 'attendance.csv');
-  if (el('attRecompute')) el('attRecompute').onclick = async () => {
-    const d = el('attDate').value;
-    const r = await api(`/api/attendance/recompute?date_from=${d}&date_to=${d}`, { method: 'POST' });
-    toast(r.message, 'ok'); load();
-  };
+  if (el('attRecompute')) el('attRecompute').onclick =
+    () => recomputeModal(el('attDate').value, load);
   if (el('attManual')) el('attManual').onclick = () => manualPunchModal(employees, load);
   if (el('attBulk')) el('attBulk').onclick = () => bulkPresentModal(employees, load);
 
@@ -1857,6 +1855,51 @@ views.attendance = async () => {
   };
   load().catch(() => {});
 };
+
+function recomputeModal(day, after) {
+  modal({
+    title: 'إعادة احتساب الحضور',
+    body: `<div class="grid cols-2">
+        <div class="field"><label>من تاريخ</label><input type="date" id="rcFrom" value="${day}" /></div>
+        <div class="field"><label>إلى تاريخ</label><input type="date" id="rcTo" value="${day}" /></div>
+      </div>
+      <div class="field"><label>الوردية المستعملة في الحساب</label><select id="rcMode">
+        <option value="frozen">وردية كل يوم كما حُسب به (موصى به)</option>
+        <option value="current">الوردية الحالية للموظف — يعيد كتابة الماضي</option>
+      </select></div>
+      <div class="help" id="rcHelp">الأيام الماضية تُحسب بلقطة ورديتها المحفوظة، فتعديلك للورديات
+        اليوم لا يغيّر ما مضى. اليوم الجاري وما بعده يتبعان الوردية الحالية دائماً.</div>`,
+    footer: `<button class="btn" id="rcRun">إعادة الاحتساب</button>
+      <button class="btn gray" data-close>إلغاء</button>`,
+    width: 560,
+    onOpen: (root) => {
+      const help = $('#rcHelp', root);
+      const btn = $('#rcRun', root);
+      $('#rcMode', root).onchange = (ev) => {
+        const current = ev.target.value === 'current';
+        help.innerHTML = current
+          ? `<b class="danger">تنبيه:</b> ستُحسب الأيام الماضية بالوردية المسندة للموظف الآن،
+             فقد تتحوّل أيام كانت سليمة إلى تأخير أو «تحتاج مراجعة» (خصم نصف يوم).
+             استعمله لتصحيح إسناد وردية خاطئ فقط — ويُسجَّل في سجل التدقيق.`
+          : `الأيام الماضية تُحسب بلقطة ورديتها المحفوظة، فتعديلك للورديات اليوم لا يغيّر ما مضى.
+             اليوم الجاري وما بعده يتبعان الوردية الحالية دائماً.`;
+        btn.className = current ? 'btn danger' : 'btn';
+      };
+      btn.onclick = async () => {
+        const current = $('#rcMode', root).value === 'current';
+        if (current && !confirm('إعادة حساب الماضي بالوردية الحالية قد تغيّر أياماً معتمدة. متابعة؟')) return;
+        try {
+          const q = new URLSearchParams({
+            date_from: $('#rcFrom', root).value, date_to: $('#rcTo', root).value });
+          if (current) q.set('use_current_shift', 'true');
+          const r = await api('/api/attendance/recompute?' + q, { method: 'POST' });
+          toast(r.message, 'ok'); closeModal(); after();
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    },
+  });
+}
+
 
 function manualPunchModal(employees, after) {
   modal({

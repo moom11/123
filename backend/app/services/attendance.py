@@ -1,6 +1,7 @@
 """احتساب الحضور والانصراف من البصمات الخام وفق الورديات والإجازات والعطل."""
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 
@@ -29,6 +30,15 @@ DEFAULT_SHIFT_END = time(16, 0)
 DEFAULT_WORK_DAYS = [6, 0, 1, 2, 3]  # الأحد إلى الخميس (ترقيم بايثون: 0=الاثنين)
 
 
+def _parse_hhmm(value: str | None, fallback: time) -> time:
+    """يقرأ «06:00» من لقطة محفوظة."""
+    try:
+        hour, minute = str(value).split(":")[:2]
+        return time(int(hour), int(minute))
+    except (AttributeError, ValueError):
+        return fallback
+
+
 def parse_rest_days(value: str | None) -> set[int] | None:
     """يقرأ أيام الراحة الأسبوعية «4,5» ويعيد None إن لم تُحدَّد."""
     if value is None:
@@ -47,6 +57,8 @@ class ShiftRules:
 
     def __init__(self, shift: Shift | None, rest_days: str | None = None):
         if shift:
+            self.shift_id = shift.id
+            self.label = shift.name
             self.start = shift.start_time
             self.end = shift.end_time
             self.grace_in = shift.grace_in_minutes
@@ -55,6 +67,8 @@ class ShiftRules:
             self.work_days = shift.work_day_list or DEFAULT_WORK_DAYS
             self.is_night = shift.is_night_shift
         else:
+            self.shift_id = None
+            self.label = "دوام افتراضي"
             self.start = DEFAULT_SHIFT_START
             self.end = DEFAULT_SHIFT_END
             self.grace_in = 10
@@ -66,6 +80,40 @@ class ShiftRules:
         rest = parse_rest_days(rest_days)
         if rest is not None:
             self.work_days = [day for day in range(7) if day not in rest]
+
+    # ------------------- لقطة الوردية: حفظ الماضي كما وقع -------------------
+    def snapshot(self) -> dict:
+        """قيم هذه الوردية كما هي الآن، لتُحفظ مع اليوم المحسوب بها."""
+        return {
+            "shift_id": self.shift_id,
+            "label": self.label,
+            "start": self.start.strftime("%H:%M"),
+            "end": self.end.strftime("%H:%M"),
+            "grace_in": self.grace_in,
+            "grace_out": self.grace_out,
+            "break_minutes": self.break_minutes,
+            "work_days": list(self.work_days),
+            "is_night": bool(self.is_night),
+        }
+
+    @classmethod
+    def from_snapshot(cls, data: dict) -> "ShiftRules":
+        """يعيد بناء قواعد الوردية من لقطة محفوظة، بلا رجوع إلى وردية الموظف اليوم."""
+        rules = cls(None)
+        rules.shift_id = data.get("shift_id")
+        rules.label = data.get("label") or "وردية محفوظة"
+        rules.start = _parse_hhmm(data.get("start"), DEFAULT_SHIFT_START)
+        rules.end = _parse_hhmm(data.get("end"), DEFAULT_SHIFT_END)
+        rules.grace_in = int(data.get("grace_in") or 0)
+        rules.grace_out = int(data.get("grace_out") or 0)
+        rules.break_minutes = int(data.get("break_minutes") or 0)
+        days = data.get("work_days")
+        rules.work_days = [int(d) for d in days] if days else DEFAULT_WORK_DAYS
+        rules.is_night = bool(data.get("is_night"))
+        return rules
+
+    def describe(self) -> str:
+        return f"{self.label} ({self.start:%H:%M}–{self.end:%H:%M})"
 
     def scheduled_in(self, day: date) -> datetime:
         return datetime.combine(day, self.start)
@@ -230,8 +278,29 @@ def compute_day(
         "open_break": open_break is not None,
         "leave_request_id": leave.id if leave else None,
         "note": note,
+        "shift_snapshot": json.dumps(rules.snapshot(), ensure_ascii=False),
     }
     return data, session
+
+
+def _rules_for_day(
+    current: ShiftRules,
+    row: AttendanceDay | None,
+    day: date,
+    today: date,
+    use_current_shift: bool,
+) -> ShiftRules:
+    """قواعد احتساب هذا اليوم: لقطته المحفوظة إن كان قد مضى، وإلا الوردية الحالية.
+
+    اليوم الجاري وما بعده يتبعان الوردية الحالية دائماً، فتعديل الوردية يسري
+    من اليوم فصاعداً بلا مساس بما مضى.
+    """
+    if use_current_shift or day >= today or row is None or not row.shift_snapshot:
+        return current
+    try:
+        return ShiftRules.from_snapshot(json.loads(row.shift_snapshot))
+    except (ValueError, TypeError):
+        return current
 
 
 def recompute(
@@ -240,8 +309,14 @@ def recompute(
     end: date,
     employee_ids: list[int] | None = None,
     commit: bool = True,
+    use_current_shift: bool = False,
 ) -> int:
-    """يعيد احتساب أيام الحضور لمدى تواريخ ومجموعة موظفين ويحفظها. يعيد عدد الأيام."""
+    """يعيد احتساب أيام الحضور لمدى تواريخ ومجموعة موظفين ويحفظها. يعيد عدد الأيام.
+
+    الأيام التي مضت تُحسب بلقطة الوردية المحفوظة معها، لا بوردية الموظف اليوم،
+    فلا يعيد تعديلُ الوردية كتابةَ الماضي. و`use_current_shift=True` هو الاستثناء
+    الصريح: أعد حساب الماضي بالوردية الحالية (لتصحيح إسناد خاطئ مثلاً).
+    """
     if start > end:
         start, end = end, start
 
@@ -285,6 +360,7 @@ def recompute(
     _clear_derived(db, ids, start, end)
 
     count = 0
+    today = date.today()
     overruns: list[tuple[Employee, date, int]] = []
     open_breaks: list[tuple[Employee, date, datetime]] = []
     for emp in employees:
@@ -296,13 +372,14 @@ def recompute(
             if emp.hire_date and day < emp.hire_date:
                 day += timedelta(days=1)
                 continue
-            win_start, win_end = rules.window(day)
+            row = existing.get((emp.id, day))
+            day_rules = _rules_for_day(rules, row, day, today, use_current_shift)
+            win_start, win_end = day_rules.window(day)
             day_punches = [p for p in emp_punches if win_start <= p.punch_time < win_end]
             data, session = compute_day(
-                emp, day, day_punches, rules, holidays.get(day), leaves.get((emp.id, day)),
+                emp, day, day_punches, day_rules, holidays.get(day), leaves.get((emp.id, day)),
                 is_rest_day=(emp.id, day) in rest_days, policy=policy,
             )
-            row = existing.get((emp.id, day))
             if row is None:
                 row = AttendanceDay(**data)
                 db.add(row)

@@ -345,6 +345,9 @@ class AttendanceDay(Base):
     open_break: Mapped[bool] = mapped_column(Boolean, default=False)       # استراحة بلا عودة
     leave_request_id: Mapped[int | None] = mapped_column(ForeignKey("leave_requests.id", ondelete="SET NULL"))
     note: Mapped[str | None] = mapped_column(String(255))
+    # لقطة الوردية التي حُسب بها هذا اليوم (JSON): أوقاتها وسماحها وأيام عملها.
+    # بها يبقى اليوم الماضي محسوباً بوردية وقتها ولو عُدّلت وردية الموظف اليوم.
+    shift_snapshot: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
     employee: Mapped[Employee] = relationship()

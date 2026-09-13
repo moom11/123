@@ -1842,6 +1842,117 @@ def test_weekly_rest_days_control_attendance(client, auth):
     assert any(r["status"] == "absent" for r in others)
 
 
+# ------------------ تجميد أيام الماضي عند تعديل الوردية ------------------
+def _day_row(client, auth, employee_id, day):
+    rows = client.get(
+        f"/api/attendance/employee/{employee_id}?date_from={day}&date_to={day}",
+        headers=auth).json()
+    return rows[0]
+
+
+def test_editing_a_shift_does_not_rewrite_past_days(client, auth):
+    """تعديل الوردية اليوم لا يعيد حساب يوم مضى — اليوم الماضي يبقى بوردية وقته."""
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية التجميد", "start_time": "06:00:00", "end_time": "18:00:00",
+        "grace_in_minutes": 10, "grace_out_minutes": 10, "work_days": "0,1,2,3,4,5,6",
+    }).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9791", "full_name": "موظف الوردية الصباحية", "basic_salary": 6000,
+        "shift_id": shift["id"], "hire_date": "2024-01-01"}).json()
+
+    yesterday = date.today() - timedelta(days=1)
+    _punch(client, auth, emp["id"], f"{yesterday}T06:05:00")
+    _punch(client, auth, emp["id"], f"{yesterday}T18:02:00")
+
+    before = _day_row(client, auth, emp["id"], yesterday)
+    assert before["status"] == "present"
+    assert before["late_minutes"] == 0 and before["early_leave_minutes"] == 0
+    assert "06:00" in before["shift_label"] and "18:00" in before["shift_label"]
+
+    # ١) نقل الموظف إلى وردية مسائية اليوم
+    evening = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية التجميد المسائية", "start_time": "16:00:00", "end_time": "23:00:00",
+        "grace_in_minutes": 10, "grace_out_minutes": 10, "work_days": "0,1,2,3,4,5,6",
+    }).json()
+    client.patch(f"/api/employees/{emp['id']}", headers=auth, json={"shift_id": evening["id"]})
+    client.post(f"/api/attendance/recompute?date_from={yesterday}&date_to={yesterday}"
+                f"&employee_id={emp['id']}", headers=auth)
+    after_move = _day_row(client, auth, emp["id"], yesterday)
+    assert after_move["status"] == "present", "اليوم الماضي تغيّر بنقل الوردية"
+    assert "06:00" in after_move["shift_label"]
+
+    # ٢) تعديل أوقات الوردية الأصلية نفسها
+    client.patch(f"/api/employees/{emp['id']}", headers=auth, json={"shift_id": shift["id"]})
+    edited = client.patch(f"/api/shifts/{shift['id']}", headers=auth, json={
+        "name": "وردية التجميد", "start_time": "08:00:00", "end_time": "20:00:00",
+        "grace_in_minutes": 10, "grace_out_minutes": 10, "work_days": "0,1,2,3,4,5,6"})
+    assert edited.status_code == 200, edited.text
+    client.post(f"/api/attendance/recompute?date_from={yesterday}&date_to={yesterday}"
+                f"&employee_id={emp['id']}", headers=auth)
+    after_edit = _day_row(client, auth, emp["id"], yesterday)
+    assert after_edit["status"] == "present", "اليوم الماضي تحوّل بتعديل أوقات الوردية"
+    assert after_edit["late_minutes"] == 0 and after_edit["early_leave_minutes"] == 0
+    assert "06:00" in after_edit["shift_label"]
+
+
+def test_recompute_with_current_shift_is_the_explicit_override(client, auth):
+    """طلب صريح واحد يعيد حساب الماضي بالوردية الحالية — لتصحيح إسناد خاطئ."""
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية التصحيح", "start_time": "06:00:00", "end_time": "18:00:00",
+        "grace_in_minutes": 10, "grace_out_minutes": 10, "work_days": "0,1,2,3,4,5,6",
+    }).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9792", "full_name": "موظف التصحيح", "basic_salary": 6000,
+        "shift_id": shift["id"], "hire_date": "2024-01-01"}).json()
+
+    yesterday = date.today() - timedelta(days=1)
+    _punch(client, auth, emp["id"], f"{yesterday}T06:05:00")
+    _punch(client, auth, emp["id"], f"{yesterday}T18:02:00")
+    assert _day_row(client, auth, emp["id"], yesterday)["late_minutes"] == 0
+
+    # الوردية الصحيحة كانت تبدأ 05:00 — التصحيح يجعل حضوره 06:05 تأخيراً
+    moved = client.patch(f"/api/shifts/{shift['id']}", headers=auth, json={
+        "name": "وردية التصحيح", "start_time": "05:00:00", "end_time": "18:00:00",
+        "grace_in_minutes": 10, "grace_out_minutes": 10, "work_days": "0,1,2,3,4,5,6"})
+    assert moved.status_code == 200, moved.text
+    client.post(f"/api/attendance/recompute?date_from={yesterday}&date_to={yesterday}"
+                f"&employee_id={emp['id']}&use_current_shift=true", headers=auth)
+    fixed = _day_row(client, auth, emp["id"], yesterday)
+    assert fixed["late_minutes"] == 65, fixed
+    assert "05:00" in fixed["shift_label"]
+
+    # ويُختم اليوم باللقطة الجديدة، فلا يعود بعدها
+    client.patch(f"/api/shifts/{shift['id']}", headers=auth, json={
+        "name": "وردية التصحيح", "start_time": "06:00:00", "end_time": "18:00:00",
+        "grace_in_minutes": 10, "grace_out_minutes": 10, "work_days": "0,1,2,3,4,5,6"})
+    client.post(f"/api/attendance/recompute?date_from={yesterday}&date_to={yesterday}"
+                f"&employee_id={emp['id']}", headers=auth)
+    assert _day_row(client, auth, emp["id"], yesterday)["late_minutes"] == 65
+
+
+def test_shift_change_applies_from_today_forward(client, auth):
+    """الوردية الجديدة تسري على اليوم الجاري وما بعده — التجميد للماضي وحده."""
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية اليوم الجاري", "start_time": "06:00:00", "end_time": "18:00:00",
+        "grace_in_minutes": 10, "grace_out_minutes": 10, "work_days": "0,1,2,3,4,5,6",
+    }).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9793", "full_name": "موظف اليوم الجاري", "basic_salary": 6000,
+        "shift_id": shift["id"], "hire_date": "2024-01-01"}).json()
+    today = date.today()
+    client.post(f"/api/attendance/recompute?date_from={today}&date_to={today}"
+                f"&employee_id={emp['id']}", headers=auth)
+    assert "06:00" in _day_row(client, auth, emp["id"], today)["shift_label"]
+
+    changed = client.patch(f"/api/shifts/{shift['id']}", headers=auth, json={
+        "name": "وردية اليوم الجاري", "start_time": "09:00:00", "end_time": "18:00:00",
+        "grace_in_minutes": 10, "grace_out_minutes": 10, "work_days": "0,1,2,3,4,5,6"})
+    assert changed.status_code == 200, changed.text
+    client.post(f"/api/attendance/recompute?date_from={today}&date_to={today}"
+                f"&employee_id={emp['id']}", headers=auth)
+    assert "09:00" in _day_row(client, auth, emp["id"], today)["shift_label"]
+
+
 # ------------------------------ الراحة الشهرية ------------------------------
 def test_monthly_rest_days(client, auth):
     """يوم الراحة المجدول يظهر راحة، ويُحترم رصيد الشهر، ويُلغى بحذفه."""
