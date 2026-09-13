@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import date
+from datetime import date, datetime, time, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
@@ -13,14 +13,20 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import (
+    AttendanceDay,
     Employee,
     EmployeeStatus,
     PayrollRun,
     PayrollStatus,
+    LeaveRequest,
+    LeaveStatus,
+    LeaveType,
     Payslip,
     PayslipDeduction,
     Role,
     User,
+    Violation,
+    ViolationStatus,
 )
 from ..schemas import (
     DeductionLineOut,
@@ -36,6 +42,7 @@ from ..security import (
     visible_employee_ids,
 )
 from ..services import audit, carryovers as carryovers_service
+from ..services import month_lock
 from ..services import month_close, notifications, payroll_xlsx, payslip_doc, sheets
 from ..services import payroll as service
 
@@ -168,6 +175,179 @@ def pre_close_check(
 ):
     """فحص ما قبل إقفال الشهر: ما الذي يجب معالجته قبل احتساب المسير."""
     return month_close.scan(db, year, month)
+
+
+class PreCloseFix(BaseModel):
+    """معالجة ملاحظة من شاشة ما قبل الإقفال مباشرة."""
+
+    employee_id: int
+    action: str = Field(pattern="^(clock_out|mark_present|to_leave|approve_violation)$")
+    dates: list[date] = []
+    time: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}$")  # وقت الانصراف
+    leave_type_id: int | None = None
+    violation_ids: list[int] = []
+    note: str | None = Field(default=None, max_length=255)
+
+
+@router.post("/pre-close/fix")
+def pre_close_fix(
+    payload: PreCloseFix,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_hr),
+):
+    """يعالج ملاحظة من شاشتها بلا تنقّل: انصراف ناقص، غياب، أو خصم لم يُعتمد.
+
+    كل إجراء يُسجَّل في سجل التدقيق باسم من نفّذه وسببه، ولا يُقبل على شهر مُقفل.
+    """
+    from ..models import Punch, PunchSource, PunchType
+    from ..services import attendance as attendance_service
+    from ..services import bulk_attendance
+    from ..services import violations as violations_service
+
+    employee = db.get(Employee, payload.employee_id)
+    if not employee:
+        raise HTTPException(status_code=404, detail="الموظف غير موجود")
+    for day in payload.dates:
+        month_lock.ensure_open(db, day, "المعالجة")
+
+    today = date.today()
+    reason = (payload.note or "").strip() or "معالجة من شاشة ما قبل الإقفال"
+
+    if payload.action == "clock_out":
+        if not payload.dates:
+            raise HTTPException(status_code=400, detail="حدّد الأيام المطلوب إغلاقها")
+        added: list[str] = []
+        skipped: list[str] = []
+        punches: list[Punch] = []
+        for day in sorted(set(payload.dates)):
+            if day >= today:
+                skipped.append(f"{day} (اليوم أو لاحق)")
+                continue
+            row = db.scalar(
+                select(AttendanceDay).where(
+                    AttendanceDay.employee_id == employee.id, AttendanceDay.work_date == day
+                )
+            )
+            if row is None or row.check_in is None:
+                skipped.append(f"{day} (لا بصمة دخول)")
+                continue
+            when = _clock_out_time(row, payload.time)
+            if when is None or when <= row.check_in:
+                skipped.append(f"{day} (تعذّر تحديد وقت الانصراف)")
+                continue
+            if db.scalar(select(Punch).where(
+                Punch.employee_id == employee.id, Punch.punch_time == when,
+                Punch.deleted_at.is_(None),
+            )):
+                skipped.append(f"{day} (البصمة موجودة)")
+                continue
+            punch = Punch(
+                employee_code=employee.code, employee_id=employee.id, punch_time=when,
+                punch_type=PunchType.out, source=PunchSource.manual,
+                intent="clock_out", note=reason,
+            )
+            db.add(punch)
+            punches.append(punch)
+            added.append(f"{day} {when:%H:%M}")
+        if punches:
+            db.flush()
+            audit.log(db, user, "create", "punch", None,
+                      f"{employee.full_name}: تسجيل انصراف لـ {len(punches)} يوم "
+                      f"({'، '.join(added)}) — {reason}", commit=False)
+            attendance_service.recompute_for_punches(db, punches)
+        db.commit()
+        return {"ok": True, "fixed": len(added), "skipped": skipped,
+                "message": f"سُجّل انصراف لـ {len(added)} يوم"
+                           + (f"، وتُخطّي {len(skipped)}" if skipped else "")}
+
+    if payload.action == "mark_present":
+        if not payload.dates:
+            raise HTTPException(status_code=400, detail="حدّد الأيام")
+        days = sorted(set(payload.dates))
+        result = bulk_attendance.mark_present(db, days[0], days[-1], [employee.id])
+        audit.log(db, user, "create", "attendance_day", None,
+                  f"{employee.full_name}: تسجيل حضور {result.days_marked} يوم "
+                  f"({days[0]} → {days[-1]}) — {reason}")
+        return {"ok": True, "fixed": result.days_marked,
+                "message": f"سُجّل حضور {result.days_marked} يوم"}
+
+    if payload.action == "to_leave":
+        if not payload.dates:
+            raise HTTPException(status_code=400, detail="حدّد الأيام")
+        if not payload.leave_type_id:
+            raise HTTPException(status_code=400, detail="اختر نوع الإجازة")
+        leave_type = db.get(LeaveType, payload.leave_type_id)
+        if not leave_type:
+            raise HTTPException(status_code=404, detail="نوع الإجازة غير موجود")
+        days = sorted(set(payload.dates))
+        request = LeaveRequest(
+            employee_id=employee.id, leave_type_id=leave_type.id,
+            start_date=days[0], end_date=days[-1], days=float(len(days)),
+            reason=reason, status=LeaveStatus.approved,
+            decided_by_id=user.id, decided_at=datetime.now(),
+            decision_note="معالجة من شاشة ما قبل الإقفال",
+        )
+        db.add(request)
+        db.flush()
+        audit.log(db, user, "approve", "leave_request", request.id,
+                  f"{employee.full_name}: تحويل {len(days)} يوم غياب إلى {leave_type.name} "
+                  f"({days[0]} → {days[-1]}) — {reason}", commit=False)
+        notifications.notify_employee(
+            db, employee.id, f"سُجّلت لك {leave_type.name}",
+            body=f"من {days[0]} إلى {days[-1]} — {reason}",
+            category="leave", link_page="myLeaves", commit=False,
+        )
+        db.commit()
+        attendance_service.recompute(db, days[0], days[-1], [employee.id])
+        return {"ok": True, "fixed": len(days),
+                "message": f"حُوّلت {len(days)} يوم إلى {leave_type.name}"}
+
+    # approve_violation
+    if not payload.violation_ids:
+        raise HTTPException(status_code=400, detail="لا مخالفات محدّدة")
+    approved = 0
+    for vid in payload.violation_ids:
+        violation = db.get(Violation, vid)
+        if not violation or violation.employee_id != employee.id:
+            continue
+        if violation.status == ViolationStatus.approved:
+            continue
+        violation.status = ViolationStatus.approved
+        violation.decided_by_id = user.id
+        violation.decided_at = datetime.now()
+        violation.decision_note = reason
+        approved += 1
+    if approved:
+        audit.log(db, user, "approve", "violation", None,
+                  f"{employee.full_name}: اعتماد {approved} مخالفة — {reason}", commit=False)
+    db.commit()
+    return {"ok": True, "fixed": approved, "message": f"اعتُمدت {approved} مخالفة"}
+
+
+def _clock_out_time(row: AttendanceDay, override: str | None) -> datetime | None:
+    """وقت الانصراف: ما تختاره الإدارة، وإلا نهاية وردية ذلك اليوم كما حُسب بها."""
+    if override:
+        hour, minute = (int(part) for part in override.split(":"))
+        when = datetime.combine(row.work_date, time(hour, minute))
+        # وردية ليلية: الانصراف قبل الدخول يعني اليوم التالي
+        if row.check_in and when <= row.check_in:
+            when += timedelta(days=1)
+        return when
+    if not row.shift_snapshot:
+        return None
+    try:
+        rules = attendance_shift_rules(row.shift_snapshot)
+        return rules.scheduled_out(row.work_date)
+    except (ValueError, TypeError):
+        return None
+
+
+def attendance_shift_rules(snapshot: str):
+    import json
+
+    from ..services.attendance import ShiftRules
+
+    return ShiftRules.from_snapshot(json.loads(snapshot))
 
 
 @router.post("/pre-close/notify")

@@ -1852,6 +1852,110 @@ def test_weekly_rest_days_control_attendance(client, auth):
     assert any(r["status"] == "absent" for r in others)
 
 
+# ------------------ معالجة ملاحظات ما قبل الإقفال من مكانها ------------------
+def _scan_row(client, auth, year, month, code):
+    result = client.get(f"/api/payroll/pre-close?year={year}&month={month}", headers=auth).json()
+    return next((r for r in result["rows"] if r["employee_code"] == code), None)
+
+
+def test_pre_close_fix_closes_an_open_shift_in_place(client, auth):
+    """«تسجيل انصراف» من شاشة الفحص يغلق اليوم فعلاً ويزيل الملاحظة."""
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية المعالجة", "start_time": "08:00:00", "end_time": "16:00:00",
+        "grace_in_minutes": 10, "grace_out_minutes": 10, "work_days": "0,1,2,3,4,5,6",
+    }).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9814", "full_name": "موظف المعالجة", "basic_salary": 9000,
+        "shift_id": shift["id"], "hire_date": "2024-01-01"}).json()
+
+    previous_end = date.today().replace(day=1) - timedelta(days=1)
+    year, month = previous_end.year, previous_end.month
+    _unlock_month(client, auth, year, month)
+    day = date(year, month, 11)
+    _punch(client, auth, emp["id"], f"{day}T08:05:00")      # دخول بلا خروج
+
+    before = _day_row(client, auth, emp["id"], day)
+    assert before["status"] == "missing_out"
+
+    row = _scan_row(client, auth, year, month, "9814")
+    issue = next(i for i in row["issues"] if i["key"] == "open_shift")
+    assert any(it["date"] == str(day) for it in issue["items"])
+    item = next(it for it in issue["items"] if it["date"] == str(day))
+    assert item["status_label"] == "دخول بلا خروج"
+    assert item["check_in"] and item["suggested_out"], item
+
+    fixed = client.post("/api/payroll/pre-close/fix", headers=auth, json={
+        "employee_id": emp["id"], "action": "clock_out", "dates": [str(day)],
+        "note": "نسي البصم عند الخروج"})
+    assert fixed.status_code == 200, fixed.text
+    assert fixed.json()["fixed"] == 1
+
+    after = _day_row(client, auth, emp["id"], day)
+    assert after["status"] in ("present", "late")
+    assert after["check_out"] and after["check_out"][11:16] == "16:00"   # نهاية الوردية
+
+    # واختفت الملاحظة عن ذلك اليوم
+    row = _scan_row(client, auth, year, month, "9814")
+    remaining = next((i for i in (row or {}).get("issues", []) if i["key"] == "open_shift"), None)
+    assert remaining is None or all(it["date"] != str(day) for it in remaining["items"])
+
+    logs = client.get("/api/audit-logs?entity=punch", headers=auth).json()
+    assert any("نسي البصم عند الخروج" in (r["detail"] or "") for r in logs)
+
+
+def test_pre_close_fix_respects_today_and_month_lock(client, auth):
+    """لا يُغلق يوم لم ينتهِ بعد، ولا يُعالَج شهر مُقفل."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9815", "full_name": "موظف حدود المعالجة", "basic_salary": 6000,
+        "hire_date": "2024-01-01"}).json()
+    today = date.today()
+    _punch(client, auth, emp["id"], f"{today}T08:00:00")
+
+    skipped = client.post("/api/payroll/pre-close/fix", headers=auth, json={
+        "employee_id": emp["id"], "action": "clock_out", "dates": [str(today)]}).json()
+    assert skipped["fixed"] == 0
+    assert any("اليوم" in x for x in skipped["skipped"])
+
+    previous_end = today.replace(day=1) - timedelta(days=1)
+    _unlock_month(client, auth, previous_end.year, previous_end.month)
+    _approve_month(client, auth, previous_end.year, previous_end.month)
+    try:
+        blocked = client.post("/api/payroll/pre-close/fix", headers=auth, json={
+            "employee_id": emp["id"], "action": "clock_out",
+            "dates": [str(date(previous_end.year, previous_end.month, 5))]})
+        assert blocked.status_code == 400 and "مُقفل" in blocked.json()["detail"]
+    finally:
+        _unlock_month(client, auth, previous_end.year, previous_end.month)
+
+
+def test_pre_close_fix_turns_absence_into_leave(client, auth):
+    """تحويل أيام الغياب إلى إجازة معتمدة من نفس الشاشة."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9816", "full_name": "موظف الغياب المعالَج", "basic_salary": 6000,
+        "hire_date": "2024-01-01"}).json()
+    previous_end = date.today().replace(day=1) - timedelta(days=1)
+    year, month = previous_end.year, previous_end.month
+    _unlock_month(client, auth, year, month)
+    client.post(f"/api/attendance/recompute?date_from={date(year, month, 1)}"
+                f"&date_to={previous_end}&employee_id={emp['id']}", headers=auth)
+
+    row = _scan_row(client, auth, year, month, "9816")
+    absent = next(i for i in row["issues"] if i["key"] == "absent_days")
+    days = [it["date"] for it in absent["items"][:2]]
+    assert days, absent
+
+    types = client.get("/api/leave-types", headers=auth).json()
+    leave_type = types[0]
+    done = client.post("/api/payroll/pre-close/fix", headers=auth, json={
+        "employee_id": emp["id"], "action": "to_leave", "dates": days,
+        "leave_type_id": leave_type["id"], "note": "إجازة متفق عليها"})
+    assert done.status_code == 200, done.text
+    assert done.json()["fixed"] == len(days)
+
+    changed = _day_row(client, auth, emp["id"], date.fromisoformat(days[0]))
+    assert changed["status"] == "leave"
+
+
 # ------------------------ جدول الحضور (تقويم الشهر) ------------------------
 def test_attendance_calendar_matches_the_daily_sheet(client, auth):
     """أرقام التقويم هي نفسها أرقام كشف اليوم — لا حساب موازٍ."""

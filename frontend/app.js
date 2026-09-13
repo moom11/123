@@ -4455,10 +4455,29 @@ views.payroll = async () => {
               `<span class="tag ${i.tone === 'danger' ? 'absent' : 'pending'}"
                      style="margin-inline-end:4px">${esc(i.label)} (${i.count})</span>`).join('')}</span>
             <div class="muted" style="font-size:11.5px;margin-top:4px">${row.issues.map((i) =>
-              esc(i.detail)).join(' · ')}</div></div>
+              esc(i.detail)).join(' · ')}</div>
+            <div id="fix_${row.employee_id}" class="fix-panel" hidden></div></div>
           <div class="rv"><button class="btn sm ghost"
-            onclick="go('attendance')">مراجعة</button></div></div>`).join('')}
+            onclick="togglePreCloseFix(${row.employee_id})">معالجة</button></div></div>`).join('')}
     </div>`;
+
+    // لوحة المعالجة داخل الصف نفسه: تُصلح الملاحظة بلا مغادرة الشاشة
+    window.__preCloseRows = result.rows;
+    window.__preClosePeriod = { year: Number(year), month: Number(month) };
+    window.togglePreCloseFix = async (empId) => {
+      const box = el('fix_' + empId);
+      if (!box) return;
+      if (!box.hidden) { box.hidden = true; return; }
+      if (!((state.cache.lookups || {}).leaveTypes)) {
+        try { await loadLookups(); } catch (e) { /* الأنواع اختيارية */ }
+      }
+      const row = (window.__preCloseRows || []).find((r) => r.employee_id === empId);
+      if (!row) return;
+      box.innerHTML = preCloseFixPanel(row);
+      box.hidden = false;
+      bindPreCloseFix(box, row, () => preClose(false));
+    };
+
     if (el('prNotify')) el('prNotify').onclick = () => preClose(true);
     if (notify) toast('أُرسل الملخّص للإدارة', 'ok');
   };
@@ -4630,6 +4649,130 @@ async function myPayslipsView() {
             <button class="btn sm gray" onclick="showPayslipDeductions(${s.id},'')">الخصومات</button></td></tr>`;
       },
       'لا توجد قسائم معتمدة بعد')}</div>`);
+}
+
+/* ---------- معالجة ملاحظات ما قبل الإقفال من مكانها ---------- */
+function preCloseFixPanel(row) {
+  const open = row.issues.find((i) => i.key === 'open_shift');
+  const absent = row.issues.find((i) => i.key === 'absent_days');
+  const violation = row.issues.find((i) => i.key === 'pending_violation');
+  const carry = row.issues.find((i) => i.key === 'unpaid_carryover');
+  const dayBox = (kind, items) => items.map((it) => `
+    <label class="chip" style="cursor:pointer;gap:6px;margin:0 0 6px 6px">
+      <input type="checkbox" class="fx-${kind}" value="${it.date}"
+        style="width:auto;margin:0" ${it.is_today ? '' : 'checked'} />
+      ${it.date}${it.status_label ? ` — ${esc(it.status_label)}` : ''}${
+        it.check_in ? ` · دخول ${String(it.check_in).slice(11, 16)}` : ''}${
+        it.is_today ? ' · اليوم' : ''}</label>`).join('');
+
+  let html = '<div class="card-body" style="padding:12px 0 0">';
+
+  if (open) {
+    const needsReview = open.items.filter((i) => i.status === 'needs_review').length;
+    const suggested = (open.items.find((i) => i.suggested_out) || {}).suggested_out;
+    html += `<div class="field" style="margin-bottom:10px">
+      <label>أيام بلا انصراف — اختر ما تريد إغلاقه</label>
+      <div>${dayBox('out', open.items)}</div>
+      ${needsReview ? `<div class="help" style="color:var(--danger)">
+        ${needsReview} منها «استراحة بلا عودة» ويُخصم عنها نصف يوم إن بقيت.</div>` : ''}
+      <div class="inline" style="gap:8px;margin-top:8px;align-items:flex-end">
+        <div class="field" style="max-width:150px;margin:0"><label>وقت الانصراف</label>
+          <input type="time" id="fxOutTime_${row.employee_id}"
+            placeholder="نهاية الوردية" /></div>
+        <button class="btn sm ok" data-fix="clock_out" data-emp="${row.employee_id}">
+          تسجيل انصراف</button>
+      </div>
+      <div class="help">اتركه فارغاً ليُسجَّل انصرافه في <b>نهاية وردية ذلك اليوم</b>${
+        suggested ? ` (${String(suggested).slice(11, 16)})` : ''}.
+        تُسجَّل بصمة يدوية موثّقة باسمك، ولا تُمسّ البصمات الأصلية.</div></div>`;
+  }
+
+  if (absent) {
+    html += `<div class="field" style="margin-bottom:10px">
+      <label>أيام غياب بلا بصمة وبلا إجازة</label>
+      <div>${dayBox('abs', absent.items)}</div>
+      <div class="inline" style="gap:8px;margin-top:8px;align-items:flex-end">
+        <button class="btn sm ok" data-fix="mark_present" data-emp="${row.employee_id}">
+          تسجيل حضور بمواعيد ورديته</button>
+        <div class="field" style="max-width:190px;margin:0"><label>أو تحويلها إلى إجازة</label>
+          <select id="fxLeave_${row.employee_id}"><option value="">اختر النوع…</option>${
+            (((state.cache.lookups || {}).leaveTypes) || []).map((t) =>
+              `<option value="${t.id}">${esc(t.name)}${t.is_paid ? '' : ' (بلا راتب)'}</option>`).join('')
+          }</select></div>
+        <button class="btn sm" data-fix="to_leave" data-emp="${row.employee_id}">تحويل</button>
+      </div>
+      <div class="help">«تسجيل حضور» يملأ اليوم بمواعيد ورديته ولا يمسّ يوماً فيه بصمات فعلية.</div>
+    </div>`;
+  }
+
+  if (violation) {
+    html += `<div class="field" style="margin-bottom:10px">
+      <label>خصومات مسجَّلة لم تُعتمد</label>
+      <div>${violation.items.map((v) => `
+        <label class="chip" style="cursor:pointer;gap:6px;margin:0 0 6px 6px">
+          <input type="checkbox" class="fx-viol" value="${v.id}" style="width:auto;margin:0" checked />
+          ${v.date} — ${esc(v.name)}${v.amount ? ` · ${money(v.amount)} ريال` : ''}</label>`).join('')}</div>
+      <button class="btn sm danger" data-fix="approve_violation" data-emp="${row.employee_id}"
+        style="margin-top:6px">اعتماد الخصم</button>
+      <div class="help">الاعتماد يجعل الخصم يدخل مسير هذا الشهر. وما لم يُعتمد لا يُخصم.</div>
+    </div>`;
+  }
+
+  if (carry) {
+    html += `<div class="field" style="margin-bottom:10px">
+      <label>مستحقات مرحّلة لم تُصرف</label>
+      <div class="help">${esc(carry.detail)} — تُصرف تلقائياً عند اعتماد مسير هذا الشهر.
+        <a href="#" onclick="go('carryovers');return false">فتح شاشة المستحقات</a></div></div>`;
+  }
+
+  html += `<div class="field" style="margin-bottom:4px"><label>سبب المعالجة (يُحفظ في التدقيق)</label>
+      <input id="fxNote_${row.employee_id}" placeholder="مثال: نسي البصم عند الخروج" /></div>
+    </div>`;
+  return html;
+}
+
+function bindPreCloseFix(box, row, after) {
+  const empId = row.employee_id;
+  const picked = (cls) => [...box.querySelectorAll('.' + cls + ':checked')].map((c) => c.value);
+
+  box.querySelectorAll('[data-fix]').forEach((btn) => {
+    btn.onclick = async () => {
+      const action = btn.dataset.fix;
+      const body = { employee_id: empId, action,
+        note: (el('fxNote_' + empId) || {}).value || null };
+
+      if (action === 'clock_out') {
+        body.dates = picked('fx-out');
+        const t = (el('fxOutTime_' + empId) || {}).value;
+        if (t) body.time = t;
+        if (!body.dates.length) return toast('اختر يوماً واحداً على الأقل', 'err');
+      } else if (action === 'mark_present' || action === 'to_leave') {
+        body.dates = picked('fx-abs');
+        if (!body.dates.length) return toast('اختر يوماً واحداً على الأقل', 'err');
+        if (action === 'to_leave') {
+          const type = (el('fxLeave_' + empId) || {}).value;
+          if (!type) return toast('اختر نوع الإجازة', 'err');
+          body.leave_type_id = Number(type);
+        }
+      } else {
+        body.violation_ids = picked('fx-viol').map(Number);
+        if (!body.violation_ids.length) return toast('اختر مخالفة واحدة على الأقل', 'err');
+      }
+
+      btn.disabled = true;
+      const old = btn.textContent;
+      btn.textContent = 'جارٍ التنفيذ…';
+      try {
+        const r = await api('/api/payroll/pre-close/fix', { method: 'POST', body });
+        toast(r.message || 'تمت المعالجة', 'ok');
+        if (r.skipped && r.skipped.length) toast('تُخطّي: ' + r.skipped.join('، '), '');
+        after();
+      } catch (e) {
+        toast(e.message, 'err');
+        btn.disabled = false; btn.textContent = old;
+      }
+    };
+  });
 }
 
 /* ------------------------------ وثائق الموظفين ------------------------------ */

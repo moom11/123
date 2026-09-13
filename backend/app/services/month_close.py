@@ -37,6 +37,21 @@ ISSUE_LABELS = {
 }
 
 
+def _suggested_out(row: AttendanceDay) -> str | None:
+    """وقت الانصراف المقترح: نهاية وردية ذلك اليوم كما حُسب بها فعلاً."""
+    import json
+
+    from .attendance import ShiftRules
+
+    if not row.shift_snapshot:
+        return None
+    try:
+        rules = ShiftRules.from_snapshot(json.loads(row.shift_snapshot))
+        return rules.scheduled_out(row.work_date).isoformat(timespec="minutes")
+    except (ValueError, TypeError):
+        return None
+
+
 def _month_bounds(year: int, month: int) -> tuple[date, date]:
     return date(year, month, 1), date(year, month, monthrange(year, month)[1])
 
@@ -108,6 +123,8 @@ def scan(db: Session, year: int, month: int, employee_ids: list[int] | None = No
                 "count": len(absent),
                 "detail": "، ".join(d.work_date.isoformat() for d in absent[:6])
                           + (" …" if len(absent) > 6 else ""),
+                "items": [{"date": d.work_date.isoformat(), "status": d.status.value}
+                          for d in sorted(absent, key=lambda x: x.work_date)],
             })
 
         over = [
@@ -150,6 +167,15 @@ def scan(db: Session, year: int, month: int, employee_ids: list[int] | None = No
                     (v.violation_type.name if v.violation_type else "مخالفة")
                     for v in open_violations[:3]
                 ),
+                "items": [
+                    {
+                        "id": v.id,
+                        "date": v.occurred_on.isoformat(),
+                        "name": v.violation_type.name if v.violation_type else "مخالفة",
+                        "amount": round(v.penalty_amount or 0, 2),
+                    }
+                    for v in sorted(open_violations, key=lambda x: x.occurred_on)
+                ],
             })
 
         open_shifts = [
@@ -157,11 +183,26 @@ def scan(db: Session, year: int, month: int, employee_ids: list[int] | None = No
             if d.status in (DayStatus.missing_out, DayStatus.needs_review)
         ]
         if open_shifts:
+            today = date.today()
             issues.append({
                 "key": "open_shift",
                 "count": len(open_shifts),
                 "detail": "، ".join(d.work_date.isoformat() for d in open_shifts[:6])
                           + (" …" if len(open_shifts) > 6 else ""),
+                "items": [
+                    {
+                        "date": d.work_date.isoformat(),
+                        "status": d.status.value,
+                        # الفرق مهم: needs_review يكلّف نصف يوم، وmissing_out لا يكلّف
+                        "status_label": ("استراحة بلا عودة"
+                                         if d.status is DayStatus.needs_review
+                                         else "دخول بلا خروج"),
+                        "check_in": d.check_in.isoformat() if d.check_in else None,
+                        "suggested_out": _suggested_out(d),
+                        "is_today": d.work_date == today,
+                    }
+                    for d in sorted(open_shifts, key=lambda x: x.work_date)
+                ],
             })
 
         if issues:
