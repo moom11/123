@@ -2970,6 +2970,13 @@ function accountCard(a) {
     </div></div>`;
 }
 
+function signaturePreview(path) {
+  return path
+    ? `<img src="/uploads/${encodeURIComponent(path)}?v=${Date.now()}" alt="التوقيع"
+         style="max-height:70px;max-width:260px;object-fit:contain" />`
+    : '<span class="muted" style="font-size:12px">لا يوجد توقيع مرفوع</span>';
+}
+
 function employeeModal(emp, departments, shifts, after) {
   const v = (k, d = '') => (emp && emp[k] !== null && emp[k] !== undefined ? emp[k] : d);
   modal({
@@ -3019,6 +3026,17 @@ function employeeModal(emp, departments, shifts, after) {
         <option value="active" ${v('status') === 'active' ? 'selected' : ''}>على رأس العمل</option>
         <option value="suspended" ${v('status') === 'suspended' ? 'selected' : ''}>موقوف</option>
         <option value="terminated" ${v('status') === 'terminated' ? 'selected' : ''}>منتهية خدمته</option></select></div>
+      ${emp ? `<div class="field" style="grid-column:1/-1"><label>توقيع الموظف</label>
+        <div id="fSign" class="sign-box">${signaturePreview(emp.signature_path)}</div>
+        <div class="inline" style="gap:8px;margin-top:8px">
+          <input type="file" id="fSignFile" accept="image/png,image/jpeg,image/webp"
+            style="max-width:230px" />
+          <button class="btn sm ok" id="fSignUp">رفع التوقيع</button>
+          ${emp.signature_path ? '<button class="btn sm danger" id="fSignDel">حذف</button>' : ''}
+        </div>
+        <div class="help">صوّر توقيعه على ورقة بيضاء وارفع الصورة — يزيل النظام الخلفية
+          تلقائياً ويحفظه PNG شفافاً، فيظهر في قسيمة راتبه وكشوفه الموقّعة.</div>
+      </div>` : ''}
       ${emp ? `<div class="field" style="grid-column:1/-1"><label>حساب دخول الموظف</label>
         <div id="fAccount"><div class="sk line"></div></div>
         <div class="help">حساب الموظف يُدار من ملفه: إنشاؤه، إعادة كلمة مروره، أو إيقاف دخوله.
@@ -3056,6 +3074,35 @@ function employeeModal(emp, departments, shifts, after) {
         } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
       };
       if (emp) paintAccount();
+
+      if (emp && $('#fSignUp', root)) {
+        const paintSign = (path) => {
+          const box = $('#fSign', root);
+          if (box) box.innerHTML = signaturePreview(path);
+        };
+        $('#fSignUp', root).onclick = async () => {
+          const input = $('#fSignFile', root);
+          if (!input.files.length) return toast('اختر صورة التوقيع أولاً', 'err');
+          const fd = new FormData();
+          fd.append('file', input.files[0]);
+          try {
+            const r = await api(`/api/employees/${emp.id}/signature`, { method: 'POST', body: fd });
+            emp.signature_path = r.signature_path;
+            paintSign(r.signature_path);
+            toast('رُفع التوقيع بلا خلفية', 'ok');
+            loadLookups(true);
+          } catch (e) { toast(e.message, 'err'); }
+        };
+        if ($('#fSignDel', root)) $('#fSignDel', root).onclick = async () => {
+          if (!confirm('حذف توقيع الموظف؟')) return;
+          try {
+            await api(`/api/employees/${emp.id}/signature`, { method: 'DELETE' });
+            emp.signature_path = null;
+            paintSign(null);
+            toast('حُذف التوقيع', 'ok');
+          } catch (e) { toast(e.message, 'err'); }
+        };
+      }
 
       $('#fSave', root).onclick = async () => {
         const body = {
@@ -4879,6 +4926,18 @@ views.reports = async () => {
       <button class="btn" id="rLoad">عرض الملخص الشهري</button>
       <button class="btn ghost" id="rExport">تصدير CSV</button>
     </div></div>
+    <div class="card"><div class="card-head"><h3>${icon('filetext')} تقارير الإدارة الموقّعة</h3>
+      <span class="muted">جاهزة للطباعة أو الحفظ PDF بتوقيع معتمد</span></div>
+      <div class="card-body inline" style="flex-wrap:wrap;gap:8px">
+        <button class="btn ok" id="rSignAtt">${icon('printer')} تقرير الحضور الشهري</button>
+        <button class="btn ok" id="rSignOt">${icon('printer')} تقرير الوقت الإضافي</button>
+        <div class="field" style="max-width:220px;margin:0"><label>كشف موظف واحد</label>
+          <select id="rSignEmp"><option value="">اختر الموظف…</option></select></div>
+        <button class="btn" id="rSignEmpBtn">${icon('printer')} كشف الموظف</button>
+      </div>
+      <div class="card-body help" style="padding-top:0">التوقيعات تُضبط من
+        <a href="#" onclick="go('settings');return false">الإعدادات ← هوية المنشأة</a>،
+        وتوقيع كل موظف من ملفه. وفي المستند اضغط «طباعة / حفظ PDF».</div></div>
     <div class="grid cols-4 stagger" id="rKpis"></div>
     <div class="card"><div class="card-head"><h3>الملخص الشهري</h3></div>
       <div id="rTable"><div class="sk-rows">${'<div class="sk line"></div>'.repeat(4)}</div></div></div>
@@ -4889,6 +4948,28 @@ views.reports = async () => {
         <button class="btn" id="xLoad">عرض</button>
       </div>
       <div id="xTable"></div></div>`);
+  // التقارير الموقّعة
+  (async () => {
+    try {
+      const { employees } = await loadLookups();
+      if (el('rSignEmp')) el('rSignEmp').innerHTML =
+        '<option value="">اختر الموظف…</option>' + options(employees, '', 'id', 'full_name');
+    } catch (e) { /* القائمة اختيارية */ }
+  })();
+  const period = () => `year=${el('rYear').value}&month=${el('rMonth').value}` +
+    (el('rDep').value ? `&department_id=${el('rDep').value}` : '');
+  if (el('rSignAtt')) el('rSignAtt').onclick = () =>
+    openAuthedDocument(`/api/reports/signed/attendance.html?${period()}`, 'تقرير الحضور');
+  if (el('rSignOt')) el('rSignOt').onclick = () => openAuthedDocument(
+    `/api/reports/signed/overtime.html?year=${el('rYear').value}&month=${el('rMonth').value}`,
+    'تقرير الوقت الإضافي');
+  if (el('rSignEmpBtn')) el('rSignEmpBtn').onclick = () => {
+    const id = el('rSignEmp').value;
+    if (!id) return toast('اختر الموظف أولاً', 'err');
+    openAuthedDocument(`/api/reports/signed/employee.html?employee_id=${id}`
+      + `&year=${el('rYear').value}&month=${el('rMonth').value}`, 'كشف حضور موظف');
+  };
+
   const loadMonthly = async () => {
     const q = new URLSearchParams({ year: el('rYear').value, month: el('rMonth').value });
     if (el('rDep').value) q.set('department_id', el('rDep').value);
@@ -5681,6 +5762,37 @@ settingsTabs.branding = async () => {
       </div>
     </div>
 
+    <div class="card"><div class="card-head"><h3>توقيعات التقارير المعتمدة</h3></div>
+      <div class="card-body">
+        <div class="help" style="margin-bottom:14px">هذان التوقيعان يظهران في كل تقرير موقّع
+          وفي قسائم الرواتب. صوّر التوقيع على ورقة بيضاء وارفع الصورة —
+          <b>يزيل النظام الخلفية تلقائياً</b> ويحفظه PNG شفافاً مقصوصاً على حدوده.</div>
+        <div class="grid cols-2">
+          ${[['hr', 'الموارد البشرية'], ['manager', 'المدير العام']].map(([role, fallback]) => {
+            const url = b[`signature_${role}_url`];
+            return `<div style="border:1px solid var(--border);border-radius:10px;padding:14px">
+              <div class="field"><label>اسم الموقّع (${fallback})</label>
+                <input id="brSigName_${role}" value="${esc(b[`signatory_${role}_name`] || '')}"
+                  placeholder="الاسم كما يظهر تحت التوقيع" /></div>
+              <div class="field"><label>الصفة</label>
+                <input id="brSigTitle_${role}" value="${esc(b[`signatory_${role}_title`] || fallback)}" /></div>
+              <div style="text-align:center;padding:12px;background:var(--surface-2);
+                          border-radius:10px;margin-bottom:10px;min-height:76px">
+                ${url ? `<img src="${esc(url)}?v=${Date.now()}" alt="التوقيع"
+                        style="max-height:64px;max-width:100%;object-fit:contain" />`
+                      : '<span class="muted" style="font-size:12px">لا يوجد توقيع مرفوع</span>'}
+              </div>
+              <input type="file" id="brSigFile_${role}" accept="image/png,image/jpeg,image/webp" />
+              <div class="inline" style="margin-top:8px;gap:8px">
+                <button class="btn sm ok" data-sig-up="${role}">رفع التوقيع</button>
+                ${url ? `<button class="btn sm danger" data-sig-del="${role}">حذف</button>` : ''}
+              </div></div>`;
+          }).join('')}
+        </div>
+        <button class="btn" id="brSigSave" style="margin-top:12px">حفظ أسماء الموقّعين</button>
+      </div>
+    </div>
+
     <div class="card"><div class="card-head"><h3>أيقونة التطبيق على شاشة الجوال</h3></div>
       <div class="card-body">
         <div class="grid cols-2">
@@ -5722,6 +5834,42 @@ settingsTabs.branding = async () => {
         </div>
       </div>
     </div>`;
+
+  // توقيعات التقارير
+  document.querySelectorAll('[data-sig-up]').forEach((btn) => {
+    btn.onclick = async () => {
+      const role = btn.dataset.sigUp;
+      const input = el('brSigFile_' + role);
+      if (!input || !input.files.length) return toast('اختر صورة التوقيع أولاً', 'err');
+      const fd = new FormData();
+      fd.append('file', input.files[0]);
+      try {
+        await api(`/api/branding/signature/${role}`, { method: 'POST', body: fd });
+        toast('رُفع التوقيع بلا خلفية', 'ok');
+        delete state.cache.settings; views.settings();
+      } catch (e) { toast(e.message, 'err'); }
+    };
+  });
+  document.querySelectorAll('[data-sig-del]').forEach((btn) => {
+    btn.onclick = async () => {
+      if (!confirm('حذف هذا التوقيع؟')) return;
+      try {
+        await api(`/api/branding/signature/${btn.dataset.sigDel}`, { method: 'DELETE' });
+        toast('حُذف التوقيع', 'ok');
+        delete state.cache.settings; views.settings();
+      } catch (e) { toast(e.message, 'err'); }
+    };
+  });
+  if (el('brSigSave')) el('brSigSave').onclick = async () => {
+    try {
+      await api('/api/branding', { method: 'PUT', body: {
+        signatory_hr_name: el('brSigName_hr').value.trim(),
+        signatory_hr_title: el('brSigTitle_hr').value.trim(),
+        signatory_manager_name: el('brSigName_manager').value.trim(),
+        signatory_manager_title: el('brSigTitle_manager').value.trim() } });
+      toast('حُفظت أسماء الموقّعين', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+  };
 
   el('brSave').onclick = async () => {
     try {

@@ -259,6 +259,9 @@ class Employee(Base):
     no_break: Mapped[bool] = mapped_column(Boolean, default=False)
     # رصيد أيام الراحة الشهرية الخاص بهذا الموظف، فارغ = يتبع الرقم الافتراضي في الإعدادات
     monthly_rest_quota: Mapped[int | None] = mapped_column(Integer)
+    # توقيع الموظف صورة PNG شفافة، يُستعمل في القسائم والتقارير الموقّعة
+    signature_path: Mapped[str | None] = mapped_column(String(255))
+    signed_at: Mapped[datetime | None] = mapped_column(DateTime)   # متى رُفع توقيعه
     status: Mapped[EmployeeStatus] = mapped_column(Enum(EmployeeStatus), default=EmployeeStatus.active)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 

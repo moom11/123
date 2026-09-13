@@ -51,6 +51,14 @@ DEFAULTS: dict[str, str] = {
     # لا يُحتسب أي عمل إضافي إلا بعد اعتماد الإدارة. ما دون الاعتماد يُسجَّل
     # «وقتاً زائداً» يظهر في البيان ولا يدخل الراتب.
     "overtime_requires_approval": "true",
+    # ------------------------------ التقارير الموقّعة ------------------------------
+    # توقيعا المنشأة على التقارير: الموارد البشرية والمدير المسؤول
+    "signature_hr_path": "",
+    "signatory_hr_name": "",
+    "signatory_hr_title": "الموارد البشرية",
+    "signature_manager_path": "",
+    "signatory_manager_name": "",
+    "signatory_manager_title": "المدير العام",
     # خصم التأخير: proportional = بمقدار زمن التأخير، none = بدون خصم
     "payroll_late_deduction_mode": "proportional",
     # خصم الخروج المبكر: proportional = بمقدار زمن الخروج المبكر، none = بدون خصم.

@@ -7,6 +7,7 @@ from calendar import monthrange
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.responses import HTMLResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -25,6 +26,8 @@ from ..models import (
 from ..schemas import DashboardStats, MonthlySummaryRow
 from ..security import get_current_user, require_manager, visible_employee_ids
 from ..services import attendance as attendance_service
+from ..services import report_doc
+from ..services import signature as signature_service
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -207,6 +210,171 @@ def monthly_export(
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f"attachment; filename=summary_{year}_{month:02d}.csv"},
     )
+
+
+@router.get("/signed/attendance.html", response_class=HTMLResponse)
+def signed_attendance_report(
+    year: int = Query(default_factory=lambda: date.today().year),
+    month: int = Query(default_factory=lambda: date.today().month),
+    department_id: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_manager),
+):
+    """تقرير الحضور الشهري للإدارة — موقّع وجاهز للحفظ PDF."""
+    _, _, rows = _summary_rows(db, user, year, month, department_id)
+    table = [
+        [
+            r.employee_code, r.employee_name, r.department_name or "—",
+            r.present_days, r.late_days, r.absent_days, r.leave_days,
+            r.weekend_days + r.holiday_days, r.worked_hours,
+            r.late_minutes, r.early_leave_minutes, r.overtime_minutes,
+        ]
+        for r in rows
+    ]
+    summary = [
+        ("عدد الموظفين", len(rows)),
+        ("أيام الحضور", sum(r.present_days for r in rows)),
+        ("أيام الغياب", sum(r.absent_days for r in rows)),
+        ("ساعات العمل", round(sum(r.worked_hours for r in rows), 2)),
+        ("دقائق التأخير", sum(r.late_minutes for r in rows)),
+        ("دقائق الإضافي", sum(r.overtime_minutes for r in rows)),
+    ]
+    return HTMLResponse(report_doc.document(
+        db,
+        title="تقرير الحضور والانصراف الشهري",
+        period=report_doc.month_label(year, month),
+        columns=["رقم الموظف", "الاسم", "الإدارة", "حضور", "تأخير", "غياب", "إجازات",
+                 "راحة وعطل", "ساعات العمل", "تأخير (د)", "خروج مبكر (د)", "إضافي (د)"],
+        rows=table,
+        summary=summary,
+        note="الأرقام محتسبة من بصمات الأجهزة مباشرة، والإضافي المذكور هو المرصود "
+             "قبل الاعتماد ولا يُصرف إلا بعد موافقة الإدارة.",
+        issued_by=user.username,
+        numeric_from=3,
+    ))
+
+
+@router.get("/signed/overtime.html", response_class=HTMLResponse)
+def signed_overtime_report(
+    year: int = Query(default_factory=lambda: date.today().year),
+    month: int = Query(default_factory=lambda: date.today().month),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_manager),
+):
+    """تقرير الوقت الإضافي ومن اعتمده — موقّع."""
+    from ..models import OvertimeRecord, OvertimeStatus
+    from ..services import overtime as overtime_service
+
+    start = date(year, month, 1)
+    end = date(year + (month == 12), (month % 12) + 1, 1) - timedelta(days=1)
+    stmt = select(OvertimeRecord).where(
+        OvertimeRecord.work_date >= start, OvertimeRecord.work_date <= end
+    )
+    allowed = visible_employee_ids(db, user)
+    if allowed is not None:
+        stmt = stmt.where(OvertimeRecord.employee_id.in_(allowed or [0]))
+    records = db.scalars(stmt.order_by(OvertimeRecord.work_date)).all()
+
+    table = [
+        [
+            r.employee.code if r.employee else "—",
+            r.employee.full_name if r.employee else "—",
+            r.work_date.isoformat(),
+            r.minutes,
+            r.approved_minutes if r.status is OvertimeStatus.approved else 0,
+            overtime_service.STATUS_LABELS[r.status],
+            r.decided_by.username if r.decided_by else "—",
+            f"{r.decided_at:%Y-%m-%d %H:%M}" if r.decided_at else "—",
+            r.decision_note or "",
+        ]
+        for r in records
+    ]
+    approved = sum(r.approved_minutes for r in records if r.status is OvertimeStatus.approved)
+    pending = sum(r.minutes for r in records if r.status is OvertimeStatus.pending)
+    return HTMLResponse(report_doc.document(
+        db,
+        title="تقرير العمل الإضافي واعتماده",
+        period=report_doc.month_label(year, month),
+        columns=["رقم الموظف", "الاسم", "اليوم", "الوقت الزائد (د)", "المعتمد (د)",
+                 "الحالة", "اعتمده", "وقت الاعتماد", "ملاحظة القرار"],
+        rows=table,
+        summary=[
+            ("عدد السجلات", len(records)),
+            ("المعتمد", f"{approved // 60} س {approved % 60} د"),
+            ("بانتظار الموافقة", f"{pending // 60} س {pending % 60} د"),
+        ],
+        note="لا يُحتسب في الراتب إلا ما اعتمدته الإدارة، والاعتماد مسجَّل باسم من قرّره ووقته.",
+        issued_by=user.username,
+        numeric_from=2,
+    ))
+
+
+@router.get("/signed/employee.html", response_class=HTMLResponse)
+def signed_employee_report(
+    employee_id: int,
+    year: int = Query(default_factory=lambda: date.today().year),
+    month: int = Query(default_factory=lambda: date.today().month),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_manager),
+):
+    """كشف حضور موظف واحد — موقّع منه ومن الإدارة (لإقراره بصحة بياناته)."""
+    from ..config import UPLOAD_DIR
+    from ..security import can_view_employee
+
+    if not can_view_employee(user, employee_id, db):
+        raise HTTPException(status_code=403, detail="لا تملك صلاحية عرض هذا الموظف")
+    employee = db.get(Employee, employee_id)
+    if not employee:
+        raise HTTPException(status_code=404, detail="الموظف غير موجود")
+
+    last_day = monthrange(year, month)[1]
+    start, end = date(year, month, 1), date(year, month, last_day)
+    attendance_service.recompute(db, start, min(end, date.today()), [employee_id])
+    rows = db.scalars(
+        select(AttendanceDay).where(
+            AttendanceDay.employee_id == employee_id,
+            AttendanceDay.work_date >= start, AttendanceDay.work_date <= end,
+        ).order_by(AttendanceDay.work_date)
+    ).all()
+
+    table = [
+        [
+            r.work_date.isoformat(),
+            STATUS_LABELS.get(r.status, r.status.value),
+            f"{r.check_in:%H:%M}" if r.check_in else "—",
+            f"{r.check_out:%H:%M}" if r.check_out else "—",
+            round((r.presence_minutes or 0) / 60, 2),
+            r.break_minutes or 0,
+            round((r.worked_minutes or 0) / 60, 2),
+            r.late_minutes or 0,
+            r.early_leave_minutes or 0,
+            r.overtime_minutes or 0,
+            r.note or "",
+        ]
+        for r in rows
+    ]
+    worked = sum(r.worked_minutes or 0 for r in rows)
+    # توقيع الموظف نفسه إن رُفع، ليُقرّ بصحة كشفه
+    own = (signature_service.data_uri(UPLOAD_DIR / employee.signature_path)
+           if employee.signature_path else None)
+    return HTMLResponse(report_doc.document(
+        db,
+        title=f"كشف حضور — {employee.full_name} ({employee.code})",
+        period=report_doc.month_label(year, month),
+        columns=["اليوم", "الحالة", "الحضور", "الانصراف", "في المقر (س)", "استراحة (د)",
+                 "ساعات فعلية", "تأخير (د)", "خروج مبكر (د)", "إضافي (د)", "ملاحظة"],
+        rows=table,
+        summary=[
+            ("أيام الحضور", sum(1 for r in rows if r.status in (
+                DayStatus.present, DayStatus.late, DayStatus.missing_out))),
+            ("أيام الغياب", sum(1 for r in rows if r.status == DayStatus.absent)),
+            ("ساعات العمل", round(worked / 60, 2)),
+            ("الوردية", employee.shift.name if employee.shift else "دوام افتراضي"),
+        ],
+        issued_by=user.username,
+        extra_signatures=[("توقيع الموظف", employee.full_name, own)],
+        numeric_from=2,
+    ))
 
 
 @router.get("/exceptions")

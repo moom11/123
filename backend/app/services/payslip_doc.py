@@ -106,6 +106,22 @@ def _row(label: str, value: float, tone: str = "") -> str:
             f'<td class="num">{_money(value)}</td></tr>')
 
 
+def _sig_img(path: str | None) -> str:
+    """التوقيع مضمّناً في القسيمة، أو سطر فارغ يُوقَّع عليه يدوياً."""
+    from ..config import UPLOAD_DIR
+    from . import signature as signature_service
+
+    if path:
+        uri = signature_service.data_uri(UPLOAD_DIR / path)
+        if uri:
+            return f'<img class="sig" src="{uri}" alt="" /><i></i>'
+    return "<i></i>"
+
+
+def _setting_sig(db: Session, role: str) -> str:
+    return _sig_img(settings_store.get(db, f"signature_{role}_path") or None)
+
+
 def _deduction_detail(db: Session, slip: Payslip) -> str:
     """بيان الخصومات: كل خصم بيومه وسببه — فلا يُخصم من الموظف ريال بلا تفسير."""
     from ..models import PayslipDeduction
@@ -227,13 +243,18 @@ def payslip_html(db: Session, slip: Payslip, run: PayrollRun) -> str:
     {f'<div class="note">ملاحظة: {escape(slip.note)}</div>' if slip.note else ''}
 
     <div class="signs">
-      <div><span>توقيع الموظف</span><i></i></div>
-      <div><span>الموارد البشرية</span><i></i></div>
-      <div><span>الإدارة المالية</span><i></i></div>
+      <div><span>توقيع الموظف</span>{_sig_img(employee.signature_path if employee else None)}</div>
+      <div><span>الموارد البشرية</span>{_setting_sig(db, 'hr')}</div>
+      <div><span>الإدارة المالية</span>{_setting_sig(db, 'manager')}</div>
     </div>
     <footer>هذه القسيمة صادرة إلكترونياً من نظام الموارد البشرية — {escape(company)}</footer>
   </section>"""
 
+
+_SIGN_STYLE = """
+  .signs .sig { display:block; max-height:52px; max-width:150px; margin:0 auto -4px;
+    object-fit:contain; }
+"""
 
 _DETAIL_STYLE = """
   .detail { margin-top:14px; }
@@ -304,7 +325,7 @@ def document(db: Session, run: PayrollRun, slips: list[Payslip], title: str) -> 
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>{escape(title)}</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet" />
-<style>{_STYLE}{_DETAIL_STYLE}</style>
+<style>{_STYLE}{_DETAIL_STYLE}{_SIGN_STYLE}</style>
 </head>
 <body>
   <div class="bar">

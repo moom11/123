@@ -1852,6 +1852,134 @@ def test_weekly_rest_days_control_attendance(client, auth):
     assert any(r["status"] == "absent" for r in others)
 
 
+# ------------------------ التوقيع والتقارير الموقّعة ------------------------
+def _signature_png(bg=(250, 248, 245), ink=(20, 24, 80)) -> bytes:
+    """صورة توقيع على ورقة بيضاء — كما تأتي من كاميرا الجوال."""
+    from io import BytesIO
+
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGB", (600, 300), bg)
+    draw = ImageDraw.Draw(img)
+    draw.line([(150, 200), (220, 110), (280, 210), (350, 120), (430, 200)], fill=ink, width=7)
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=92)
+    return buf.getvalue()
+
+
+def test_signature_upload_strips_background(client, auth):
+    """التوقيع يُرفع صورة عادية ويُحفظ PNG شفافاً مقصوصاً."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    from app.config import UPLOAD_DIR
+
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9817", "full_name": "موظف التوقيع", "basic_salary": 5000}).json()
+    assert emp["signature_path"] is None
+
+    res = client.post(
+        f"/api/employees/{emp['id']}/signature", headers=auth,
+        files={"file": ("sign.jpg", _signature_png(), "image/jpeg")})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["signature_path"] and body["signature_path"].endswith(".png")
+    assert body["signed_at"]
+
+    stored = Image.open(BytesIO((UPLOAD_DIR / body["signature_path"]).read_bytes()))
+    assert stored.mode == "RGBA", "يجب أن يُحفظ بشفافية"
+    alpha = stored.getchannel("A")
+    assert alpha.getpixel((0, 0)) == 0, "الخلفية يجب أن تكون شفافة"
+    assert max(alpha.getdata()) > 200, "الحبر يجب أن يبقى ظاهراً"
+    assert stored.height < 300, "يجب أن تُقصّ الهوامش الفارغة"
+
+    # ويظهر في قسيمة راتبه
+    previous = date.today().replace(day=1) - timedelta(days=1)
+    _unlock_month(client, auth, previous.year, previous.month)
+    run = _run_for(client, auth, previous.year, previous.month)
+    slip = _slip_of(client, auth, run["id"], "9817")
+    page = client.get(f"/api/payroll/payslips/{slip['id']}/print", headers=auth)
+    assert page.status_code == 200
+    assert "data:image/png;base64," in page.text, "التوقيع يُضمَّن في القسيمة"
+
+    # والحذف يزيله
+    gone = client.delete(f"/api/employees/{emp['id']}/signature", headers=auth).json()
+    assert gone["signature_path"] is None
+
+
+def test_signature_rejects_empty_and_bad_files(client, auth):
+    """الصورة الفارغة أو غير الصالحة تُرفض برسالة مفهومة."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9818", "full_name": "موظف توقيع فاسد", "basic_salary": 5000}).json()
+
+    blank = Image.new("RGB", (300, 150), (255, 255, 255))
+    buf = BytesIO(); blank.save(buf, format="PNG")
+    empty = client.post(f"/api/employees/{emp['id']}/signature", headers=auth,
+                        files={"file": ("blank.png", buf.getvalue(), "image/png")})
+    assert empty.status_code == 400 and "لم يُعثر على توقيع" in empty.json()["detail"]
+
+    bad = client.post(f"/api/employees/{emp['id']}/signature", headers=auth,
+                      files={"file": ("x.txt", b"not an image", "text/plain")})
+    assert bad.status_code == 400
+
+
+def test_signed_reports_carry_the_signatures(client, auth):
+    """تقارير الإدارة تحمل توقيع المنشأة، وكشف الموظف يحمل توقيعه أيضاً."""
+    today = date.today()
+    company = client.post("/api/branding/signature/hr", headers=auth,
+                          files={"file": ("hr.jpg", _signature_png(), "image/jpeg")})
+    assert company.status_code == 200, company.text
+    assert company.json()["signature_hr_url"]
+    client.put("/api/branding", headers=auth, json={
+        "signatory_hr_name": "سالم الموارد", "signatory_hr_title": "مدير الموارد البشرية"})
+
+    report = client.get(
+        f"/api/reports/signed/attendance.html?year={today.year}&month={today.month}", headers=auth)
+    assert report.status_code == 200
+    assert "تقرير الحضور والانصراف الشهري" in report.text
+    assert "سالم الموارد" in report.text
+    assert "data:image/png;base64," in report.text, "توقيع المنشأة يُضمَّن في التقرير"
+    assert "أقرّ بصحة البيانات" in report.text
+
+    overtime = client.get(
+        f"/api/reports/signed/overtime.html?year={today.year}&month={today.month}", headers=auth)
+    assert overtime.status_code == 200 and "تقرير العمل الإضافي" in overtime.text
+
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9819", "full_name": "موظف الكشف الموقّع", "basic_salary": 5000}).json()
+    client.post(f"/api/employees/{emp['id']}/signature", headers=auth,
+                files={"file": ("s.jpg", _signature_png(), "image/jpeg")})
+    sheet = client.get(
+        f"/api/reports/signed/employee.html?employee_id={emp['id']}"
+        f"&year={today.year}&month={today.month}", headers=auth)
+    assert sheet.status_code == 200
+    assert "موظف الكشف الموقّع" in sheet.text and "توقيع الموظف" in sheet.text
+
+    client.delete("/api/branding/signature/hr", headers=auth)
+
+
+def test_employee_cannot_open_management_reports(client, auth):
+    """التقارير الموقّعة للإدارة وحدها."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9820", "full_name": "موظف بلا تقارير", "phone": "0559990820",
+        "basic_salary": 5000}).json()
+    token = client.post("/api/auth/login", data={
+        "username": "0559990820", "password": "0559990820"}).json()["access_token"]
+    fresh = client.post("/api/auth/change-password", headers={"Authorization": f"Bearer {token}"},
+                        json={"current_password": "0559990820", "new_password": "Rep@2026x"})
+    h = {"Authorization": f"Bearer {fresh.json()['access_token']}"}
+    today = date.today()
+    assert client.get(f"/api/reports/signed/attendance.html?year={today.year}"
+                      f"&month={today.month}", headers=h).status_code == 403
+    assert client.post(f"/api/employees/{emp['id']}/signature", headers=h,
+                       files={"file": ("s.jpg", _signature_png(), "image/jpeg")}).status_code == 403
+
+
 # ------------------ معالجة ملاحظات ما قبل الإقفال من مكانها ------------------
 def _scan_row(client, auth, year, month, code):
     result = client.get(f"/api/payroll/pre-close?year={year}&month={month}", headers=auth).json()

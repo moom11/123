@@ -4,7 +4,7 @@ from __future__ import annotations
 import csv
 import io
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -20,7 +20,7 @@ from ..schemas import (
     ShiftOut,
 )
 from ..security import get_current_user, require_hr
-from ..services import accounts, audit, rest_policy
+from ..services import accounts, audit, rest_policy, signature as signature_service
 
 router = APIRouter(prefix="/api", tags=["employees"])
 
@@ -53,6 +53,8 @@ def employee_out(emp: Employee, default_quota: int = 0) -> EmployeeOut:
                     if emp.monthly_rest_quota is not None else default_quota),
         rest_quota_default=default_quota,
         status=emp.status,
+        signature_path=emp.signature_path,
+        signed_at=emp.signed_at,
         has_user=account is not None,
         username=account.username if account else None,
         user_active=bool(account.is_active) if account else False,
@@ -318,6 +320,79 @@ def toggle_employee_account(
     state = _account_state(db, emp)
     state["message"] = "أُعيد تفعيل الدخول" if active else "أُوقف دخول الموظف وأُنهيت جلساته"
     return state
+
+
+# --------------------- توقيع الموظف (PNG شفاف) ---------------------
+SIGNATURE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
+MAX_SIGNATURE_BYTES = 6 * 1024 * 1024
+
+
+@router.post("/employees/{employee_id}/signature", response_model=EmployeeOut)
+def upload_signature(
+    employee_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_hr),
+):
+    """يرفع توقيع الموظف ويحوّله إلى PNG شفاف بلا خلفية ولا هوامش."""
+    from datetime import datetime
+
+    from ..config import UPLOAD_DIR
+    from ..security_extra import content_problem
+
+    emp = db.get(Employee, employee_id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="الموظف غير موجود")
+
+    name = (file.filename or "").lower()
+    suffix = "." + name.rsplit(".", 1)[-1] if "." in name else ""
+    if suffix not in SIGNATURE_TYPES:
+        raise HTTPException(status_code=400, detail="نوع الملف غير مدعوم (PNG أو JPG أو WEBP)")
+    content = file.file.read(MAX_SIGNATURE_BYTES + 1)
+    if len(content) > MAX_SIGNATURE_BYTES:
+        raise HTTPException(status_code=400, detail="حجم الصورة أكبر من الحد المسموح")
+    if not content:
+        raise HTTPException(status_code=400, detail="الملف فارغ")
+    problem = content_problem(content, suffix)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
+
+    try:
+        stored = signature_service.store(content, UPLOAD_DIR, prefix=f"sign_{emp.code}")
+    except signature_service.SignatureError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    previous = emp.signature_path
+    emp.signature_path = stored
+    emp.signed_at = datetime.now().replace(microsecond=0)
+    if previous and previous != stored:
+        (UPLOAD_DIR / previous).unlink(missing_ok=True)
+    audit.log(db, user, "update", "employee", emp.id,
+              f"رفع توقيع {emp.full_name}", commit=False)
+    db.commit()
+    db.refresh(emp)
+    return employee_out(emp, rest_policy.default_quota(db))
+
+
+@router.delete("/employees/{employee_id}/signature", response_model=EmployeeOut)
+def delete_signature(
+    employee_id: int, db: Session = Depends(get_db), user: User = Depends(require_hr)
+):
+    """يحذف توقيع الموظف من ملفه."""
+    from ..config import UPLOAD_DIR
+
+    emp = db.get(Employee, employee_id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="الموظف غير موجود")
+    if emp.signature_path:
+        (UPLOAD_DIR / emp.signature_path).unlink(missing_ok=True)
+    emp.signature_path = None
+    emp.signed_at = None
+    audit.log(db, user, "delete", "employee", emp.id,
+              f"حذف توقيع {emp.full_name}", commit=False)
+    db.commit()
+    db.refresh(emp)
+    return employee_out(emp, rest_policy.default_quota(db))
 
 
 @router.delete("/employees/{employee_id}")

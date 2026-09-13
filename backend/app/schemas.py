@@ -163,6 +163,8 @@ class EmployeeOut(ORMModel):
     rest_quota: int = 0                        # الرصيد المطبَّق فعلياً هذا الشهر
     rest_quota_default: int = 0                # الافتراضي في إعدادات المنشأة
     status: EmployeeStatus
+    signature_path: str | None = None    # توقيعه PNG شفاف (إن رُفع)
+    signed_at: datetime | None = None
     has_user: bool = False
     username: str | None = None
     user_active: bool = False
