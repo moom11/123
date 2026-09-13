@@ -22,7 +22,7 @@ from ..models import (
     RestDay,
     Shift,
 )
-from . import workstate
+from . import month_lock, workstate
 from .policies import Policy, resolve_many
 
 DEFAULT_SHIFT_START = time(8, 0)
@@ -356,8 +356,13 @@ def recompute(
         ).all()
     }
 
-    # الأحداث والاستراحات تُبنى من جديد في كل احتساب فتبقى مطابقة للبصمات
-    _clear_derived(db, ids, start, end)
+    # الشهر الذي اعتُمد مسير رواتبه مُقفل: أيامه لا يُعاد حسابها ولا تُكتب،
+    # فالقسيمة المصروفة تبقى مطابقة لبياناتها حتى يُلغى اعتماد المسير
+    locked = month_lock.locked_periods(db)
+    # الأحداث والاستراحات تُبنى من جديد في كل احتساب فتبقى مطابقة للبصمات —
+    # عدا أيام الأشهر المقفلة فلا تُمسّ أصلاً
+    for span_start, span_end in _open_subranges(start, end, locked):
+        _clear_derived(db, ids, span_start, span_end)
 
     count = 0
     today = date.today()
@@ -370,6 +375,9 @@ def recompute(
         day = start
         while day <= end:
             if emp.hire_date and day < emp.hire_date:
+                day += timedelta(days=1)
+                continue
+            if (day.year, day.month) in locked:
                 day += timedelta(days=1)
                 continue
             row = existing.get((emp.id, day))
@@ -501,6 +509,26 @@ def _mark_once(db: Session, model, key: str) -> bool:
     db.add(model(key=key))
     db.flush()
     return True
+
+
+def _open_subranges(
+    start: date, end: date, locked: set[tuple[int, int]]
+) -> list[tuple[date, date]]:
+    """يقسّم المدى إلى مقاطع لا تشمل شهراً مُقفلاً."""
+    spans: list[tuple[date, date]] = []
+    run_start: date | None = None
+    day = start
+    while day <= end:
+        if (day.year, day.month) in locked:
+            if run_start is not None:
+                spans.append((run_start, day - timedelta(days=1)))
+                run_start = None
+        elif run_start is None:
+            run_start = day
+        day += timedelta(days=1)
+    if run_start is not None:
+        spans.append((run_start, end))
+    return spans
 
 
 def _clear_derived(db: Session, ids: list[int], start: date, end: date) -> None:

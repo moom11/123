@@ -13,7 +13,7 @@ from ..models import Employee, EmployeeStatus, RestDay, Role, User
 from ..schemas import RestDayIn, RestDayOut, RestSummaryRow
 from ..security import can_view_employee, get_current_user, require_hr, visible_employee_ids
 from ..services import attendance as attendance_service
-from ..services import audit, notifications, rest_policy
+from ..services import audit, month_lock, notifications, rest_policy
 
 router = APIRouter(prefix="/api", tags=["rest-days"])
 
@@ -108,6 +108,7 @@ def add_rest_day(payload: RestDayIn, db: Session = Depends(get_db), user: User =
     employee = db.get(Employee, payload.employee_id)
     if not employee:
         raise HTTPException(status_code=404, detail="الموظف غير موجود")
+    month_lock.ensure_open(db, payload.rest_date, "تحديد يوم راحة")
     existing = db.scalar(
         select(RestDay).where(
             RestDay.employee_id == employee.id, RestDay.rest_date == payload.rest_date
@@ -157,6 +158,7 @@ def delete_rest_day(rest_id: int, db: Session = Depends(get_db), user: User = De
     if not row:
         raise HTTPException(status_code=404, detail="اليوم غير موجود")
     employee_id, rest_date = row.employee_id, row.rest_date
+    month_lock.ensure_open(db, rest_date, "إلغاء يوم راحة")
     db.delete(row)
     audit.log(db, user, "delete", "rest_day", rest_id, f"إلغاء راحة {rest_date}", commit=False)
     db.commit()

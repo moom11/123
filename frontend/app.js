@@ -1749,6 +1749,7 @@ views.attendance = async () => {
       ${isHR() ? '<button class="btn ok" id="attManual">بصمة يدوية</button>' : ''}
       ${isHR() ? '<button class="btn gray" id="attBulk">تسجيل حضور جماعي</button>' : ''}
     </div></div>
+    <div id="attLock"></div>
     <div class="grid cols-4 stagger" id="attKpis"></div>
     <div class="card"><div class="card-head"><h3>الحالة الآن</h3>
       <span class="muted" id="liveCount">جارٍ التحميل…</span></div>
@@ -1771,6 +1772,13 @@ views.attendance = async () => {
     if (el('attStatus').value) q.set('status', el('attStatus').value);
     const rows = await api('/api/attendance/daily?' + q);
     el('attCount').textContent = `${rows.length} سجل`;
+    api(`/api/attendance/lock-status?date_from=${el('attDate').value}`)
+      .then((lock) => { el('attLock').innerHTML = lock.locked
+        ? `<div class="card"><div class="card-body inline" style="gap:10px;align-items:center">
+             <span class="ri danger">${icon('lock')}</span>
+             <div><b>الشهر مُقفل</b><div class="muted" style="font-size:12px">${esc(lock.message)}</div></div>
+           </div></div>` : ''; })
+      .catch(() => { el('attLock').innerHTML = ''; });
     const count = (...st) => rows.filter((r) => st.includes(r.status)).length;
     el('attKpis').innerHTML = `
       <div class="kpi ok"><div class="label">حاضر<span class="ico">${icon('check')}</span></div>
@@ -1867,6 +1875,7 @@ function recomputeModal(day, after) {
         <option value="frozen">وردية كل يوم كما حُسب به (موصى به)</option>
         <option value="current">الوردية الحالية للموظف — يعيد كتابة الماضي</option>
       </select></div>
+      <div id="rcLock"></div>
       <div class="help" id="rcHelp">الأيام الماضية تُحسب بلقطة ورديتها المحفوظة، فتعديلك للورديات
         اليوم لا يغيّر ما مضى. اليوم الجاري وما بعده يتبعان الوردية الحالية دائماً.</div>`,
     footer: `<button class="btn" id="rcRun">إعادة الاحتساب</button>
@@ -1875,6 +1884,16 @@ function recomputeModal(day, after) {
     onOpen: (root) => {
       const help = $('#rcHelp', root);
       const btn = $('#rcRun', root);
+      const checkLock = () => api(
+        `/api/attendance/lock-status?date_from=${$('#rcFrom', root).value}` +
+        `&date_to=${$('#rcTo', root).value}`)
+        .then((lock) => { $('#rcLock', root).innerHTML = lock.locked
+          ? `<div class="help"><b class="danger">${esc(lock.message)}</b>
+               أيام هذه الأشهر ستُتخطّى.</div>` : ''; })
+        .catch(() => {});
+      $('#rcFrom', root).onchange = checkLock;
+      $('#rcTo', root).onchange = checkLock;
+      checkLock();
       $('#rcMode', root).onchange = (ev) => {
         const current = ev.target.value === 'current';
         help.innerHTML = current
@@ -4095,6 +4114,10 @@ views.payroll = async () => {
     el('prDetail').innerHTML = `<div class="card">
       <div class="card-head"><h3>قسائم ${MONTHS[run.month - 1]} ${run.year}</h3>
         <span class="muted">صافي المسير: <b class="money">${money(run.net_total)}</b> ريال</span></div>
+      ${locked ? `<div class="card-body" style="padding-bottom:0"><div class="help">
+        ${icon('lock', 'sm')} <b>الشهر مُقفل:</b> بياناته لا تتغيّر بعد الاعتماد — لا بصمة يدوية،
+        ولا تعديل أو حذف بصمة، ولا تسجيل حضور جماعي، ولا يوم راحة، ولا إعادة احتساب.
+        لتصحيح شيء: ألغِ اعتماد المسير، صحّح، ثم أعد الاعتماد.</div></div>` : ''}
       ${table(['رقم الموظف', 'الاسم', 'الأساسي', 'البدلات', 'حضور', 'غياب', 'تأخير (د)',
                'خروج مبكر (د)', 'إضافي (د)',
                'خصم غياب', 'خصم تأخير', 'خصم خروج مبكر', 'إجازة بلا راتب', 'خصم مخالفات',

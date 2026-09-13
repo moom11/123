@@ -44,9 +44,7 @@ from ..security import (
     visible_employee_ids,
 )
 from ..services import attendance as attendance_service
-from ..services import policies, workstate
-from ..services import bulk_attendance
-from ..services import audit, geo, settings_store, sheets
+from ..services import audit, bulk_attendance, geo, month_lock, policies, settings_store, sheets, workstate
 
 router = APIRouter(prefix="/api/attendance", tags=["attendance"])
 
@@ -188,6 +186,7 @@ def add_punch(
     emp = db.get(Employee, payload.employee_id)
     if not emp:
         raise HTTPException(status_code=404, detail="الموظف غير موجود")
+    month_lock.ensure_open(db, payload.punch_time.date(), "إضافة بصمة")
     exists = db.scalar(
         select(Punch).where(
             Punch.employee_code == emp.code,
@@ -243,11 +242,13 @@ def edit_punch(
         raise HTTPException(status_code=404, detail="البصمة غير موجودة")
     if punch.deleted_at is not None:
         raise HTTPException(status_code=400, detail="البصمة محذوفة ولا تُعدَّل")
+    month_lock.ensure_open(db, punch.punch_time.date(), "تعديل بصمة")
 
     before = _punch_snapshot(punch)
     changes = payload.model_dump(exclude_unset=True, exclude={"reason"})
     days = {punch.punch_time.date()}
     if changes.get("punch_time"):
+        month_lock.ensure_open(db, changes["punch_time"].date(), "نقل بصمة")
         punch.punch_time = changes["punch_time"].replace(microsecond=0)
         days.add(punch.punch_time.date())
     if "intent" in changes:
@@ -287,6 +288,7 @@ def delete_punch(
         raise HTTPException(status_code=404, detail="البصمة غير موجودة")
     if punch.deleted_at is not None:
         raise HTTPException(status_code=400, detail="البصمة محذوفة أصلاً")
+    month_lock.ensure_open(db, punch.punch_time.date(), "حذف بصمة")
 
     emp_id, day = punch.employee_id, punch.punch_time.date()
     snapshot = _punch_snapshot(punch)
@@ -492,6 +494,7 @@ def override_day(
     row = db.get(AttendanceDay, day_id)
     if not row:
         raise HTTPException(status_code=404, detail="السجل غير موجود")
+    month_lock.ensure_open(db, row.work_date, "تعديل يوم")
     data = payload.model_dump(exclude_unset=True)
     for key, value in data.items():
         setattr(row, key, value)
@@ -506,6 +509,25 @@ def override_day(
     db.commit()
     db.refresh(row)
     return day_out(row)
+
+
+@router.get("/lock-status")
+def lock_status(
+    date_from: date,
+    date_to: date | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """هل هذه الفترة داخل شهر مُقفل (اعتُمد مسير رواتبه)؟"""
+    end = date_to or date_from
+    periods = month_lock.locked_in_range(db, min(date_from, end), max(date_from, end))
+    return {
+        "locked": bool(periods),
+        "months": [month_lock.label(y, m) for y, m in periods],
+        "message": (f"شهر {month_lock.labels(periods)} مُقفل لاعتماد مسير رواتبه — "
+                    "بياناته لا تتغيّر. لفتحه: الرواتب ← المسير ← إلغاء الاعتماد.")
+        if periods else "",
+    }
 
 
 @router.post("/recompute")
@@ -523,6 +545,7 @@ def recompute_range(
     و`use_current_shift=true` يفرض إعادة حسابها بالوردية الحالية للموظف — يُستعمل
     عند تصحيح إسناد وردية خاطئ، ويُسجَّل في سجل التدقيق لأنه يُعيد كتابة الماضي.
     """
+    skipped = month_lock.locked_in_range(db, min(date_from, date_to), max(date_from, date_to))
     count = attendance_service.recompute(
         db, date_from, date_to, [employee_id] if employee_id else None,
         use_current_shift=use_current_shift,
@@ -531,8 +554,11 @@ def recompute_range(
     if use_current_shift:
         detail += " — بالوردية الحالية (أُعيد حساب الماضي)"
     audit.log(db, user, "recompute", "attendance_day", None, detail)
-    return {"ok": True, "days": count, "message": f"تمت إعادة احتساب {count} يوم" + (
-        " بالوردية الحالية" if use_current_shift else "")}
+    message = f"تمت إعادة احتساب {count} يوم" + (" بالوردية الحالية" if use_current_shift else "")
+    if skipped:
+        message += f" — وتُخطّي {month_lock.labels(skipped)} لأن مسير رواتبه معتمد"
+    return {"ok": True, "days": count, "locked_months": [
+        month_lock.label(y, m) for y, m in skipped], "message": message}
 
 
 class MarkPresentIn(BaseModel):
@@ -676,6 +702,10 @@ def mark_present(
     span = (payload.date_to - payload.date_from).days
     if abs(span) > 92:
         raise HTTPException(status_code=400, detail="المدى أطول من ثلاثة أشهر")
+    month_lock.ensure_range_open(
+        db, min(payload.date_from, payload.date_to), max(payload.date_from, payload.date_to),
+        "تسجيل حضور",
+    )
     result = bulk_attendance.mark_present(
         db, payload.date_from, payload.date_to, payload.employee_ids
     )

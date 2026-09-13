@@ -737,8 +737,13 @@ def test_payroll_adjust_and_approve(client, auth):
     csv_res = client.get(f"/api/payroll/runs/{run['id']}/export.csv", headers=auth)
     assert csv_res.status_code == 200 and "text/csv" in csv_res.headers["content-type"]
 
+    # ويُعاد الشهر مفتوحاً حتى لا يبقى مقفلاً على بقية الاختبارات
+    _unlock_month(client, auth, today.year, today.month)
+
 
 def test_employee_sees_only_approved_payslip(client, auth):
+    today = date.today()
+    _approve_month(client, auth, today.year, today.month)
     token = client.post("/api/auth/login", data={
         "username": "viol_emp", "password": "Aa123456"}).json()["access_token"]
     h = {"Authorization": f"Bearer {token}"}
@@ -746,6 +751,7 @@ def test_employee_sees_only_approved_payslip(client, auth):
     assert len(slips) == 1 and slips[0]["employee_code"] == "9301"
     # ولا يصل إلى مسير الشركة
     assert client.get("/api/payroll/runs", headers=h).status_code == 403
+    _unlock_month(client, auth, today.year, today.month)
 
 
 def test_payroll_settings_affect_calculation(client, auth):
@@ -1768,6 +1774,8 @@ def test_payslip_print_document(client, auth):
 
 def test_employee_prints_only_own_approved_payslip(client, auth):
     """الموظف يطبع قسيمته المعتمدة فقط، ولا يصل قسيمة غيره."""
+    today = date.today()
+    _approve_month(client, auth, today.year, today.month)
     token = client.post("/api/auth/login", data={
         "username": "viol_emp", "password": "Aa123456"}).json()["access_token"]
     h = {"Authorization": f"Bearer {token}"}
@@ -1779,6 +1787,7 @@ def test_employee_prints_only_own_approved_payslip(client, auth):
     other = next(s for s in others if s["employee_id"] != mine[0]["employee_id"])
     assert client.get(f"/api/payroll/payslips/{other['id']}/print", headers=h).status_code == 403
     assert client.get(f"/api/payroll/runs/{mine[0]['run_id']}/print", headers=h).status_code == 403
+    _unlock_month(client, auth, today.year, today.month)
 
 
 # ------------------------------ بياناتي والراحة الأسبوعية ------------------------------
@@ -1840,6 +1849,96 @@ def test_weekly_rest_days_control_attendance(client, auth):
     assert fridays and all(r["status"] == "weekend" for r in fridays)
     # بقية الأيام أيام عمل (بلا بصمات ⇒ غياب)
     assert any(r["status"] == "absent" for r in others)
+
+
+# ------------------------ قفل الشهر المعتمد ------------------------
+def test_approved_month_is_locked_against_attendance_changes(client, auth):
+    """الشهر الذي اعتُمد مسيره لا تتغيّر بياناته — والمفتاح هو إلغاء الاعتماد."""
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية القفل", "start_time": "08:00:00", "end_time": "16:00:00",
+        "grace_in_minutes": 10, "grace_out_minutes": 10, "work_days": "0,1,2,3,4,5,6",
+    }).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9794", "full_name": "موظف الشهر المقفل", "basic_salary": 6000,
+        "shift_id": shift["id"], "hire_date": "2024-01-01"}).json()
+
+    previous_end = date.today().replace(day=1) - timedelta(days=1)
+    year, month = previous_end.year, previous_end.month
+    day = date(year, month, 10)
+    _punch(client, auth, emp["id"], f"{day}T08:03:00")
+    _punch(client, auth, emp["id"], f"{day}T16:05:00")
+    before = _day_row(client, auth, emp["id"], day)
+    assert before["status"] == "present"
+
+    _unlock_month(client, auth, year, month)
+    run = _approve_month(client, auth, year, month)
+    assert run["status"] == "approved"
+
+    # ١) لا بصمة يدوية جديدة داخله
+    blocked = client.post("/api/attendance/punches", headers=auth, json={
+        "employee_id": emp["id"], "punch_time": f"{day}T12:00:00"})
+    assert blocked.status_code == 400
+    assert "مُقفل" in blocked.json()["detail"] and "إلغاء الاعتماد" in blocked.json()["detail"]
+
+    # ٢) ولا تعديل بصمة قائمة ولا حذفها
+    punches = client.get(
+        f"/api/attendance/punches?employee_id={emp['id']}&date_from={day}&date_to={day}",
+        headers=auth).json()
+    assert punches
+    assert client.patch(f"/api/attendance/punches/{punches[0]['id']}", headers=auth, json={
+        "punch_time": f"{day}T09:30:00", "reason": "محاولة"}).status_code == 400
+    assert client.request("DELETE", f"/api/attendance/punches/{punches[0]['id']}",
+                          headers=auth, json={"reason": "محاولة"}).status_code == 400
+
+    # ٣) ولا تسجيل حضور جماعي، ولا يوم راحة
+    assert client.post("/api/attendance/mark-present", headers=auth, json={
+        "date_from": str(day), "date_to": str(day)}).status_code == 400
+    assert client.post("/api/rest-days", headers=auth, json={
+        "employee_id": emp["id"], "rest_date": str(day)}).status_code == 400
+
+    # ٤) وإعادة الاحتساب تتخطّاه وتقول ذلك بدل أن تكتب فوقه
+    res = client.post(f"/api/attendance/recompute?date_from={day}&date_to={day}"
+                      f"&employee_id={emp['id']}", headers=auth)
+    assert res.status_code == 200
+    assert res.json()["days"] == 0
+    assert f"{month}/{year}" in res.json()["locked_months"]
+    assert _day_row(client, auth, emp["id"], day)["check_in"] == before["check_in"]
+
+    # ٥) وتعديل الوردية لا يمسّه ولو بالطلب الصريح
+    client.patch(f"/api/shifts/{shift['id']}", headers=auth, json={
+        "name": "وردية القفل", "start_time": "06:00:00", "end_time": "14:00:00",
+        "grace_in_minutes": 10, "grace_out_minutes": 10, "work_days": "0,1,2,3,4,5,6"})
+    client.post(f"/api/attendance/recompute?date_from={day}&date_to={day}"
+                f"&employee_id={emp['id']}&use_current_shift=true", headers=auth)
+    same = _day_row(client, auth, emp["id"], day)
+    assert same["late_minutes"] == before["late_minutes"]
+    assert same["status"] == before["status"]
+
+    # ٦) إلغاء الاعتماد يفتح الشهر فعلاً
+    _unlock_month(client, auth, year, month)
+    allowed = client.post("/api/attendance/punches", headers=auth, json={
+        "employee_id": emp["id"], "punch_time": f"{day}T12:00:00"})
+    assert allowed.status_code == 201, allowed.text
+
+
+def test_lock_does_not_block_other_months(client, auth):
+    """القفل يخصّ شهره وحده: الشهر الجاري يبقى مفتوحاً للعمل اليومي."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9795", "full_name": "موظف الشهر المفتوح", "basic_salary": 6000,
+        "hire_date": "2024-01-01"}).json()
+    previous_end = date.today().replace(day=1) - timedelta(days=1)
+    _unlock_month(client, auth, previous_end.year, previous_end.month)
+    _approve_month(client, auth, previous_end.year, previous_end.month)
+    try:
+        today = date.today()
+        ok = client.post("/api/attendance/punches", headers=auth, json={
+            "employee_id": emp["id"], "punch_time": f"{today}T08:00:00"})
+        assert ok.status_code == 201, ok.text
+        res = client.post(f"/api/attendance/recompute?date_from={today}&date_to={today}"
+                          f"&employee_id={emp['id']}", headers=auth).json()
+        assert res["days"] >= 1 and not res["locked_months"]
+    finally:
+        _unlock_month(client, auth, previous_end.year, previous_end.month)
 
 
 # ------------------ تجميد أيام الماضي عند تعديل الوردية ------------------
@@ -2984,6 +3083,19 @@ def test_rejected_loan_is_never_deducted(client, auth):
 
 
 # --------------------------- مشتريات الموظفين ---------------------------
+
+def _approve_month(client, auth, year: int, month: int) -> dict:
+    """يعتمد مسير الشهر (وينشئه إن لزم) ويعيده — للاختبارات التي تحتاج قسيمة معتمدة."""
+    runs = client.get("/api/payroll/runs", headers=auth).json()
+    run = next((r for r in runs if r["year"] == year and r["month"] == month), None)
+    if run is None:
+        run = client.post(f"/api/payroll/runs?year={year}&month={month}", headers=auth).json()
+    if run["status"] != "approved":
+        approved = client.post(f"/api/payroll/runs/{run['id']}/approve", headers=auth)
+        assert approved.status_code == 200, approved.text
+        run = approved.json()
+    return run
+
 
 def _unlock_month(client, auth, year: int, month: int) -> None:
     """يلغي اعتماد مسير الشهر إن كان معتمداً (اختبار سابق قد يكون اعتمده)."""
