@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+from calendar import monthrange
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -48,6 +49,8 @@ from ..services import audit, bulk_attendance, geo, month_lock, policies, settin
 
 router = APIRouter(prefix="/api/attendance", tags=["attendance"])
 
+WEEKDAY_NAMES = ["الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"]
+
 STATUS_LABELS = {
     DayStatus.present: "حاضر",
     DayStatus.late: "متأخر",
@@ -80,6 +83,10 @@ def punch_out(p: Punch) -> PunchOut:
         site_name=p.site.name if p.site else None,
         distance_meters=p.distance_meters,
         note=p.note,
+        intent=p.intent,
+        deleted_at=p.deleted_at,
+        deleted_by=p.deleted_by.username if p.deleted_by else None,
+        delete_reason=p.delete_reason,
     )
 
 
@@ -455,6 +462,91 @@ def daily_sheet(
     if status:
         result = [r for r in result if r.status == status]
     return result
+
+
+@router.get("/calendar")
+def attendance_calendar(
+    year: int = Query(default_factory=lambda: date.today().year),
+    month: int = Query(default_factory=lambda: date.today().month),
+    department_id: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """تقويم شهر كامل: لكل يوم عدد الحاضرين والمتأخرين والغائبين وبقية الحالات.
+
+    يُحتسب الشهر مرة واحدة ثم يُقرأ، فالأرقام هنا هي نفسها التي في كشف اليوم
+    وفي مسير الرواتب — لا حساب موازٍ ولا تقدير.
+    """
+    if not 1 <= month <= 12:
+        raise HTTPException(status_code=400, detail="الشهر غير صحيح")
+    last_day = monthrange(year, month)[1]
+    start, end = date(year, month, 1), date(year, month, last_day)
+
+    emp_stmt = select(Employee).where(Employee.status == EmployeeStatus.active)
+    allowed = _visible_employee_ids(db, user)
+    if allowed is not None:
+        emp_stmt = emp_stmt.where(Employee.id.in_(allowed or [0]))
+    if department_id:
+        emp_stmt = emp_stmt.where(Employee.department_id == department_id)
+    employees = db.scalars(emp_stmt.order_by(Employee.code)).all()
+    ids = [e.id for e in employees]
+    if not ids:
+        return {"year": year, "month": month, "employees": 0, "days": [], "totals": {}}
+
+    attendance_service.recompute(db, start, min(end, date.today()), ids)
+    rows = db.scalars(
+        select(AttendanceDay).where(
+            AttendanceDay.employee_id.in_(ids),
+            AttendanceDay.work_date >= start,
+            AttendanceDay.work_date <= end,
+        )
+    ).all()
+
+    by_day: dict[date, list[AttendanceDay]] = {}
+    for row in rows:
+        by_day.setdefault(row.work_date, []).append(row)
+
+    def bucket(rows_of_day: list[AttendanceDay]) -> dict:
+        counts = {key: 0 for key in (
+            "present", "late", "absent", "leave", "holiday", "weekend",
+            "missing_out", "needs_review", "scheduled",
+        )}
+        for row in rows_of_day:
+            counts[row.status.value] = counts.get(row.status.value, 0) + 1
+        worked = sum(r.worked_minutes or 0 for r in rows_of_day)
+        return {
+            **counts,
+            "attended": counts["present"] + counts["late"] + counts["missing_out"],
+            "off": counts["weekend"] + counts["holiday"] + counts["leave"],
+            "flagged": counts["needs_review"] + counts["missing_out"],
+            "worked_minutes": worked,
+            "records": len(rows_of_day),
+        }
+
+    days = []
+    today = date.today()
+    for offset in range(last_day):
+        day = start + timedelta(days=offset)
+        info = bucket(by_day.get(day, []))
+        info.update({
+            "date": day.isoformat(),
+            "weekday": WEEKDAY_NAMES[day.weekday()],
+            "is_future": day > today,
+            "is_today": day == today,
+        })
+        days.append(info)
+
+    totals = {
+        key: sum(d.get(key, 0) for d in days)
+        for key in ("attended", "absent", "leave", "holiday", "weekend",
+                    "late", "needs_review", "missing_out", "worked_minutes")
+    }
+    return {
+        "year": year, "month": month,
+        "employees": len(employees),
+        "days": days,
+        "totals": totals,
+    }
 
 
 @router.get("/employee/{employee_id}", response_model=list[AttendanceDayOut])

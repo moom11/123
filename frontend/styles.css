@@ -591,6 +591,9 @@ html[dir="ltr"] .layout.mini .nav a::after{right:auto;left:calc(100% + 10px);tra
 .timeline .ev.BREAK_START::before{background:var(--warn)}
 .timeline .ev.BREAK_END::before{background:var(--secondary,#14b8a6)}
 .timeline .ev.CLOCK_OUT::before{background:var(--muted)}
+.timeline .ev.dropped::before{background:var(--danger);opacity:.7}
+.calendar .day.today{outline:2px solid var(--primary);outline-offset:1px}
+.calendar .day.weekend{background:var(--bg-2,#f1f5f9)}
 .timeline .ev b{font-size:13.5px}
 .timeline .ev span{font-size:12px;color:var(--muted);margin-inline-start:8px}
 .status-card .hint{margin-top:10px;font-size:12px;opacity:.9;text-align:center;position:relative}

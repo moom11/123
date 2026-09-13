@@ -326,6 +326,7 @@ class Punch(Base):
     employee: Mapped[Employee | None] = relationship()
     device: Mapped[Device | None] = relationship()
     site: Mapped[WorkSite | None] = relationship()
+    deleted_by: Mapped["User | None"] = relationship(foreign_keys=[deleted_by_id])
 
 
 class AttendanceDay(Base):

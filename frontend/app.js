@@ -27,6 +27,7 @@ const PAGES = [
   { id: 'carryovers', title: 'المستحقات المرحّلة', icon: 'money', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
   { id: 'punchRequests', title: 'طلبات البصمة', icon: 'edit', group: 'الحضور', roles: ['admin','hr','manager'] },
   { id: 'overtime',   title: 'الوقت الإضافي',  icon: 'bolt', group: 'الحضور', roles: ['admin','hr','manager'] },
+  { id: 'attendanceCalendar', title: 'جدول الحضور', icon: 'calendar', group: 'الحضور', roles: ['admin','hr','manager'] },
   { id: 'myOvertime', title: 'وقتي الإضافي',   icon: 'bolt', group: 'عام', roles: ['employee'] },
   { id: 'requests',   title: 'طلبات الموظفين', icon: 'documents', group: 'الإجازات', roles: ['admin','hr','manager'] },
   { id: 'employees',  title: 'الموظفون',       icon: 'employees', group: 'شؤون الموظفين', roles: ['admin','hr','manager'] },
@@ -1763,6 +1764,7 @@ views.attendance = async () => {
         ${Object.entries(DAY_STATUS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
       <button class="btn" id="attLoad">عرض</button>
       <button class="btn ghost" id="attExport">تصدير CSV</button>
+      <button class="btn ghost" onclick="go('attendanceCalendar')">${icon('calendar')} جدول الحضور</button>
       ${isHR() ? '<button class="btn gray" id="attRecompute">إعادة احتساب</button>' : ''}
       ${isHR() ? '<button class="btn ok" id="attManual">بصمة يدوية</button>' : ''}
       ${isHR() ? '<button class="btn gray" id="attBulk">تسجيل حضور جماعي</button>' : ''}
@@ -1811,7 +1813,9 @@ views.attendance = async () => {
       ['الموظف', 'وقت الحضور', 'وقت الانصراف', 'في المقر', 'استراحة', 'ساعات فعلية',
        'تأخير (د)', 'خروج مبكر (د)', 'إضافي (د)', 'الحالة', 'ملاحظة'],
       rows,
-      (r) => `<tr${r.status === 'needs_review' || r.break_overrun_minutes ? ' class="warn-row"' : ''}>
+      (r) => `<tr${r.status === 'needs_review' || r.break_overrun_minutes ? ' class="warn-row"' : ''}
+          style="cursor:pointer" title="اضغط لعرض بصمات هذا اليوم"
+          onclick="dayEventsSheet(${r.employee_id},'${el('attDate').value}','${esc(r.employee_name || '')}')">
         <td><div style="display:flex;align-items:center;gap:9px">${avatar(r.employee_name, 'sm')}
           <div><div style="font-weight:600">${esc(r.employee_name)}</div>
           <div class="muted" style="font-size:11.5px">${esc(r.employee_code)}${
@@ -1833,8 +1837,11 @@ views.attendance = async () => {
       const count = (st) => rows.filter((r) => r.state === st).length;
       el('liveCount').textContent =
         `${count('in')} داخل العمل · ${count('break')} في استراحة · ${count('out')} خارج العمل`;
+      const day = el('attDate') ? el('attDate').value : today();
       el('liveGrid').innerHTML = rows.length ? rows.map((r) => `
-        <div class="live-card ${r.state}${r.needs_review || r.break_overrun_minutes ? ' alarm' : ''}">
+        <div class="live-card ${r.state}${r.needs_review || r.break_overrun_minutes ? ' alarm' : ''}"
+            style="cursor:pointer" title="اضغط لعرض بصمات اليوم"
+            onclick="dayEventsSheet(${r.employee_id},'${day}','${esc(r.employee_name || '')}')">
           <span class="dot"></span>
           <div class="lt"><b>${esc(r.employee_name)}</b>
             <span>${esc(r.state_label)}${r.since_minutes ? ' — منذ ' + r.since_minutes + ' دقيقة' : ''}</span>
@@ -1973,14 +1980,43 @@ function breakCell(row) {
 /** سلسلة أحداث يوم واحد لموظف: ماذا كانت كل بصمة وما الحالة بعدها */
 async function dayEventsSheet(employeeId, day, name) {
   let events = [];
+  let punches = [];
+  let sheet = null;
   try {
-    events = await api(
-      `/api/attendance/events?employee_id=${employeeId}&date_from=${day}&date_to=${day}`);
+    [events, punches, sheet] = await Promise.all([
+      api(`/api/attendance/events?employee_id=${employeeId}&date_from=${day}&date_to=${day}`),
+      api(`/api/attendance/punches?employee_id=${employeeId}&date_from=${day}&date_to=${day}&limit=100`)
+        .catch(() => []),
+      api(`/api/attendance/employee/${employeeId}?date_from=${day}&date_to=${day}`)
+        .then((r) => r[0] || null).catch(() => null),
+    ]);
   } catch (e) { return toast(e.message, 'err'); }
-  events.reverse();   // الأقدم أولاً
+  events.reverse();                                      // الأقدم أولاً
+  punches = punches.slice().sort((a, b) => (a.punch_time < b.punch_time ? -1 : 1));
+  const counted = events.length;
+  const dropped = punches.filter((p) => p.deleted_at).length;
+  const ignored = Math.max(0, punches.length - dropped - counted);
+
+  const summary = sheet ? `
+    <div class="stat-row" style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:12px">
+      <span class="chip">${icon('clock', 'sm')} في المقر ${hours(sheet.presence_minutes)}</span>
+      <span class="chip">${icon('coffee', 'sm')} استراحة ${sheet.break_minutes || 0} د</span>
+      <span class="chip">${icon('check', 'sm')} فعلية ${hours(sheet.worked_minutes)}</span>
+      ${sheet.late_minutes ? `<span class="chip">تأخير ${sheet.late_minutes} د</span>` : ''}
+      ${sheet.overtime_minutes ? `<span class="chip">إضافي ${sheet.overtime_minutes} د</span>` : ''}
+      <span class="chip">${esc(sheet.shift_label || 'بلا وردية')}</span>
+    </div>
+    <div class="help" style="margin-bottom:12px">
+      الحساب: <b>في المقر ${hours(sheet.presence_minutes)}</b> −
+      <b>استراحة ${sheet.break_minutes || 0} دقيقة</b> =
+      <b>${hours(sheet.worked_minutes)} ساعة فعلية</b>.</div>` : '';
+
   modal({
-    title: `أحداث ${name || ''} — ${day}`,
-    body: events.length ? `<div class="timeline">${events.map((e) => `
+    title: `يوم ${name || ''} — ${day}`,
+    width: 680,
+    body: `${summary}
+      <h4 style="margin:0 0 8px;font-size:13.5px">كيف فُسِّرت البصمات</h4>
+      ${events.length ? `<div class="timeline">${events.map((e) => `
         <div class="ev ${e.event_type}">
           <b>${fmtTime(e.event_time)} — ${esc(e.event_label || EVENT_LABELS[e.event_type] || '')}</b>
           <span>${esc(WORK_STATES[e.state_before] || '')} ← ${esc(e.state_after_label || '')}</span>
@@ -1989,7 +2025,29 @@ async function dayEventsSheet(employeeId, day, name) {
               e.site_name ? ' · ' + esc(e.site_name) : ''}${
               e.received_at ? ' · استُلمت ' + fmtDateTime(e.received_at) : ''}</div>
         </div>`).join('')}</div>`
-      : '<div class="empty">لا أحداث في هذا اليوم</div>',
+        : '<div class="empty">لا أحداث في هذا اليوم</div>'}
+
+      <h4 style="margin:16px 0 8px;font-size:13.5px">البصمات الخام كما وصلت
+        <span class="muted" style="font-weight:400">(${punches.length})</span></h4>
+      ${punches.length ? `<div class="timeline">${punches.map((p) => `
+        <div class="ev ${p.deleted_at ? 'dropped' : ''}">
+          <b${p.deleted_at ? ' style="text-decoration:line-through;opacity:.75"' : ''}>
+            ${fmtTime(p.punch_time)} — ${esc(SOURCES[p.source] || p.source)}</b>
+          <span>${p.device_name ? esc(p.device_name) : 'بلا جهاز'}${
+            p.site_name ? ' · ' + esc(p.site_name) : ''}${
+            p.intent ? ' · نية: ' + esc(p.intent) : ''}</span>
+          ${p.deleted_at ? `<div class="muted" style="font-size:11.5px;margin-top:3px;color:var(--danger)">
+            مستبعدة من الحساب — ${esc(p.deleted_by || 'غير معروف')} في
+            ${String(p.deleted_at).replace('T', ' ').slice(0, 16)}
+            ${p.delete_reason ? '<br>السبب: ' + esc(p.delete_reason) : ''}</div>` : ''}
+        </div>`).join('')}</div>`
+        : '<div class="empty">لا بصمات خام</div>'}
+
+      <div class="help" style="margin-top:12px">
+        وصلت <b>${punches.length}</b> بصمة: احتُسبت <b>${counted}</b>${
+          ignored ? `، تُجوهلت <b>${ignored}</b> كتكرار خلال ثوانٍ` : ''}${
+          dropped ? `، واستُبعدت <b>${dropped}</b> بقرار موثّق` : ''}.
+        <b>ولا تُحذف بصمة من القاعدة أبداً</b> — الاستبعاد يبقيها ظاهرة هنا بسببه ومن نفّذه.</div>`,
     footer: '<button class="btn gray" data-close>إغلاق</button>',
   });
 }
@@ -2080,6 +2138,141 @@ async function openAuthedDocument(url, fallbackTitle = 'مستند') {
 }
 window.printPayslip = (id) => openAuthedDocument(`/api/payroll/payslips/${id}/print`, 'قسيمة راتب');
 window.printRun = (id) => openAuthedDocument(`/api/payroll/runs/${id}/print`, 'قسائم الرواتب');
+
+/* ------------------------------ جدول الحضور (تقويم الشهر) ------------------------------ */
+views.attendanceCalendar = async () => {
+  const { departments } = await loadLookups(true);
+  const now = new Date();
+  render(`
+    <div class="card"><div class="card-body inline">
+      <div class="field"><label>الشهر</label><select id="acMonth">${
+        MONTHS.map((m, i) => `<option value="${i + 1}" ${i === now.getMonth() ? 'selected' : ''}>${m}</option>`).join('')
+      }</select></div>
+      <div class="field"><label>السنة</label><input type="number" id="acYear" value="${now.getFullYear()}" /></div>
+      <div class="field"><label>الإدارة</label><select id="acDep"><option value="">الكل</option>${
+        options(departments)}</select></div>
+      <button class="btn" id="acLoad">عرض</button>
+      <span class="help">اضغط على أي يوم لترى من داوم ومن غاب فيه بالتفصيل.</span>
+    </div></div>
+    <div class="grid cols-4 stagger" id="acKpis"></div>
+    <div class="card"><div class="card-head"><h3 id="acTitle">تقويم الحضور</h3>
+      <div class="legend">
+        <span><i style="background:#dcfce7"></i>حضور كامل</span>
+        <span><i style="background:#fef3c7"></i>فيه تأخير</span>
+        <span><i style="background:#fee2e2"></i>فيه غياب</span>
+        <span><i style="background:#e2e8f0"></i>راحة/عطلة</span>
+      </div></div>
+      <div class="card-body" id="acCal"><div class="sk tall"></div></div></div>
+    <div id="acDay"></div>`);
+
+  let current = { days: [], employees: 0 };
+
+  const load = async () => {
+    const year = Number(el('acYear').value);
+    const month = Number(el('acMonth').value);
+    const dep = el('acDep').value;
+    const data = await api(
+      `/api/attendance/calendar?year=${year}&month=${month}${dep ? '&department_id=' + dep : ''}`);
+    current = data;
+    el('acTitle').textContent = `تقويم الحضور — ${MONTHS[month - 1]} ${year} (${data.employees} موظف)`;
+
+    const t = data.totals || {};
+    el('acKpis').innerHTML = `
+      <div class="kpi ok"><div class="label">أيام حضور<span class="ico">${icon('check')}</span></div>
+        <div class="value ok">${t.attended || 0}</div>
+        <div class="foot">مجموع حضور الموظفين في الشهر</div></div>
+      <div class="kpi danger"><div class="label">أيام غياب<span class="ico">${icon('alert')}</span></div>
+        <div class="value danger">${t.absent || 0}</div></div>
+      <div class="kpi warn"><div class="label">تحتاج مراجعة<span class="ico">${icon('info')}</span></div>
+        <div class="value warn">${(t.needs_review || 0) + (t.missing_out || 0)}</div>
+        <div class="foot">استراحة مفتوحة أو انصراف ناقص</div></div>
+      <div class="kpi info"><div class="label">ساعات العمل<span class="ico">${icon('clock')}</span></div>
+        <div class="value info">${hours(t.worked_minutes || 0)}</div>
+        <div class="foot">مجموع الساعات الفعلية</div></div>`;
+
+    const first = new Date(year, month - 1, 1);
+    let cells = '';
+    for (let i = 0; i < first.getDay(); i++) cells += '<div class="day blank"></div>';
+    data.days.forEach((d) => {
+      const n = Number(d.date.slice(-2));
+      let tone = '';
+      if (d.is_future || !d.records) tone = '';
+      else if (!d.attended && d.off) tone = 'weekend';
+      else if (d.absent) tone = 'absent';
+      else if (d.late || d.flagged) tone = 'late';
+      else if (d.attended) tone = 'present';
+      else tone = 'weekend';
+      const summary = d.is_future ? 'لم يحن'
+        : !d.records ? '—'
+        : (!d.attended && d.off) ? (d.holiday ? 'عطلة رسمية' : 'راحة')
+        : `${d.attended} حاضر${d.absent ? ` · ${d.absent} غائب` : ''}`;
+      cells += `<div class="day ${tone}${d.is_today ? ' today' : ''}" style="cursor:pointer"
+          onclick="openAttendanceDay('${d.date}')" title="${d.weekday} ${d.date}">
+          <span class="n">${n}</span>
+          <span class="s">${summary}</span>
+          ${d.flagged ? '<span class="s" style="color:var(--danger)">⚑ ' + d.flagged + '</span>' : ''}
+        </div>`;
+    });
+    el('acCal').innerHTML =
+      `<div class="calendar">${CAL_DOW.map((x) => `<div class="dow">${x}</div>`).join('')}${cells}</div>`;
+  };
+
+  window.openAttendanceDay = async (iso) => {
+    const dep = el('acDep').value;
+    el('acDay').innerHTML = `<div class="card"><div class="card-head"><h3>كشف ${iso}</h3></div>
+      <div class="card-body"><div class="sk-rows">${'<div class="sk line"></div>'.repeat(4)}</div></div></div>`;
+    el('acDay').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    try {
+      const rows = await api(
+        `/api/attendance/daily?work_date=${iso}${dep ? '&department_id=' + dep : ''}`);
+      // الملخص من صفوف اليوم نفسها، فلا يعتمد على شهر التقويم المعروض
+      const meta = current.days.find((d) => d.date === iso) || {};
+      const workedMinutes = rows.reduce((t, r) => t + (r.worked_minutes || 0), 0);
+      const groups = [
+        ['حضروا', rows.filter((r) => ['present', 'late', 'missing_out'].includes(r.status)), 'ok'],
+        ['غابوا', rows.filter((r) => r.status === 'absent'), 'danger'],
+        ['إجازة أو عطلة', rows.filter((r) => ['leave', 'holiday', 'weekend'].includes(r.status)), ''],
+        ['تحتاج مراجعة', rows.filter((r) => r.status === 'needs_review'), 'warn'],
+      ].filter(([, list]) => list.length);
+
+      el('acDay').innerHTML = `<div class="card">
+        <div class="card-head"><h3>كشف ${esc(meta.weekday || '')} ${iso}</h3>
+          <span class="muted">${rows.length} موظف · ${hours(workedMinutes)} ساعة عمل</span></div>
+        <div class="card-body">
+          ${groups.map(([title, list, tone]) => `
+            <h4 style="margin:14px 0 8px;font-size:13.5px" class="${tone}">${title}
+              <span class="muted" style="font-weight:400">(${list.length})</span></h4>
+            ${table(['الموظف', 'الوردية', 'الحضور', 'الانصراف', 'في المقر', 'استراحة',
+                     'ساعات فعلية', 'تأخير (د)', 'خروج مبكر (د)', 'إضافي (د)', 'الحالة', 'ملاحظة'],
+              list,
+              (r) => `<tr style="cursor:pointer"
+                  onclick="dayEventsSheet(${r.employee_id},'${iso}','${esc(r.employee_name || '')}')">
+                <td><div style="display:flex;align-items:center;gap:9px">${avatar(r.employee_name, 'sm')}
+                  <div><div style="font-weight:600">${esc(r.employee_name || '')}</div>
+                  <div class="muted" style="font-size:11.5px">${esc(r.employee_code || '')}</div></div></div></td>
+                <td class="muted" style="font-size:11.5px">${esc(r.shift_label || '—')}</td>
+                <td>${fmtTime(r.check_in)}</td><td>${fmtTime(r.check_out)}</td>
+                <td>${hours(r.presence_minutes)}</td>
+                <td>${breakCell(r)}</td>
+                <td>${hours(r.worked_minutes)}</td>
+                <td>${r.late_minutes || 0}</td><td>${r.early_leave_minutes || 0}</td>
+                <td>${r.overtime_minutes || 0}</td>
+                <td><span class="tag ${r.status}">${DAY_STATUS[r.status]}</span></td>
+                <td>${esc(r.note || '')}</td></tr>`)}`).join('')}
+          <div class="help">اضغط على أي صف لترى بصمات ذلك اليوم كما فُسِّرت واحدة واحدة.</div>
+        </div></div>`;
+      labelTableCells(el('acDay'));
+    } catch (e) {
+      el('acDay').innerHTML = `<div class="card"><div class="card-body">
+        <div class="empty">${esc(e.message)}</div></div></div>`;
+    }
+  };
+
+  el('acLoad').onclick = () => load().catch((e) => toast(e.message, 'err'));
+  ['acMonth', 'acYear', 'acDep'].forEach((id) =>
+    el(id).onchange = () => load().catch((e) => toast(e.message, 'err')));
+  await load().catch((e) => toast(e.message, 'err'));
+};
 
 /* ------------------------------ سجل البصمات ------------------------------ */
 views.punches = async () => {

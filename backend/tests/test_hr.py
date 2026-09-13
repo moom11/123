@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+from calendar import monthrange
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
@@ -1849,6 +1850,89 @@ def test_weekly_rest_days_control_attendance(client, auth):
     assert fridays and all(r["status"] == "weekend" for r in fridays)
     # بقية الأيام أيام عمل (بلا بصمات ⇒ غياب)
     assert any(r["status"] == "absent" for r in others)
+
+
+# ------------------------ جدول الحضور (تقويم الشهر) ------------------------
+def test_attendance_calendar_matches_the_daily_sheet(client, auth):
+    """أرقام التقويم هي نفسها أرقام كشف اليوم — لا حساب موازٍ."""
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية التقويم", "start_time": "08:00:00", "end_time": "16:00:00",
+        "grace_in_minutes": 10, "grace_out_minutes": 10, "work_days": "0,1,2,3,4,5,6",
+    }).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9812", "full_name": "موظف التقويم", "basic_salary": 9000,
+        "shift_id": shift["id"], "hire_date": "2024-01-01"}).json()
+
+    previous_end = date.today().replace(day=1) - timedelta(days=1)
+    year, month = previous_end.year, previous_end.month
+    _unlock_month(client, auth, year, month)
+    worked = date(year, month, 3)
+    _punch(client, auth, emp["id"], f"{worked}T08:02:00")
+    _punch(client, auth, emp["id"], f"{worked}T16:01:00")
+
+    cal = client.get(f"/api/attendance/calendar?year={year}&month={month}", headers=auth).json()
+    assert cal["year"] == year and cal["month"] == month
+    assert cal["employees"] > 0
+    assert len(cal["days"]) == monthrange(year, month)[1]
+
+    day_info = next(d for d in cal["days"] if d["date"] == str(worked))
+    sheet = client.get(f"/api/attendance/daily?work_date={worked}", headers=auth).json()
+    attended = sum(1 for r in sheet if r["status"] in ("present", "late", "missing_out"))
+    absent = sum(1 for r in sheet if r["status"] == "absent")
+    assert day_info["attended"] == attended, (day_info, attended)
+    assert day_info["absent"] == absent
+    assert day_info["records"] == len(sheet)
+    assert day_info["worked_minutes"] == sum(r["worked_minutes"] for r in sheet)
+    assert day_info["weekday"] and not day_info["is_future"]
+
+    # موظفنا ضمن الحاضرين في ذلك اليوم
+    mine = next(r for r in sheet if r["employee_code"] == "9812")
+    assert mine["status"] == "present" and mine["check_in"] and mine["check_out"]
+
+    # والمجاميع الشهرية تساوي مجموع الأيام
+    assert cal["totals"]["attended"] == sum(d["attended"] for d in cal["days"])
+    assert cal["totals"]["absent"] == sum(d["absent"] for d in cal["days"])
+
+
+def test_calendar_marks_future_days_and_rejects_bad_month(client, auth):
+    """الأيام القادمة تُعلَّم ولا تُحسب غياباً، والشهر الخاطئ يُرفض."""
+    today = date.today()
+    cal = client.get(f"/api/attendance/calendar?year={today.year}&month={today.month}",
+                     headers=auth).json()
+    future = [d for d in cal["days"] if d["is_future"]]
+    assert all(d["absent"] == 0 for d in future), "يوم لم يحن لا يُحتسب غياباً"
+    assert any(d["is_today"] for d in cal["days"])
+    assert client.get("/api/attendance/calendar?year=2026&month=13", headers=auth).status_code == 400
+
+
+def test_deleted_punch_stays_visible_with_its_reason(client, auth):
+    """البصمة المستبعدة لا تُمحى: تبقى ظاهرة بسبب استبعادها ومن نفّذه."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9813", "full_name": "موظف البصمة المستبعدة", "basic_salary": 6000,
+        "hire_date": "2024-01-01"}).json()
+    previous_end = date.today().replace(day=1) - timedelta(days=1)
+    _unlock_month(client, auth, previous_end.year, previous_end.month)
+    day = date(previous_end.year, previous_end.month, 4)
+    first = _punch(client, auth, emp["id"], f"{day}T08:00:00")
+    _punch(client, auth, emp["id"], f"{day}T16:00:00")
+
+    gone = client.request("DELETE", f"/api/attendance/punches/{first['id']}",
+                          headers=auth, json={"reason": "بصمة خاطئة لموظف آخر"})
+    assert gone.status_code == 200, gone.text
+
+    rows = client.get(
+        f"/api/attendance/punches?employee_id={emp['id']}&date_from={day}&date_to={day}",
+        headers=auth).json()
+    dropped = next(r for r in rows if r["id"] == first["id"])
+    assert dropped["deleted_at"], "السجل الخام يجب أن يبقى موجوداً"
+    assert dropped["delete_reason"] == "بصمة خاطئة لموظف آخر"
+    assert dropped["deleted_by"] == "admin"
+
+    # ولا تدخل الحساب
+    events = client.get(
+        f"/api/attendance/events?employee_id={emp['id']}&date_from={day}&date_to={day}",
+        headers=auth).json()
+    assert all(e["event_time"][11:16] != "08:00" for e in events)
 
 
 # ------------------------ الوقت الإضافي والاعتماد ------------------------

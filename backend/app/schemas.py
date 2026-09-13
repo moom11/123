@@ -195,6 +195,11 @@ class PunchOut(ORMModel):
     site_name: str | None = None
     distance_meters: float | None = None
     note: str | None = None
+    intent: str | None = None            # نيّة مصرَّح بها (حضور/استراحة/انصراف)
+    # البصمة الخام لا تُمحى: المستبعدة تبقى ظاهرة بسبب استبعادها ومن استبعدها
+    deleted_at: datetime | None = None
+    deleted_by: str | None = None
+    delete_reason: str | None = None
 
 
 class AttendanceDayOut(ORMModel):
