@@ -64,6 +64,28 @@ def monthly_deduction(db: Session, employee_id: int, year: int, month: int) -> f
     return round(sum(installment_for(loan, year, month) for loan in loans), 2)
 
 
+def deduction_lines(db: Session, employee_id: int, year: int, month: int) -> list[dict]:
+    """أقساط السلف المستحقة هذا الشهر، كل سلفة بسطرها."""
+    loans = db.scalars(
+        select(EmployeeLoan).where(
+            EmployeeLoan.employee_id == employee_id,
+            EmployeeLoan.status == LoanStatus.active,
+        )
+    ).all()
+    lines = []
+    for loan in loans:
+        amount = installment_for(loan, year, month)
+        if not amount:
+            continue
+        reason = (f"قسط سلفة بمبلغ {round(loan.amount or 0, 2):g} ريال "
+                  f"(بدأ خصمها {loan.start_month}/{loan.start_year})")
+        if loan.reason:
+            reason += f" — {loan.reason}"
+        lines.append({"kind": "loan", "work_date": None,
+                      "reason": reason[:255], "amount": round(amount, 2)})
+    return lines
+
+
 def summary(loan: EmployeeLoan, year: int, month: int) -> dict:
     """ملخص السلفة حتى شهر مرجعي: المسدد والمتبقي وعدد الأقساط."""
     rows = installments(loan)

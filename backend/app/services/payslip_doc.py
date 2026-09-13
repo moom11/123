@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import date
 from html import escape
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models import PayrollRun, PayrollStatus, Payslip
@@ -105,6 +106,38 @@ def _row(label: str, value: float, tone: str = "") -> str:
             f'<td class="num">{_money(value)}</td></tr>')
 
 
+def _deduction_detail(db: Session, slip: Payslip) -> str:
+    """بيان الخصومات: كل خصم بيومه وسببه — فلا يُخصم من الموظف ريال بلا تفسير."""
+    from ..models import PayslipDeduction
+    from .payroll import DEDUCTION_LABELS
+
+    rows = db.scalars(
+        select(PayslipDeduction)
+        .where(PayslipDeduction.payslip_id == slip.id)
+        .order_by(PayslipDeduction.work_date, PayslipDeduction.id)
+    ).all()
+    if not rows:
+        return ""
+    body = "".join(
+        f"<tr><td>{r.work_date.isoformat() if r.work_date else '—'}</td>"
+        f"<td>{escape(DEDUCTION_LABELS.get(r.kind, r.kind))}</td>"
+        f"<td>{escape(r.reason or '')}</td>"
+        f"<td class='num'>{_money(r.amount)}</td></tr>"
+        for r in rows
+    )
+    total = _money(round(sum(r.amount or 0 for r in rows), 2))
+    return f"""
+    <div class="detail">
+      <h3>بيان الخصومات</h3>
+      <table>
+        <thead><tr><th>اليوم</th><th>النوع</th><th>السبب</th><th class="num">ريال</th></tr></thead>
+        <tbody>{body}
+          <tr class="total"><td colspan="3">الإجمالي</td><td class="num">{total}</td></tr>
+        </tbody>
+      </table>
+    </div>"""
+
+
 def payslip_html(db: Session, slip: Payslip, run: PayrollRun) -> str:
     """قسيمة موظف واحد (جسم الصفحة فقط)."""
     employee = slip.employee
@@ -164,7 +197,8 @@ def payslip_html(db: Session, slip: Payslip, run: PayrollRun) -> str:
       <div><span>أيام الغياب</span><b>{slip.absent_days}</b></div>
       <div><span>إجازات مدفوعة</span><b>{_money(slip.paid_leave_days)}</b></div>
       <div><span>دقائق التأخير</span><b>{slip.late_minutes}</b></div>
-      <div><span>دقائق الإضافي</span><b>{slip.overtime_minutes}</b></div>
+      <div><span>إضافي معتمد (د)</span><b>{slip.overtime_minutes}</b></div>
+      <div><span>زائد غير معتمد (د)</span><b>{slip.unapproved_overtime_minutes or 0}</b></div>
     </div>
 
     <div class="tables">
@@ -182,6 +216,8 @@ def payslip_html(db: Session, slip: Payslip, run: PayrollRun) -> str:
       </table>
     </div>
 
+    {_deduction_detail(db, slip)}
+
     <div class="net">
       <div class="label">صافي الراتب المستحق</div>
       <div class="value">{_money(slip.net_pay)} <span>ريال</span></div>
@@ -198,6 +234,16 @@ def payslip_html(db: Session, slip: Payslip, run: PayrollRun) -> str:
     <footer>هذه القسيمة صادرة إلكترونياً من نظام الموارد البشرية — {escape(company)}</footer>
   </section>"""
 
+
+_DETAIL_STYLE = """
+  .detail { margin-top:14px; }
+  .detail h3 { margin:0 0 7px; font-size:13.5px; color:#334155; }
+  .detail table { width:100%; border-collapse:collapse; font-size:11.8px; }
+  .detail th, .detail td { border:1px solid #e2e8f0; padding:5px 7px; text-align:right; }
+  .detail thead th { background:#f1f5f9; }
+  .detail td.num, .detail th.num { text-align:left; font-variant-numeric:tabular-nums; }
+  .detail tr.total td { font-weight:700; background:#fef2f2; }
+"""
 
 _STYLE = """
   @page { size: A4; margin: 12mm; }
@@ -258,7 +304,7 @@ def document(db: Session, run: PayrollRun, slips: list[Payslip], title: str) -> 
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>{escape(title)}</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet" />
-<style>{_STYLE}</style>
+<style>{_STYLE}{_DETAIL_STYLE}</style>
 </head>
 <body>
   <div class="bar">

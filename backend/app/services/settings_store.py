@@ -48,6 +48,9 @@ DEFAULTS: dict[str, str] = {
     "payroll_workday_hours": "8",
     # معامل أجر الساعة الإضافية (نظام العمل السعودي: 1.5)
     "payroll_overtime_multiplier": "1.5",
+    # لا يُحتسب أي عمل إضافي إلا بعد اعتماد الإدارة. ما دون الاعتماد يُسجَّل
+    # «وقتاً زائداً» يظهر في البيان ولا يدخل الراتب.
+    "overtime_requires_approval": "true",
     # خصم التأخير: proportional = بمقدار زمن التأخير، none = بدون خصم
     "payroll_late_deduction_mode": "proportional",
     # خصم الخروج المبكر: proportional = بمقدار زمن الخروج المبكر، none = بدون خصم.

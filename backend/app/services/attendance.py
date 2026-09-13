@@ -22,7 +22,8 @@ from ..models import (
     RestDay,
     Shift,
 )
-from . import month_lock, workstate
+from . import month_lock, overtime as overtime_service
+from . import workstate
 from .policies import Policy, resolve_many
 
 DEFAULT_SHIFT_START = time(8, 0)
@@ -398,6 +399,11 @@ def recompute(
 
             _save_events(db, emp, day, session)
             _save_breaks(db, emp, day, session)
+            # الوقت بعد نهاية الدوام يُرصد بانتظار اعتماد الإدارة، ولا يدخل الراتب قبله
+            overtime_service.sync_day(
+                db, emp.id, day, data["overtime_minutes"],
+                shift_end=day_rules.scheduled_out(day), check_out=data["check_out"],
+            )
             overrun = session.overrun_minutes(policy)
             if overrun and not session.open_break:
                 overruns.append((emp, day, overrun))

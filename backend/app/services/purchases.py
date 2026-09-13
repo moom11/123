@@ -28,6 +28,18 @@ def monthly_deduction(db: Session, employee_id: int, year: int, month: int) -> f
     return round(sum(row.amount or 0 for row in month_rows(db, employee_id, year, month)), 2)
 
 
+def deduction_lines(db: Session, employee_id: int, year: int, month: int) -> list[dict]:
+    """فواتير مشتريات الموظف هذا الشهر، كل فاتورة بيومها ووصفها."""
+    lines = []
+    for row in sorted(month_rows(db, employee_id, year, month), key=lambda r: r.purchase_date):
+        if not row.amount:
+            continue
+        reason = f"مشتريات: {row.description}" if row.description else "مشتريات على حساب الموظف"
+        lines.append({"kind": "purchase", "work_date": row.purchase_date,
+                      "reason": reason[:255], "amount": round(row.amount, 2)})
+    return lines
+
+
 def deduction_until(db: Session, employee_id: int, year: int, month: int, until: date) -> float:
     """مجموع المشتريات من بداية الشهر حتى تاريخ محدد (لحساب المستحق حتى اليوم)."""
     return round(

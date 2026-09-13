@@ -12,8 +12,23 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Employee, EmployeeStatus, PayrollRun, PayrollStatus, Payslip, Role, User
-from ..schemas import PayrollRunOut, PayslipAdjust, PayslipOut, SalaryToDateOut
+from ..models import (
+    Employee,
+    EmployeeStatus,
+    PayrollRun,
+    PayrollStatus,
+    Payslip,
+    PayslipDeduction,
+    Role,
+    User,
+)
+from ..schemas import (
+    DeductionLineOut,
+    PayrollRunOut,
+    PayslipAdjust,
+    PayslipOut,
+    SalaryToDateOut,
+)
 from ..security import (
     can_view_employee,
     get_current_user,
@@ -58,6 +73,7 @@ def payslip_out(slip: Payslip) -> PayslipOut:
         late_minutes=slip.late_minutes,
         early_leave_minutes=slip.early_leave_minutes or 0,
         overtime_minutes=slip.overtime_minutes,
+        unapproved_overtime_minutes=slip.unapproved_overtime_minutes or 0,
         absence_deduction=slip.absence_deduction,
         late_deduction=slip.late_deduction,
         early_leave_deduction=slip.early_leave_deduction or 0,
@@ -316,6 +332,71 @@ def my_payslips(db: Session = Depends(get_db), user: User = Depends(get_current_
         )
     ).all()
     return [payslip_out(s) for s in sorted(slips, key=lambda s: s.run_id, reverse=True)]
+
+
+def deduction_out(row: PayslipDeduction, employee_name: str | None = None) -> DeductionLineOut:
+    return DeductionLineOut(
+        id=row.id,
+        employee_id=row.employee_id,
+        employee_name=employee_name,
+        year=row.year,
+        month=row.month,
+        kind=row.kind,
+        kind_label=service.DEDUCTION_LABELS.get(row.kind, row.kind),
+        work_date=row.work_date,
+        reason=row.reason,
+        amount=row.amount,
+    )
+
+
+@router.get("/payslips/{payslip_id}/deductions", response_model=list[DeductionLineOut])
+def payslip_deductions(
+    payslip_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    """تفصيل خصومات القسيمة: كل خصم بيومه وسببه ومبلغه."""
+    slip = db.get(Payslip, payslip_id)
+    if not slip:
+        raise HTTPException(status_code=404, detail="القسيمة غير موجودة")
+    if not can_view_employee(user, slip.employee_id, db):
+        raise HTTPException(status_code=403, detail="لا تملك صلاحية عرض هذه القسيمة")
+    if user.role == Role.employee:
+        run = db.get(PayrollRun, slip.run_id)
+        if not run or run.status != PayrollStatus.approved:
+            raise HTTPException(status_code=403, detail="القسيمة غير معتمدة بعد")
+    rows = db.scalars(
+        select(PayslipDeduction)
+        .where(PayslipDeduction.payslip_id == slip.id)
+        .order_by(PayslipDeduction.work_date, PayslipDeduction.id)
+    ).all()
+    name = slip.employee.full_name if slip.employee else None
+    return [deduction_out(r, name) for r in rows]
+
+
+@router.get("/deductions", response_model=list[DeductionLineOut])
+def employee_deductions(
+    employee_id: int,
+    year: int | None = None,
+    month: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """خصومات موظف كما تظهر في ملفه: بأي يوم ولأي سبب وكم."""
+    if not can_view_employee(user, employee_id, db):
+        raise HTTPException(status_code=403, detail="لا تملك صلاحية عرض هذا الموظف")
+    stmt = select(PayslipDeduction).where(PayslipDeduction.employee_id == employee_id)
+    if year:
+        stmt = stmt.where(PayslipDeduction.year == year)
+    if month:
+        stmt = stmt.where(PayslipDeduction.month == month)
+    rows = db.scalars(
+        stmt.order_by(
+            PayslipDeduction.year.desc(), PayslipDeduction.month.desc(),
+            PayslipDeduction.work_date, PayslipDeduction.id,
+        ).limit(500)
+    ).all()
+    emp = db.get(Employee, employee_id)
+    name = emp.full_name if emp else None
+    return [deduction_out(r, name) for r in rows]
 
 
 @router.get("/payslips/{payslip_id}/print", response_class=HTMLResponse)

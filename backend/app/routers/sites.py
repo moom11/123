@@ -121,6 +121,7 @@ def _settings_out(values: dict) -> SettingsOut:
         payroll_days_per_month=int(float(values["payroll_days_per_month"])),
         payroll_workday_hours=int(float(values["payroll_workday_hours"])),
         payroll_overtime_multiplier=float(values["payroll_overtime_multiplier"]),
+        overtime_requires_approval=values.get("overtime_requires_approval") != "false",
         payroll_late_deduction_mode=values["payroll_late_deduction_mode"],
         payroll_early_leave_deduction_mode=(
             values.get("payroll_early_leave_deduction_mode") or "proportional"

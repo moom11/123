@@ -49,6 +49,20 @@ def totals_for(db: Session, employee_id: int) -> tuple[float, float]:
     return earning, deduction
 
 
+def deduction_lines(db: Session, employee_id: int) -> list[dict]:
+    """الخصومات المرحّلة غير المصروفة، كل حركة بشهرها وسببها."""
+    lines = []
+    for row in pending_for(db, employee_id):
+        if row.kind is not CarryoverKind.deduction or not row.amount:
+            continue
+        reason = f"خصم مرحّل من {row.source_month}/{row.source_year}"
+        if row.reason:
+            reason += f" — {row.reason}"
+        lines.append({"kind": "carryover", "work_date": None,
+                      "reason": reason[:255], "amount": round(row.amount, 2)})
+    return lines
+
+
 def mark_paid(db: Session, run: PayrollRun) -> int:
     """يعلّم الحركات غير المصروفة «مصروفة» عند اعتماد المسير.
 

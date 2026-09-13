@@ -11,6 +11,7 @@ from .models import (
     EmployeeStatus,
     LeaveStatus,
     LoanStatus,
+    OvertimeStatus,
     PayrollStatus,
     PenaltyAction,
     PunchSource,
@@ -346,6 +347,7 @@ class SettingsOut(BaseModel):
     payroll_days_per_month: int = 30
     payroll_workday_hours: int = 8
     payroll_overtime_multiplier: float = 1.5
+    overtime_requires_approval: bool = True
     payroll_late_deduction_mode: str = "proportional"
     payroll_early_leave_deduction_mode: str = "proportional"
     payroll_absence_multiplier: float = 1
@@ -383,6 +385,7 @@ class SettingsIn(BaseModel):
     payroll_days_per_month: int | None = Field(default=None, ge=20, le=31)
     payroll_workday_hours: int | None = Field(default=None, ge=1, le=16)
     payroll_overtime_multiplier: float | None = Field(default=None, ge=1, le=3)
+    overtime_requires_approval: bool | None = None
     payroll_late_deduction_mode: str | None = None
     payroll_early_leave_deduction_mode: str | None = None
     payroll_absence_multiplier: float | None = Field(default=None, ge=0, le=3)
@@ -791,6 +794,7 @@ class PayslipOut(ORMModel):
     late_minutes: int
     early_leave_minutes: int = 0
     overtime_minutes: int
+    unapproved_overtime_minutes: int = 0
     absence_deduction: float
     late_deduction: float
     early_leave_deduction: float = 0
@@ -987,6 +991,57 @@ class RestDayOut(ORMModel):
     employee_code: str | None = None
     rest_date: date
     note: str | None = None
+
+
+# ------------------------------ الوقت الإضافي ------------------------------
+class OvertimeOut(ORMModel):
+    id: int
+    employee_id: int
+    employee_name: str | None = None
+    employee_code: str | None = None
+    work_date: date
+    minutes: int = 0                 # ما رصده النظام بعد نهاية الدوام
+    approved_minutes: int = 0        # ما اعتمدته الإدارة (وهو وحده ما يُصرف)
+    status: OvertimeStatus
+    status_label: str = ""
+    shift_end: datetime | None = None
+    check_out: datetime | None = None
+    reason: str | None = None
+    decided_by: str | None = None    # اسم من اعتمد أو رفض
+    decided_at: datetime | None = None
+    decision_note: str | None = None
+
+
+class OvertimeDecision(BaseModel):
+    approve: bool
+    minutes: int | None = Field(default=None, ge=0)   # اعتماد جزئي، والفراغ = كل المرصود
+    note: str | None = Field(default=None, max_length=255)
+
+
+class OvertimeSummary(BaseModel):
+    year: int
+    month: int
+    pending_count: int = 0
+    pending_minutes: int = 0
+    approved_count: int = 0
+    approved_minutes: int = 0
+    rejected_count: int = 0
+    rejected_minutes: int = 0
+    requires_approval: bool = True
+
+
+# ------------------------------ تفصيل الخصومات ------------------------------
+class DeductionLineOut(ORMModel):
+    id: int | None = None
+    employee_id: int
+    employee_name: str | None = None
+    year: int
+    month: int
+    kind: str
+    kind_label: str = ""
+    work_date: date | None = None
+    reason: str
+    amount: float = 0
 
 
 class RestSummaryRow(BaseModel):

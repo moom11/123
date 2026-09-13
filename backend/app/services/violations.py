@@ -164,3 +164,28 @@ def monthly_deduction(db: Session, employee_id: int, year: int, month: int) -> f
         )
     ).all()
     return round(sum(v.penalty_amount or 0 for v in rows), 2)
+
+
+def deduction_lines(db: Session, employee_id: int, year: int, month: int) -> list[dict]:
+    """خصومات المخالفات المعتمدة مفصّلة: يوم المخالفة ونوعها وجزاؤها."""
+    start = date(year, month, 1)
+    end = date(year + (month == 12), (month % 12) + 1, 1) - timedelta(days=1)
+    rows = db.scalars(
+        select(Violation).where(
+            Violation.employee_id == employee_id,
+            Violation.status == ViolationStatus.approved,
+            Violation.occurred_on >= start,
+            Violation.occurred_on <= end,
+        ).order_by(Violation.occurred_on)
+    ).all()
+    lines = []
+    for v in rows:
+        if not v.penalty_amount:
+            continue
+        name = v.violation_type.name if v.violation_type else "مخالفة"
+        reason = f"مخالفة: {name}"
+        if v.description:
+            reason += f" — {v.description}"
+        lines.append({"kind": "violation", "work_date": v.occurred_on,
+                      "reason": reason[:255], "amount": round(v.penalty_amount, 2)})
+    return lines

@@ -1851,6 +1851,246 @@ def test_weekly_rest_days_control_attendance(client, auth):
     assert any(r["status"] == "absent" for r in others)
 
 
+# ------------------------ الوقت الإضافي والاعتماد ------------------------
+def _overtime_rows(client, auth, employee_id):
+    return client.get(f"/api/overtime?employee_id={employee_id}", headers=auth).json()
+
+
+def _run_for(client, auth, year, month):
+    _unlock_month(client, auth, year, month)
+    res = client.post(f"/api/payroll/runs?year={year}&month={month}", headers=auth)
+    assert res.status_code in (200, 201), res.text
+    return res.json()
+
+
+def _slip_of(client, auth, run_id, code):
+    slips = client.get(f"/api/payroll/runs/{run_id}/payslips", headers=auth).json()
+    return next(s for s in slips if s["employee_code"] == code)
+
+
+def test_overtime_is_not_paid_until_management_approves(client, auth):
+    """العمل بعد نهاية الدوام يُرصد «بانتظار الموافقة» ولا يدخل الراتب قبل الاعتماد."""
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية الإضافي", "start_time": "08:00:00", "end_time": "16:00:00",
+        "grace_in_minutes": 10, "grace_out_minutes": 10, "work_days": "0,1,2,3,4,5,6",
+    }).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9796", "full_name": "موظف الإضافي", "basic_salary": 9600,
+        "shift_id": shift["id"], "hire_date": "2024-01-01"}).json()
+
+    previous_end = date.today().replace(day=1) - timedelta(days=1)
+    year, month = previous_end.year, previous_end.month
+    day = date(year, month, 12)
+    _unlock_month(client, auth, year, month)
+    _punch(client, auth, emp["id"], f"{day}T08:00:00")
+    _punch(client, auth, emp["id"], f"{day}T18:00:00")        # ساعتان بعد نهاية الدوام
+
+    sheet = client.get(f"/api/attendance/employee/{emp['id']}"
+                       f"?date_from={day}&date_to={day}", headers=auth).json()[0]
+    assert sheet["overtime_minutes"] == 120
+
+    # ١) يُرصد بانتظار الموافقة
+    rows = _overtime_rows(client, auth, emp["id"])
+    record = next(r for r in rows if r["work_date"] == str(day))
+    assert record["status"] == "pending" and record["status_label"] == "بانتظار الموافقة"
+    assert record["minutes"] == 120 and record["approved_minutes"] == 0
+    assert record["decided_by"] is None and record["decided_at"] is None
+
+    # ٢) ولا يدخل الراتب
+    run = _run_for(client, auth, year, month)
+    slip = _slip_of(client, auth, run["id"], "9796")
+    assert slip["overtime_amount"] == 0
+    assert slip["overtime_minutes"] == 0
+    assert slip["unapproved_overtime_minutes"] == 120
+
+    # ٣) الاعتماد يسجَّل باسم المعتمد ووقته
+    decided = client.post(f"/api/overtime/{record['id']}/decide", headers=auth,
+                          json={"approve": True, "note": "جرد المخزون"})
+    assert decided.status_code == 200, decided.text
+    body = decided.json()
+    assert body["status"] == "approved" and body["approved_minutes"] == 120
+    assert body["decided_by"] == "admin" and body["decided_at"]
+    assert body["decision_note"] == "جرد المخزون"
+
+    # ٤) وبعد الاعتماد يُحتسب مالياً
+    run = _run_for(client, auth, year, month)
+    slip = _slip_of(client, auth, run["id"], "9796")
+    assert slip["overtime_minutes"] == 120
+    assert slip["overtime_amount"] > 0
+    assert slip["unapproved_overtime_minutes"] == 0
+
+    # ٥) ولا يُبتّ فيه مرتين، ولا يُعاد حسابه إلى «بانتظار الموافقة» تلقائياً
+    again = client.post(f"/api/overtime/{record['id']}/decide", headers=auth,
+                        json={"approve": False})
+    assert again.status_code == 400 and "سبق البتّ" in again.json()["detail"]
+    client.post(f"/api/attendance/recompute?date_from={day}&date_to={day}"
+                f"&employee_id={emp['id']}", headers=auth)
+    still = next(r for r in _overtime_rows(client, auth, emp["id"])
+                 if r["work_date"] == str(day))
+    assert still["status"] == "approved" and still["approved_minutes"] == 120
+
+    # ٦) إعادة الفتح تصحّح قراراً خاطئاً
+    reopened = client.post(f"/api/overtime/{record['id']}/reopen", headers=auth).json()
+    assert reopened["status"] == "pending" and reopened["decided_by"] is None
+    logs = client.get("/api/audit-logs?entity=overtime", headers=auth).json()
+    assert any("إعادة فتح" in (r["detail"] or "") for r in logs)
+
+
+def test_overtime_rejected_and_partially_approved(client, auth):
+    """الرفض لا يُحتسب، والاعتماد الجزئي يُحتسب بقدره ولا يتجاوز المرصود."""
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية الإضافي الجزئي", "start_time": "08:00:00", "end_time": "16:00:00",
+        "grace_in_minutes": 10, "grace_out_minutes": 10, "work_days": "0,1,2,3,4,5,6",
+    }).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9797", "full_name": "موظف الإضافي الجزئي", "basic_salary": 9600,
+        "shift_id": shift["id"], "hire_date": "2024-01-01"}).json()
+
+    previous_end = date.today().replace(day=1) - timedelta(days=1)
+    year, month = previous_end.year, previous_end.month
+    _unlock_month(client, auth, year, month)
+    rejected_day, partial_day = date(year, month, 14), date(year, month, 15)
+    for day, out in ((rejected_day, "18:00:00"), (partial_day, "19:00:00")):
+        _punch(client, auth, emp["id"], f"{day}T08:00:00")
+        _punch(client, auth, emp["id"], f"{day}T{out}")
+
+    rows = {r["work_date"]: r for r in _overtime_rows(client, auth, emp["id"])}
+    assert rows[str(rejected_day)]["minutes"] == 120
+    assert rows[str(partial_day)]["minutes"] == 180
+
+    refused = client.post(f"/api/overtime/{rows[str(rejected_day)]['id']}/decide", headers=auth,
+                          json={"approve": False, "note": "لم يُطلب منه البقاء"}).json()
+    assert refused["status"] == "rejected" and refused["approved_minutes"] == 0
+    assert refused["decided_by"] == "admin" and refused["decision_note"] == "لم يُطلب منه البقاء"
+
+    # لا اعتماد لأكثر من المرصود
+    too_much = client.post(f"/api/overtime/{rows[str(partial_day)]['id']}/decide", headers=auth,
+                           json={"approve": True, "minutes": 300})
+    assert too_much.status_code == 400 and "أكثر من الوقت المرصود" in too_much.json()["detail"]
+
+    partial = client.post(f"/api/overtime/{rows[str(partial_day)]['id']}/decide", headers=auth,
+                          json={"approve": True, "minutes": 60}).json()
+    assert partial["approved_minutes"] == 60 and partial["minutes"] == 180
+
+    run = _run_for(client, auth, year, month)
+    slip = _slip_of(client, auth, run["id"], "9797")
+    assert slip["overtime_minutes"] == 60                       # المعتمد وحده
+    assert slip["unapproved_overtime_minutes"] == 240           # 120 مرفوضة + 120 لم تُعتمد
+
+    summary = client.get(f"/api/overtime/summary?year={year}&month={month}", headers=auth).json()
+    assert summary["requires_approval"] is True
+    assert summary["approved_minutes"] >= 60 and summary["rejected_minutes"] >= 120
+
+
+def test_employee_sees_own_overtime_status(client, auth):
+    """الموظف يرى وقته الإضافي وحالته، ولا يرى غيره."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9798", "full_name": "موظف يرى إضافيه", "basic_salary": 6000,
+        "phone": "0559990798", "hire_date": "2024-01-01"}).json()
+    previous_end = date.today().replace(day=1) - timedelta(days=1)
+    year, month = previous_end.year, previous_end.month
+    _unlock_month(client, auth, year, month)
+    day = date(year, month, 17)
+    _punch(client, auth, emp["id"], f"{day}T08:00:00")
+    _punch(client, auth, emp["id"], f"{day}T20:00:00")
+
+    token = client.post("/api/auth/login", data={
+        "username": "0559990798", "password": "0559990798"}).json()["access_token"]
+    fresh = client.post("/api/auth/change-password", headers={"Authorization": f"Bearer {token}"},
+                        json={"current_password": "0559990798", "new_password": "Extra@2026"})
+    h = {"Authorization": f"Bearer {fresh.json()['access_token']}"}
+
+    mine = client.get("/api/me/overtime", headers=h).json()
+    assert mine and all(r["employee_id"] == emp["id"] for r in mine)
+    assert mine[0]["status"] == "pending"
+    # ولا يعتمد لنفسه
+    assert client.post(f"/api/overtime/{mine[0]['id']}/decide", headers=h,
+                       json={"approve": True}).status_code == 403
+
+
+# ------------------------ تفصيل الخصومات ------------------------
+def test_payslip_deductions_show_day_and_reason(client, auth):
+    """كل خصم في القسيمة يُبيَّن بيومه وسببه ومبلغه، ويبقى في ملف الموظف."""
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية الخصومات", "start_time": "08:00:00", "end_time": "16:00:00",
+        "grace_in_minutes": 10, "grace_out_minutes": 10, "work_days": "0,1,2,3,4,5,6",
+    }).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9799", "full_name": "موظف الخصومات", "basic_salary": 9000,
+        "shift_id": shift["id"], "hire_date": "2024-01-01"}).json()
+
+    previous_end = date.today().replace(day=1) - timedelta(days=1)
+    year, month = previous_end.year, previous_end.month
+    _unlock_month(client, auth, year, month)
+    late_day = date(year, month, 8)
+    _punch(client, auth, emp["id"], f"{late_day}T09:00:00")   # تأخير 60 دقيقة
+    _punch(client, auth, emp["id"], f"{late_day}T15:40:00")   # وخروج مبكر 20 دقيقة
+
+    run = _run_for(client, auth, year, month)
+    slip = _slip_of(client, auth, run["id"], "9799")
+    lines = client.get(f"/api/payroll/payslips/{slip['id']}/deductions", headers=auth).json()
+    assert lines, "يجب أن تُفصَّل الخصومات"
+
+    by_kind = {}
+    for line in lines:
+        by_kind.setdefault(line["kind"], []).append(line)
+
+    late = next(x for x in by_kind["late"] if x["work_date"] == str(late_day))
+    assert "تأخير 60 دقيقة" in late["reason"] and late["amount"] > 0
+    assert late["kind_label"] == "تأخير"
+    early = next(x for x in by_kind["early_leave"] if x["work_date"] == str(late_day))
+    assert "20 دقيقة" in early["reason"] and early["amount"] > 0
+    assert by_kind.get("absence"), "أيام الغياب تُفصَّل بيومها"
+    assert all(x["work_date"] for x in by_kind["absence"])
+    assert all("غياب" in x["reason"] for x in by_kind["absence"])
+
+    # المجموع المفصّل يطابق إجمالي القسيمة
+    total_lines = round(sum(x["amount"] for x in lines), 2)
+    total_slip = round(
+        slip["absence_deduction"] + slip["late_deduction"] + slip["early_leave_deduction"]
+        + slip["unpaid_leave_deduction"] + slip["violation_deduction"]
+        + slip["loan_deduction"] + slip["purchases_deduction"]
+        + slip["open_break_deduction"] + slip["carryover_deduction"], 2)
+    assert abs(total_lines - total_slip) < 0.05, (total_lines, total_slip)
+
+    # وتظهر في ملف الموظف
+    in_file = client.get(
+        f"/api/payroll/deductions?employee_id={emp['id']}&year={year}&month={month}",
+        headers=auth).json()
+    assert len(in_file) == len(lines)
+    assert all(x["employee_name"] == "موظف الخصومات" for x in in_file)
+
+
+def test_violation_deduction_line_names_the_violation(client, auth):
+    """خصم المخالفة يُبيَّن باسم المخالفة ويومها لا كمبلغ مبهم."""
+    created = client.post("/api/employees", headers=auth, json={
+        "code": "9811", "full_name": "موظف المخالفة المفصّلة", "basic_salary": 6000,
+        "hire_date": "2024-01-01"})
+    assert created.status_code == 201, created.text
+    emp = created.json()
+    types = client.get("/api/violation-types", headers=auth).json()
+    vtype = next((t for t in types if t.get("level1_value")), types[0])
+
+    previous_end = date.today().replace(day=1) - timedelta(days=1)
+    year, month = previous_end.year, previous_end.month
+    _unlock_month(client, auth, year, month)
+    day = date(year, month, 9)
+    violation = client.post("/api/violations", headers=auth, json={
+        "employee_id": emp["id"], "violation_type_id": vtype["id"],
+        "occurred_on": str(day), "description": "تكرار التأخر"}).json()
+    client.post(f"/api/violations/{violation['id']}/approve", headers=auth,
+                json={"note": "معتمدة"})
+
+    run = _run_for(client, auth, year, month)
+    slip = _slip_of(client, auth, run["id"], "9811")
+    lines = client.get(f"/api/payroll/payslips/{slip['id']}/deductions", headers=auth).json()
+    if slip["violation_deduction"]:
+        line = next(x for x in lines if x["kind"] == "violation")
+        assert line["work_date"] == str(day)
+        assert vtype["name"] in line["reason"] and "تكرار التأخر" in line["reason"]
+        assert round(line["amount"], 2) == round(slip["violation_deduction"], 2)
+
+
 # ------------------------ قفل الشهر المعتمد ------------------------
 def test_approved_month_is_locked_against_attendance_changes(client, auth):
     """الشهر الذي اعتُمد مسيره لا تتغيّر بياناته — والمفتاح هو إلغاء الاعتماد."""
@@ -4028,14 +4268,14 @@ def test_early_leave_is_deducted_after_five_minutes_grace(client, auth):
         hourly = payroll_service._rates(db, 9600)[1]
         for code, (_, expected) in cases.items():
             emp = db.get(Employee, employees[code]["id"])
-            slip = payroll_service.compute_payslip(db, emp, day.year, day.month)
+            slip, _ = payroll_service.compute_payslip(db, emp, day.year, day.month)
             assert slip["early_leave_minutes"] == expected, code
             assert slip["early_leave_deduction"] == round((expected / 60) * hourly, 2), code
 
         # إيقاف الخصم من الإعدادات يوقفه فعلاً، والدقائق تبقى مسجَّلة للتقارير
         store.set_many(db, {"payroll_early_leave_deduction_mode": "none"})
         emp = db.get(Employee, employees["9101"]["id"])
-        slip = payroll_service.compute_payslip(db, emp, day.year, day.month)
+        slip, _ = payroll_service.compute_payslip(db, emp, day.year, day.month)
         assert slip["early_leave_minutes"] == 30 and slip["early_leave_deduction"] == 0
         store.set_many(db, {"payroll_early_leave_deduction_mode": "proportional"})
 

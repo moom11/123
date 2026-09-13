@@ -26,6 +26,8 @@ const PAGES = [
   { id: 'purchases',  title: 'مشتريات الموظفين', icon: 'cart', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
   { id: 'carryovers', title: 'المستحقات المرحّلة', icon: 'money', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
   { id: 'punchRequests', title: 'طلبات البصمة', icon: 'edit', group: 'الحضور', roles: ['admin','hr','manager'] },
+  { id: 'overtime',   title: 'الوقت الإضافي',  icon: 'bolt', group: 'الحضور', roles: ['admin','hr','manager'] },
+  { id: 'myOvertime', title: 'وقتي الإضافي',   icon: 'bolt', group: 'عام', roles: ['employee'] },
   { id: 'requests',   title: 'طلبات الموظفين', icon: 'documents', group: 'الإجازات', roles: ['admin','hr','manager'] },
   { id: 'employees',  title: 'الموظفون',       icon: 'employees', group: 'شؤون الموظفين', roles: ['admin','hr','manager'] },
   { id: 'documents',  title: 'الوثائق',        icon: 'documents', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
@@ -37,6 +39,10 @@ const PAGES = [
   { id: 'more',       title: 'المزيد',         icon: 'grid', group: 'عام', roles: ['employee'] },
   { id: 'account',    title: 'حسابي',          icon: 'key', group: 'الإدارة',  roles: ['admin','hr','manager','employee'] },
 ];
+const OT_STATUS = { pending: 'بانتظار الموافقة', approved: 'معتمد', rejected: 'مرفوض' };
+const OT_TAG = { pending: 'pending', approved: 'approved', rejected: 'rejected' };
+const DEDUCTION_TONE = { violation: 'danger', absence: 'danger', open_break: 'danger' };
+
 const NAV_GROUPS = ['عام', 'الحضور', 'الإجازات', 'شؤون الموظفين', 'الإدارة'];
 
 const DAY_STATUS = {
@@ -975,6 +981,17 @@ const options = (items, value, key = 'id', label = 'name') =>
 /* ------------------------------ لوحة التعليمات الجانبية ------------------------------ */
 /* شرح مختصر لكل شاشة: ماذا تفعل هنا، وما القواعد التي يطبّقها النظام خلفك. */
 const HELP = {
+  overtime: ['الوقت الإضافي', `
+    <h4>لا يُحتسب إضافي بلا اعتماد</h4>
+    <ul>
+      <li>العمل بعد نهاية الدوام يُسجَّل تلقائياً <b>وقتاً زائداً بانتظار الموافقة</b>، ولا يدخل الراتب.</li>
+      <li><b>الاعتماد</b> يحوّله إلى عمل إضافي معتمد يُحتسب مالياً بمعامل الإضافي المعتمد في الإعدادات.</li>
+      <li><b>الرفض</b> يبقيه مسجّلاً في السجل ولا يُصرف عنه شيء.</li>
+      <li>يمكن اعتماد <b>جزء</b> من الوقت المرصود، ولا يُقبل اعتماد أكثر منه.</li>
+      <li>كل قرار يُحفظ باسم من اتخذه وتاريخه ووقته في سجل التدقيق، فلا مطالبة لاحقة بساعات لم تُعتمد.</li>
+      <li>إعادة الاحتساب لا تغيّر قراراً اتُّخذ. لتصحيح قرار: <b>إعادة فتح</b> ثم البتّ من جديد.</li>
+    </ul>`],
+
   dashboard: ['لوحة المؤشرات', `
     <h4>${icon('dashboard')} ما هذه الشاشة</h4>
     <p>ملخّص يومك: من حضر، ومن تأخر، ومن غاب، والطلبات التي تنتظر قرارك.</p>
@@ -1475,6 +1492,7 @@ const MORE_LINKS = [
   ['purchases', 'cart', 'مشترياتي', 'فواتير تُخصم من راتبك'],
   ['documents', 'documents', 'وثائقي', 'الإقامة والعقد وغيرها'],
   ['schedule', 'calendar', 'جدولي', 'وردياتك وأيام راحتك'],
+  ['myOvertime', 'bolt', 'وقتي الإضافي', 'ما اعتُمد لك وما لم يُعتمد'],
   ['myProfile', 'idcard', 'بياناتي', 'تحديث جوالك وهويتك'],
   ['account', 'key', 'حسابي', 'كلمة المرور والإشعارات واللغة'],
 ];
@@ -3442,6 +3460,188 @@ views.loans = async () => {
   load();
 };
 
+/* ------------------------------ الوقت الإضافي ------------------------------ */
+const otHours = (minutes) => {
+  const m = Math.max(0, Math.round(minutes || 0));
+  return m >= 60 ? `${Math.floor(m / 60)} س ${m % 60 ? (m % 60) + ' د' : ''}`.trim() : `${m} د`;
+};
+
+views.overtime = async () => {
+  const manage = isHR();
+  const { employees } = await loadLookups();
+  const now = new Date();
+  render(`
+    <div class="card"><div class="card-body inline">
+      <div class="field"><label>الحالة</label><select id="otStatus">
+        <option value="pending" selected>بانتظار الموافقة</option>
+        <option value="approved">معتمد</option>
+        <option value="rejected">مرفوض</option>
+        <option value="">الكل</option></select></div>
+      <div class="field"><label>الموظف</label><select id="otEmp"><option value="">الكل</option>${
+        options(employees, '', 'id', 'full_name')}</select></div>
+      <div class="field"><label>من</label><input type="date" id="otFrom" /></div>
+      <div class="field"><label>إلى</label><input type="date" id="otTo" /></div>
+      <button class="btn" id="otLoad">عرض</button>
+      <span class="help">لا يُحتسب أي عمل إضافي في الراتب إلا بعد اعتماد الإدارة.</span>
+    </div></div>
+    <div class="grid cols-4 stagger" id="otKpis"></div>
+    <div class="card"><div class="card-head"><h3>سجل الوقت الإضافي</h3>
+      <span class="muted" id="otCount"></span></div>
+      <div id="otTable"><div class="sk-rows">${'<div class="sk line"></div>'.repeat(4)}</div></div></div>`);
+
+  const load = async () => {
+    const q = new URLSearchParams();
+    if (el('otStatus').value) q.set('status', el('otStatus').value);
+    if (el('otEmp').value) q.set('employee_id', el('otEmp').value);
+    if (el('otFrom').value) q.set('date_from', el('otFrom').value);
+    if (el('otTo').value) q.set('date_to', el('otTo').value);
+    const [rows, summary] = await Promise.all([
+      api('/api/overtime?' + q),
+      api(`/api/overtime/summary?year=${now.getFullYear()}&month=${now.getMonth() + 1}`),
+    ]);
+    el('otCount').textContent = `${rows.length} سجل`;
+    el('otKpis').innerHTML = `
+      <div class="kpi warn"><div class="label">بانتظار الموافقة<span class="ico">${icon('clock')}</span></div>
+        <div class="value warn">${summary.pending_count}</div>
+        <div class="foot">${otHours(summary.pending_minutes)} هذا الشهر</div></div>
+      <div class="kpi ok"><div class="label">معتمد<span class="ico">${icon('check')}</span></div>
+        <div class="value ok">${summary.approved_count}</div>
+        <div class="foot">${otHours(summary.approved_minutes)} تُحتسب في الراتب</div></div>
+      <div class="kpi danger"><div class="label">مرفوض<span class="ico">${icon('close')}</span></div>
+        <div class="value danger">${summary.rejected_count}</div>
+        <div class="foot">${otHours(summary.rejected_minutes)} لا تُحتسب</div></div>
+      <div class="kpi info"><div class="label">قاعدة الاحتساب<span class="ico">${icon('shield')}</span></div>
+        <div class="value info" style="font-size:16px">${
+          summary.requires_approval ? 'بالاعتماد فقط' : 'تلقائي'}</div>
+        <div class="foot">${summary.requires_approval
+          ? 'لا يُصرف إضافي بلا موافقة' : 'يُحتسب كل وقت زائد'}</div></div>`;
+
+    el('otTable').innerHTML = table(
+      ['الموظف', 'اليوم', 'نهاية الدوام', 'الانصراف', 'الوقت الزائد', 'المعتمد',
+       'الحالة', 'القرار', ''],
+      rows,
+      (r) => `<tr>
+        <td><div style="display:flex;align-items:center;gap:9px">${avatar(r.employee_name, 'sm')}
+          <div><div style="font-weight:600">${esc(r.employee_name || '')}</div>
+          <div class="muted" style="font-size:11.5px">${esc(r.employee_code || '')}</div></div></div></td>
+        <td>${r.work_date}</td>
+        <td>${r.shift_end ? fmtTime(r.shift_end) : '—'}</td>
+        <td>${r.check_out ? fmtTime(r.check_out) : '—'}</td>
+        <td>${otHours(r.minutes)}</td>
+        <td>${r.status === 'approved' ? otHours(r.approved_minutes) : '—'}</td>
+        <td><span class="tag ${OT_TAG[r.status]}">${esc(r.status_label || OT_STATUS[r.status])}</span></td>
+        <td>${r.decided_by ? `${esc(r.decided_by)}<div class="muted" style="font-size:11px">${
+          String(r.decided_at || '').replace('T', ' ').slice(0, 16)}</div>${
+          r.decision_note ? `<div class="muted" style="font-size:11px">${esc(r.decision_note)}</div>` : ''}`
+          : '—'}</td>
+        <td>${manage ? (r.status === 'pending'
+          ? `<button class="btn sm ok" onclick="decideOvertime(${r.id},true,${r.minutes})">اعتماد</button>
+             <button class="btn sm danger" onclick="decideOvertime(${r.id},false,${r.minutes})">رفض</button>`
+          : `<button class="btn sm ghost" onclick="reopenOvertime(${r.id})">إعادة فتح</button>`) : ''}</td>
+      </tr>`,
+      'لا توجد سجلات وقت إضافي');
+  };
+
+  window.decideOvertime = (id, approve, detected) => modal({
+    title: approve ? 'اعتماد الوقت الإضافي' : 'رفض الوقت الإضافي',
+    body: `${approve ? `<div class="field"><label>الدقائق المعتمدة (المرصود ${detected} دقيقة)</label>
+        <input type="number" id="otMinutes" value="${detected}" min="1" max="${detected}" />
+        <div class="help">يمكن اعتماد جزء من الوقت المرصود، ولا يُقبل أكثر منه.</div></div>` : ''}
+      <div class="field"><label>ملاحظة القرار${approve ? ' (اختياري)' : ' / السبب'}</label>
+        <textarea id="otNote" rows="3" placeholder="${approve
+          ? 'مثال: بقي لإنهاء الجرد بطلب المدير' : 'مثال: لم يُطلب منه البقاء بعد الدوام'}"></textarea></div>
+      <div class="help">يُسجَّل القرار باسمك وبتاريخه ووقته في سجل التدقيق.</div>`,
+    footer: `<button class="btn ${approve ? 'ok' : 'danger'}" id="otSave">${
+      approve ? 'اعتماد' : 'رفض'}</button><button class="btn gray" data-close>إلغاء</button>`,
+    onOpen: (root) => {
+      $('#otSave', root).onclick = async () => {
+        const body = { approve, note: $('#otNote', root).value.trim() || null };
+        if (approve) body.minutes = Number($('#otMinutes', root).value || detected);
+        try {
+          await api(`/api/overtime/${id}/decide`, { method: 'POST', body });
+          toast(approve ? 'اعتُمد الوقت الإضافي' : 'رُفض الوقت الإضافي', 'ok');
+          closeModal(); load();
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    },
+  });
+
+  window.reopenOvertime = async (id) => {
+    if (!confirm('إعادة فتح القرار لمراجعته من جديد؟')) return;
+    try {
+      await api(`/api/overtime/${id}/reopen`, { method: 'POST' });
+      toast('أُعيد السجل بانتظار الموافقة', 'ok'); load();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+
+  el('otLoad').onclick = () => load().catch((e) => toast(e.message, 'err'));
+  ['otStatus', 'otEmp'].forEach((id) =>
+    el(id).onchange = () => load().catch((e) => toast(e.message, 'err')));
+  load().catch((e) => toast(e.message, 'err'));
+};
+
+views.myOvertime = async () => {
+  render(`
+    <div class="card"><div class="card-head"><h3>وقتي الإضافي</h3>
+      <span class="muted" id="moCount"></span></div>
+      <div class="card-body">
+        <div class="help" style="margin-bottom:12px">العمل بعد نهاية الدوام يُسجَّل تلقائياً،
+          ولا يُحتسب في الراتب إلا بعد اعتماد الإدارة. تظهر هنا حالة كل يوم ومن بتّ فيه.</div>
+        <div id="moList"><div class="sk-rows">${'<div class="sk line"></div>'.repeat(3)}</div></div>
+      </div></div>`);
+  try {
+    const rows = await api('/api/me/overtime');
+    const approved = rows.filter((r) => r.status === 'approved')
+      .reduce((t, r) => t + (r.approved_minutes || 0), 0);
+    el('moCount').textContent = rows.length
+      ? `${rows.length} يوم — معتمد ${otHours(approved)}` : '';
+    el('moList').innerHTML = rows.length ? rows.map((r) => `
+      <div class="row-item" style="align-items:flex-start">
+        <span class="ri ${r.status === 'approved' ? 'ok' : r.status === 'rejected' ? 'danger' : ''}">${icon('bolt')}</span>
+        <div class="rt"><b>${r.work_date}</b>
+          <span>وقت زائد ${otHours(r.minutes)}${
+            r.status === 'approved' ? ` — اعتُمد منه ${otHours(r.approved_minutes)}` : ''}</span>
+          ${r.decided_by ? `<div class="muted" style="font-size:11.5px;margin-top:3px">
+            القرار: ${esc(r.decided_by)} — ${String(r.decided_at || '').replace('T', ' ').slice(0, 16)}
+            ${r.decision_note ? '<br>' + esc(r.decision_note) : ''}</div>` : ''}
+        </div>
+        <div class="rv"><span class="tag ${OT_TAG[r.status]}">${esc(r.status_label || OT_STATUS[r.status])}</span></div>
+      </div>`).join('') : '<div class="empty">لا يوجد وقت إضافي مسجّل لك</div>';
+  } catch (e) { el('moList').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+};
+
+/* بيان الخصومات: كل خصم بيومه وسببه */
+function deductionsTable(lines) {
+  if (!lines.length) return '<div class="empty">لا توجد خصومات</div>';
+  const total = lines.reduce((t, x) => t + (x.amount || 0), 0);
+  return table(
+    ['اليوم', 'النوع', 'السبب', 'المبلغ'],
+    lines,
+    (x) => `<tr>
+      <td>${x.work_date || '—'}</td>
+      <td><span class="tag ${DEDUCTION_TONE[x.kind] || ''}">${esc(x.kind_label || x.kind)}</span></td>
+      <td>${esc(x.reason || '')}</td>
+      <td class="money">${money(x.amount)}</td></tr>`)
+    + `<div class="inline" style="justify-content:flex-end;padding:10px 14px">
+        <b>إجمالي الخصومات: <span class="money">${money(total)}</span> ريال</b></div>`;
+}
+
+window.showPayslipDeductions = async (payslipId, name) => {
+  modal({
+    title: `بيان خصومات ${name || ''}`.trim(),
+    body: '<div id="pdBody"><div class="sk-rows">' + '<div class="sk line"></div>'.repeat(3) + '</div></div>',
+    footer: '<button class="btn gray" data-close>إغلاق</button>',
+    width: 760,
+    onOpen: async (root) => {
+      try {
+        const lines = await api(`/api/payroll/payslips/${payslipId}/deductions`);
+        $('#pdBody', root).innerHTML = deductionsTable(lines);
+      } catch (e) { $('#pdBody', root).innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+    },
+  });
+};
+
+
 /* ------------------------------ أيام الراحة الشهرية ------------------------------ */
 views.restDays = async () => {
   const { employees } = await loadLookups();
@@ -3788,7 +3988,11 @@ views.profile = async () => {
         ])}
         <div class="help">الخصومات والإضافي تُحتسب في مسير الرواتب الشهري حسب القواعد المعتمدة.</div>
         ${isHR() ? '<button class="btn ghost" onclick="go(\'payroll\')">فتح مسير الرواتب</button>' : ''}
-        </div></div>`,
+        </div></div>
+      <div class="card"><div class="card-head"><h3>بيان الخصومات</h3>
+          <span class="muted">كل خصم بيومه وسببه</span></div>
+        <div id="empDeductions"><div class="sk-rows">${'<div class="sk line"></div>'.repeat(3)}</div></div>
+      </div>`,
     violations: () => `
       <div class="card"><div class="card-head"><h3>سجل المخالفات</h3></div>
         ${table(['التاريخ', 'المخالفة', 'التكرار', 'الجزاء', 'الخصم', 'الحالة'], violations,
@@ -3822,6 +4026,12 @@ views.profile = async () => {
     el('pBody').innerHTML = panels[tab]();
     el('pTabs').querySelectorAll('button').forEach((b) =>
       b.classList.toggle('active', b.dataset.tab === tab));
+    if (tab === 'salary' && el('empDeductions')) {
+      api(`/api/payroll/deductions?employee_id=${id}`)
+        .then((lines) => { if (el('empDeductions')) el('empDeductions').innerHTML = deductionsTable(lines); })
+        .catch((e) => { if (el('empDeductions')) el('empDeductions').innerHTML =
+          `<div class="empty">${esc(e.message)}</div>`; });
+    }
   };
   el('pTabs').querySelectorAll('button').forEach((b) => b.onclick = () => paint(b.dataset.tab));
   paint('overview');
@@ -4119,7 +4329,7 @@ views.payroll = async () => {
         ولا تعديل أو حذف بصمة، ولا تسجيل حضور جماعي، ولا يوم راحة، ولا إعادة احتساب.
         لتصحيح شيء: ألغِ اعتماد المسير، صحّح، ثم أعد الاعتماد.</div></div>` : ''}
       ${table(['رقم الموظف', 'الاسم', 'الأساسي', 'البدلات', 'حضور', 'غياب', 'تأخير (د)',
-               'خروج مبكر (د)', 'إضافي (د)',
+               'خروج مبكر (د)', 'إضافي معتمد (د)', 'زائد غير معتمد (د)',
                'خصم غياب', 'خصم تأخير', 'خصم خروج مبكر', 'إجازة بلا راتب', 'خصم مخالفات',
                'قسط سلفة', 'مشتريات',
                'مستحق مرحّل', 'خصم مرحّل', 'بدل إضافي', 'إضافات', 'خصومات', 'الصافي', ''],
@@ -4128,6 +4338,8 @@ views.payroll = async () => {
           <td class="money">${money(s.basic_salary)}</td><td class="money">${money(s.allowances)}</td>
           <td>${s.present_days}</td><td>${s.absent_days}</td>
           <td>${s.late_minutes}</td><td>${s.early_leave_minutes || 0}</td><td>${s.overtime_minutes}</td>
+          <td>${s.unapproved_overtime_minutes
+            ? `<span class="tag pending">${s.unapproved_overtime_minutes}</span>` : 0}</td>
           <td class="money">${money(s.absence_deduction)}</td><td class="money">${money(s.late_deduction)}</td>
           <td class="money">${money(s.early_leave_deduction || 0)}</td>
           <td class="money">${money(s.unpaid_leave_deduction)}</td><td class="money">${money(s.violation_deduction)}</td>
@@ -4138,6 +4350,7 @@ views.payroll = async () => {
           <td class="money">${money(s.overtime_amount)}</td><td class="money">${money(s.other_additions)}</td>
           <td class="money">${money(s.other_deductions)}</td><td class="money"><b>${money(s.net_pay)}</b></td>
           <td><button class="btn sm ghost" onclick="printPayslip(${s.id})">${icon('printer')} قسيمة</button>
+            <button class="btn sm gray" onclick="showPayslipDeductions(${s.id},'${esc(s.employee_name)}')">الخصومات</button>
             ${locked ? '' : `<button class="btn sm ghost" onclick="adjustSlip(${s.id},${s.other_additions},${s.other_deductions})">تعديل</button>`}</td></tr>`,
         'لا توجد قسائم')}
       </div>`;
@@ -4220,7 +4433,8 @@ async function myPayslipsView() {
           <td class="money">${money(s.allowances)}</td><td>${s.present_days}</td><td>${s.absent_days}</td><td class="money">${money(deductions)}</td>
           <td class="money">${money(s.loan_deduction)}</td>
           <td class="money">${money(s.overtime_amount)}</td><td class="money"><b>${money(s.net_pay)}</b></td>
-          <td><button class="btn sm ghost" onclick="printPayslip(${s.id})">${icon('printer')} قسيمتي</button></td></tr>`;
+          <td><button class="btn sm ghost" onclick="printPayslip(${s.id})">${icon('printer')} قسيمتي</button>
+            <button class="btn sm gray" onclick="showPayslipDeductions(${s.id},'')">الخصومات</button></td></tr>`;
       },
       'لا توجد قسائم معتمدة بعد')}</div>`);
 }
@@ -4459,6 +4673,11 @@ settingsTabs.alerts = async () => {
             <option value="true" ${st.leave_balances_enabled ? 'selected' : ''}>يعمل — رصيد لكل نوع</option></select>
             <div class="help">وهو معطّل: لا تظهر الأرصدة في أي شاشة، ولا يُرفض طلب لنفاد الرصيد —
               القرار للإدارة عند الاعتماد. والسجلات محفوظة فتعود كما كانت بالتفعيل.</div></div>
+          <div class="field"><label>احتساب العمل الإضافي</label><select id="alOt">
+            <option value="true" ${st.overtime_requires_approval ? 'selected' : ''}>باعتماد الإدارة فقط</option>
+            <option value="false" ${st.overtime_requires_approval ? '' : 'selected'}>تلقائي بلا اعتماد</option></select>
+            <div class="help">الأصل: ما بعد نهاية الدوام يُسجَّل «وقتاً زائداً» ولا يدخل الراتب
+              حتى تعتمده الإدارة، ويُحفظ اسم من اعتمده ووقته.</div></div>
           <div class="field"><label>إظهار رصيد الإجازات للموظف</label><select id="alBal">
             <option value="false" ${st.show_leave_balance_to_employee ? '' : 'selected'}>مخفي</option>
             <option value="true" ${st.show_leave_balance_to_employee ? 'selected' : ''}>ظاهر</option></select>
@@ -4507,6 +4726,7 @@ settingsTabs.alerts = async () => {
       await api('/api/settings', { method: 'PUT', body: {
         monthly_rest_quota: Number(el('alRest').value),
         leave_balances_enabled: el('alBalOn').value === 'true',
+        overtime_requires_approval: el('alOt').value === 'true',
         show_leave_balance_to_employee: el('alBal').value === 'true' } });
       delete state.cache.settings;   // القائمة الجانبية تقرأ المفتاح من هنا
       toast('تم الحفظ — أعد تحميل الصفحة ليظهر أثر تغيير الأرصدة في القائمة', 'ok');

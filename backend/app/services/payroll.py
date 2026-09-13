@@ -17,11 +17,13 @@ from ..models import (
     PayrollRun,
     PayrollStatus,
     Payslip,
+    PayslipDeduction,
 )
 from . import attendance as attendance_service
 from . import loans as loans_service
 from . import carryovers as carryovers_service
 from . import purchases as purchases_service
+from . import overtime as overtime_service
 from . import settings_store, violations
 
 
@@ -33,8 +35,26 @@ def _rates(db: Session, monthly_salary: float) -> tuple[float, float]:
     return round(daily, 4), round(daily / hours, 4)
 
 
-def compute_payslip(db: Session, employee: Employee, year: int, month: int) -> dict:
-    """يحسب قسيمة راتب موظف واحد لشهر محدد."""
+DEDUCTION_LABELS = {
+    "absence": "غياب",
+    "unpaid_leave": "إجازة بلا راتب",
+    "late": "تأخير",
+    "early_leave": "خروج مبكر",
+    "open_break": "استراحة بلا عودة",
+    "violation": "مخالفة",
+    "loan": "قسط سلفة",
+    "purchase": "مشتريات",
+    "carryover": "خصم مرحّل",
+    "other": "خصم آخر",
+}
+
+
+def compute_payslip(db: Session, employee: Employee, year: int, month: int) -> tuple[dict, list[dict]]:
+    """يحسب قسيمة راتب موظف واحد لشهر محدد.
+
+    يعيد (قيم القسيمة، أسطر الخصم): كل سطر يحمل نوعه ويومه وسببه ومبلغه، فيبقى
+    في ملف الموظف بياناً مفصّلاً لكل ريال خُصم منه.
+    """
     last_day = monthrange(year, month)[1]
     start, end = date(year, month, 1), date(year, month, last_day)
     daily, hourly = _rates(db, violations.salary_base(db, employee))
@@ -53,7 +73,14 @@ def compute_payslip(db: Session, employee: Employee, year: int, month: int) -> d
     open_break_days = sum(1 for r in rows if r.status == DayStatus.needs_review)
     late_minutes = sum(r.late_minutes for r in rows)
     early_leave_minutes = sum(r.early_leave_minutes for r in rows)
-    overtime_minutes = sum(r.overtime_minutes for r in rows)
+    detected_overtime = sum(r.overtime_minutes for r in rows)
+    # لا يُحتسب إضافي إلا بعد اعتماد الإدارة؛ وما دونه يُبيَّن ولا يُصرف
+    if overtime_service.requires_approval(db):
+        overtime_minutes = overtime_service.approved_minutes(db, employee.id, start, end)
+        unapproved_overtime = overtime_service.unapproved_minutes(db, employee.id, start, end)
+    else:
+        overtime_minutes = detected_overtime
+        unapproved_overtime = 0
 
     # فصل أيام الإجازة إلى مدفوعة وغير مدفوعة
     paid_leave_days = unpaid_leave_days = 0.0
@@ -96,6 +123,17 @@ def compute_payslip(db: Session, employee: Employee, year: int, month: int) -> d
     # حركات مرحّلة من شهور سابقة لم تُصرف بعد
     carryover_earning, carryover_deduction = carryovers_service.totals_for(db, employee.id)
 
+    lines = _deduction_lines(
+        db, employee, year, month, rows, daily, hourly,
+        late_mode=late_mode, early_mode=early_mode,
+        absence_multiplier=absence_multiplier, open_break_factor=open_break_factor,
+        leave_cache=leave_cache,
+        totals={
+            "violation": violation_deduction, "loan": loan_deduction,
+            "purchase": purchases_deduction, "carryover": carryover_deduction,
+        },
+    )
+
     basic = round(employee.basic_salary or 0, 2)
     allowances = round(employee.allowances or 0, 2)
     net = round(
@@ -116,6 +154,7 @@ def compute_payslip(db: Session, employee: Employee, year: int, month: int) -> d
         "late_minutes": late_minutes,
         "early_leave_minutes": early_leave_minutes,
         "overtime_minutes": overtime_minutes,
+        "unapproved_overtime_minutes": unapproved_overtime,
         "absence_deduction": absence_deduction,
         "late_deduction": late_deduction,
         "early_leave_deduction": early_leave_deduction,
@@ -131,7 +170,74 @@ def compute_payslip(db: Session, employee: Employee, year: int, month: int) -> d
         "other_additions": 0.0,
         "other_deductions": 0.0,
         "net_pay": max(net, 0.0),
-    }
+    }, lines
+
+
+def _line(kind: str, day: date | None, reason: str, amount: float) -> dict:
+    return {"kind": kind, "work_date": day, "reason": reason, "amount": round(amount, 2)}
+
+
+def _deduction_lines(
+    db: Session,
+    employee: Employee,
+    year: int,
+    month: int,
+    rows: list[AttendanceDay],
+    daily: float,
+    hourly: float,
+    *,
+    late_mode: str | None,
+    early_mode: str | None,
+    absence_multiplier: float,
+    open_break_factor: float,
+    leave_cache: dict[int, bool],
+    totals: dict[str, float],
+) -> list[dict]:
+    """يفصّل خصومات الشهر سطراً سطراً: النوع، واليوم، والسبب، والمبلغ."""
+    lines: list[dict] = []
+
+    for row in sorted(rows, key=lambda r: r.work_date):
+        day = row.work_date
+        if row.status == DayStatus.absent:
+            amount = daily * absence_multiplier
+            note = f"غياب بدون إذن — أجر {absence_multiplier:g} يوم"
+            lines.append(_line("absence", day, note, amount))
+        elif row.status == DayStatus.leave and row.leave_request_id and not leave_cache.get(
+            row.leave_request_id, True
+        ):
+            lines.append(_line("unpaid_leave", day, "إجازة بلا راتب", daily))
+        elif row.status == DayStatus.needs_review:
+            lines.append(_line(
+                "open_break", day,
+                f"بدأ استراحة ولم يسجّل عودة حتى نهاية الدوام — خصم {open_break_factor:g} يوم",
+                daily * open_break_factor,
+            ))
+
+        if late_mode == "proportional" and row.late_minutes:
+            lines.append(_line(
+                "late", day,
+                f"تأخير {row.late_minutes} دقيقة عن بداية الدوام",
+                (row.late_minutes / 60) * hourly,
+            ))
+        if early_mode == "proportional" and row.early_leave_minutes:
+            lines.append(_line(
+                "early_leave", day,
+                f"خروج قبل نهاية الدوام بـ {row.early_leave_minutes} دقيقة",
+                (row.early_leave_minutes / 60) * hourly,
+            ))
+
+    lines.extend(violations.deduction_lines(db, employee.id, year, month))
+    lines.extend(loans_service.deduction_lines(db, employee.id, year, month))
+    lines.extend(purchases_service.deduction_lines(db, employee.id, year, month))
+    lines.extend(carryovers_service.deduction_lines(db, employee.id))
+
+    # ضمان تطابق التفصيل مع الإجمالي: أي فرق يُبيَّن ولا يُخفى
+    for kind, total in totals.items():
+        detailed = round(sum(x["amount"] for x in lines if x["kind"] == kind), 2)
+        gap = round((total or 0) - detailed, 2)
+        if abs(gap) >= 0.01:
+            lines.append(_line(kind, None, f"{DEDUCTION_LABELS.get(kind, kind)} (فرق تسوية)", gap))
+    return [x for x in lines if abs(x["amount"]) >= 0.01]
 
 
 def build_run(db: Session, year: int, month: int, user_id: int | None) -> PayrollRun:
@@ -159,16 +265,34 @@ def build_run(db: Session, year: int, month: int, user_id: int | None) -> Payrol
 
     existing = {p.employee_id: p for p in db.scalars(select(Payslip).where(Payslip.run_id == run.id)).all()}
     for employee in employees:
-        data = compute_payslip(db, employee, year, month)
+        data, lines = compute_payslip(db, employee, year, month)
         slip = existing.get(employee.id)
         if slip is None:
-            db.add(Payslip(run_id=run.id, **data))
+            slip = Payslip(run_id=run.id, **data)
+            db.add(slip)
         else:
             for key, value in data.items():
                 setattr(slip, key, value)
+        db.flush()
+        _save_deduction_lines(db, slip, year, month, lines)
     db.commit()
     db.refresh(run)
     return run
+
+
+def _save_deduction_lines(
+    db: Session, slip: Payslip, year: int, month: int, lines: list[dict]
+) -> None:
+    """يعيد بناء تفصيل خصومات القسيمة ليطابق آخر احتساب."""
+    db.query(PayslipDeduction).filter(PayslipDeduction.payslip_id == slip.id).delete(
+        synchronize_session=False
+    )
+    for line in lines:
+        db.add(PayslipDeduction(
+            payslip_id=slip.id, employee_id=slip.employee_id, year=year, month=month,
+            kind=line["kind"], work_date=line["work_date"],
+            reason=line["reason"], amount=line["amount"],
+        ))
 
 
 def approve_run(db: Session, run: PayrollRun) -> PayrollRun:

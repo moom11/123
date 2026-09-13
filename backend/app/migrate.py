@@ -49,6 +49,7 @@ NEW_COLUMNS: list[tuple[str, str, str]] = [
     ("payslips", "early_leave_minutes", "INTEGER DEFAULT 0"),
     ("payslips", "early_leave_deduction", "FLOAT DEFAULT 0"),
     ("attendance_days", "shift_snapshot", "TEXT"),
+    ("payslips", "unapproved_overtime_minutes", "INTEGER DEFAULT 0"),
 ]
 
 

@@ -135,6 +135,14 @@ class ViolationStatus(str, enum.Enum):
     cancelled = "cancelled"        # ملغاة
 
 
+class OvertimeStatus(str, enum.Enum):
+    """حالة الوقت الزائد: لا يُحتسب مالياً إلا بعد اعتماد الإدارة."""
+
+    pending = "pending"     # بانتظار الموافقة — مرصود ولا يدخل الراتب
+    approved = "approved"   # معتمد ويُحتسب مالياً
+    rejected = "rejected"   # مرفوض ولا يُحتسب
+
+
 class PayrollStatus(str, enum.Enum):
     draft = "draft"
     approved = "approved"
@@ -675,7 +683,8 @@ class Payslip(Base):
     unpaid_leave_days: Mapped[float] = mapped_column(Float, default=0)
     late_minutes: Mapped[int] = mapped_column(Integer, default=0)
     early_leave_minutes: Mapped[int] = mapped_column(Integer, default=0)
-    overtime_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    overtime_minutes: Mapped[int] = mapped_column(Integer, default=0)       # المعتمد المدفوع
+    unapproved_overtime_minutes: Mapped[int] = mapped_column(Integer, default=0)  # زائد بلا اعتماد
     absence_deduction: Mapped[float] = mapped_column(Float, default=0)
     late_deduction: Mapped[float] = mapped_column(Float, default=0)
     early_leave_deduction: Mapped[float] = mapped_column(Float, default=0)
@@ -695,6 +704,55 @@ class Payslip(Base):
     note: Mapped[str | None] = mapped_column(String(255))
 
     employee: Mapped[Employee] = relationship()
+
+
+class OvertimeRecord(Base):
+    """وقت زائد بعد نهاية الدوام: يُرصد تلقائياً ولا يُحتسب مالياً إلا باعتماد الإدارة.
+
+    الاعتماد يُسجَّل باسم من اعتمد ووقته، فلا تُطالَب الإدارة لاحقاً بساعات لم تُعتمد.
+    """
+
+    __tablename__ = "overtime_records"
+    __table_args__ = (UniqueConstraint("employee_id", "work_date", name="uq_overtime_day"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    work_date: Mapped[date] = mapped_column(Date, index=True)
+    minutes: Mapped[int] = mapped_column(Integer, default=0)           # ما رصده النظام
+    approved_minutes: Mapped[int] = mapped_column(Integer, default=0)  # ما اعتمدته الإدارة
+    status: Mapped[OvertimeStatus] = mapped_column(
+        Enum(OvertimeStatus), default=OvertimeStatus.pending, index=True
+    )
+    shift_end: Mapped[datetime | None] = mapped_column(DateTime)   # نهاية دوامه ذلك اليوم
+    check_out: Mapped[datetime | None] = mapped_column(DateTime)   # انصرافه الفعلي
+    reason: Mapped[str | None] = mapped_column(String(255))        # سبب العمل الإضافي
+    decided_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime)
+    decision_note: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    employee: Mapped[Employee] = relationship()
+    decided_by: Mapped["User | None"] = relationship()
+
+
+class PayslipDeduction(Base):
+    """سطر خصم واحد في قسيمة: نوعه، ويومه، وسببه، ومبلغه.
+
+    يُبنى مع القسيمة فيبقى في ملف الموظف بياناً مفصّلاً لكل ريال خُصم منه.
+    """
+
+    __tablename__ = "payslip_deductions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    payslip_id: Mapped[int] = mapped_column(ForeignKey("payslips.id", ondelete="CASCADE"), index=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    year: Mapped[int] = mapped_column(Integer, index=True)
+    month: Mapped[int] = mapped_column(Integer, index=True)
+    kind: Mapped[str] = mapped_column(String(32))            # absence / late / violation …
+    work_date: Mapped[date | None] = mapped_column(Date)     # اليوم المخصوم عنه (إن كان يوماً بعينه)
+    reason: Mapped[str] = mapped_column(String(255))
+    amount: Mapped[float] = mapped_column(Float, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 class EmployeeLoan(Base):
