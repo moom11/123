@@ -244,6 +244,9 @@ class Employee(Base):
     national_id: Mapped[str | None] = mapped_column(String(32))
     email: Mapped[str | None] = mapped_column(String(160))
     phone: Mapped[str | None] = mapped_column(String(32))
+    # بيانات التحويل البنكي: الآيبان بلا مسافات، واسم البنك للمراجعة
+    iban: Mapped[str | None] = mapped_column(String(34))
+    bank_name: Mapped[str | None] = mapped_column(String(120))
     job_title: Mapped[str | None] = mapped_column(String(120))
     department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.id", ondelete="SET NULL"))
     shift_id: Mapped[int | None] = mapped_column(ForeignKey("shifts.id", ondelete="SET NULL"))

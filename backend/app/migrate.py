@@ -50,6 +50,8 @@ NEW_COLUMNS: list[tuple[str, str, str]] = [
     ("payslips", "early_leave_deduction", "FLOAT DEFAULT 0"),
     ("attendance_days", "shift_snapshot", "TEXT"),
     ("payslips", "unapproved_overtime_minutes", "INTEGER DEFAULT 0"),
+    ("employees", "iban", "VARCHAR(34)"),
+    ("employees", "bank_name", "VARCHAR(120)"),
     ("employees", "signature_path", "VARCHAR(255)"),
     ("employees", "signed_at", "DATETIME"),
 ]

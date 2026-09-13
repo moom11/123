@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import io
+from datetime import date
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from sqlalchemy import func, select
@@ -20,7 +21,8 @@ from ..schemas import (
     ShiftOut,
 )
 from ..security import get_current_user, require_hr
-from ..services import accounts, audit, rest_policy, signature as signature_service
+from ..services import accounts, audit, iban as iban_service, rest_policy
+from ..services import signature as signature_service
 
 router = APIRouter(prefix="/api", tags=["employees"])
 
@@ -34,6 +36,9 @@ def employee_out(emp: Employee, default_quota: int = 0) -> EmployeeOut:
         national_id=emp.national_id,
         email=emp.email,
         phone=emp.phone,
+        iban=emp.iban,
+        iban_pretty=iban_service.pretty(emp.iban) if emp.iban else None,
+        bank_name=emp.bank_name,
         job_title=emp.job_title,
         department_id=emp.department_id,
         department_name=emp.department.name if emp.department else None,
@@ -103,7 +108,12 @@ def create_employee(
             detail=f"رقم الجوال مسجّل للموظف {conflict.full_name} ({conflict.code}) — "
                    "لكل موظف رقم خاص به لأنه وسيلة دخوله",
         )
-    emp = Employee(**payload.model_dump())
+    data = payload.model_dump()
+    problem = iban_service.problem(data.get("iban"))
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
+    data["iban"] = iban_service.normalize(data.get("iban")) or None
+    emp = Employee(**data)
     db.add(emp)
     db.flush()
     audit.log(db, user, "create", "employee", emp.id, f"{emp.code} - {emp.full_name}", commit=False)
@@ -167,6 +177,11 @@ def update_employee(
                 detail=f"رقم الجوال مسجّل للموظف {conflict.full_name} ({conflict.code}) — "
                        "لكل موظف رقم خاص به لأنه وسيلة دخوله",
             )
+    if "iban" in data:
+        problem = iban_service.problem(data["iban"])
+        if problem:
+            raise HTTPException(status_code=400, detail=problem)
+        data["iban"] = iban_service.normalize(data["iban"]) or None
     for key, value in data.items():
         setattr(emp, key, value)
     audit.log(db, user, "update", "employee", emp.id,
@@ -406,15 +421,46 @@ def delete_employee(employee_id: int, db: Session = Depends(get_db), user: User 
     return {"ok": True}
 
 
+@router.get("/employees-export.xlsx", dependencies=[Depends(require_hr)])
+def export_employees_excel(
+    status: EmployeeStatus | None = None,
+    department_id: int | None = None,
+    db: Session = Depends(get_db),
+):
+    """ملف Excel ببيانات الموظفين: الرقم والإقامة والجوال والبريد والآيبان والبنك."""
+    from ..services import employees_xlsx
+
+    stmt = select(Employee)
+    if status:
+        stmt = stmt.where(Employee.status == status)
+    if department_id:
+        stmt = stmt.where(Employee.department_id == department_id)
+    employees = db.scalars(stmt.order_by(Employee.code)).all()
+    content = employees_xlsx.workbook(db, employees)
+    return Response(
+        content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition":
+                 f"attachment; filename=employees_{date.today():%Y%m%d}.xlsx"},
+    )
+
+
 @router.get("/employees-export.csv", dependencies=[Depends(require_hr)])
 def export_employees(db: Session = Depends(get_db)):
     buffer = io.StringIO()
     writer = csv.writer(buffer)
-    writer.writerow(["رقم الموظف", "الاسم", "الإدارة", "المسمى", "الوردية", "تاريخ التعيين", "الحالة"])
+    writer.writerow(["رقم الموظف", "الاسم", "رقم الإقامة / الهوية", "رقم الجوال", "البريد",
+                     "رقم الآيبان", "البنك", "الإدارة", "المسمى", "الوردية",
+                     "تاريخ التعيين", "الحالة"])
     for e in db.scalars(select(Employee).order_by(Employee.code)).all():
         writer.writerow([
             e.code,
             e.full_name,
+            e.national_id or "",
+            e.phone or "",
+            e.email or "",
+            e.iban or "",
+            e.bank_name or "",
             e.department.name if e.department else "",
             e.job_title or "",
             e.shift.name if e.shift else "",

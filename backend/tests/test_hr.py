@@ -1852,6 +1852,128 @@ def test_weekly_rest_days_control_attendance(client, auth):
     assert any(r["status"] == "absent" for r in others)
 
 
+# ------------------------ الآيبان وتصدير Excel ------------------------
+GOOD_IBAN = "SA0380000000608010167519"
+
+
+def test_iban_is_validated_and_normalized(client, auth):
+    """الآيبان يُقبل بمسافات ويُحفظ موحَّداً، والخاطئ يُرفض قبل الحفظ."""
+    bad = client.post("/api/employees", headers=auth, json={
+        "code": "9821", "full_name": "موظف آيبان خاطئ",
+        "iban": "SA0380000000608010167518"})       # رقم تحقق خاطئ
+    assert bad.status_code == 400 and "الآيبان" in bad.json()["detail"]
+
+    short = client.post("/api/employees", headers=auth, json={
+        "code": "9821", "full_name": "موظف آيبان قصير", "iban": "SA038000000060801016"})
+    assert short.status_code == 400 and "24 خانة" in short.json()["detail"]
+
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9821", "full_name": "موظف الآيبان", "national_id": "1012345678",
+        "phone": "0559990821", "email": "iban@example.com",
+        "iban": "sa03 8000 0000 6080 1016 7519", "bank_name": "الراجحي"})
+    assert emp.status_code == 201, emp.text
+    body = emp.json()
+    assert body["iban"] == GOOD_IBAN, "يُحفظ بلا مسافات وبحروف كبيرة"
+    assert body["iban_pretty"] == "SA03 8000 0000 6080 1016 7519"
+    assert body["bank_name"] == "الراجحي"
+
+    # والتعديل يتحقق أيضاً
+    assert client.patch(f"/api/employees/{body['id']}", headers=auth,
+                        json={"iban": "SA0000000000000000000000"}).status_code == 400
+    cleared = client.patch(f"/api/employees/{body['id']}", headers=auth,
+                           json={"iban": None}).json()
+    assert cleared["iban"] is None
+
+
+def test_employees_excel_export_has_the_requested_columns(client, auth):
+    """ملف Excel يحمل رقم الموظف والإقامة والجوال والبريد والآيبان."""
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    # الاختبار السابق أفرغ الآيبان عمداً — نعيده قبل التصدير
+    rows = client.get("/api/employees?q=9821", headers=auth).json()
+    target = next(r for r in rows if r["code"] == "9821")
+    client.patch(f"/api/employees/{target['id']}", headers=auth, json={"iban": GOOD_IBAN})
+
+    res = client.get("/api/employees-export.xlsx", headers=auth)
+    assert res.status_code == 200
+    assert "spreadsheetml" in res.headers["content-type"]
+    assert ".xlsx" in res.headers["content-disposition"]
+
+    ws = load_workbook(BytesIO(res.content)).active
+    assert ws.sheet_view.rightToLeft, "الورقة يجب أن تكون من اليمين لليسار"
+    headers = [c.value for c in ws[4]]
+    for needed in ("رقم الموظف", "رقم الإقامة / الهوية", "رقم الجوال",
+                   "البريد الإلكتروني", "رقم الآيبان", "البنك"):
+        assert needed in headers, (needed, headers)
+
+    col = {label: index for index, label in enumerate(headers, start=1)}
+    found = None
+    for row in ws.iter_rows(min_row=5, values_only=True):
+        if row[col["رقم الموظف"] - 1] == "9821":
+            found = row
+            break
+    assert found, "الموظف المسجَّل يجب أن يظهر في الملف"
+    assert found[col["رقم الآيبان"] - 1] == "SA03 8000 0000 6080 1016 7519"
+    assert found[col["رقم الإقامة / الهوية"] - 1] == "1012345678"
+    assert found[col["رقم الجوال"] - 1] == "0559990821"
+    assert found[col["البريد الإلكتروني"] - 1] == "iban@example.com"
+
+    # الأرقام الطويلة نصاً لئلا يفسدها Excel
+    cell = ws.cell(row=5, column=col["رقم الآيبان"])
+    assert cell.number_format == "@"
+
+
+def test_employee_import_accepts_iban_and_flags_bad_ones(client, auth):
+    """الاستيراد يقبل الآيبان، ويُبلّغ عن الخاطئ بدل رفض الصف كله."""
+    import csv
+    import io as _io
+
+    header = client.get("/api/employees-import-template.csv", headers=auth)
+    assert header.status_code == 200 and "رقم الآيبان" in header.text
+
+    buffer = _io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["رقم الموظف", "الاسم", "الإدارة", "المسمى الوظيفي", "الجوال", "البريد",
+                     "الهوية", "تاريخ التعيين", "الراتب الأساسي", "الوردية", "البدلات",
+                     "رقم الآيبان", "البنك"])
+    writer.writerow(["9822", "مستورد بآيبان", "", "", "", "", "", "", "5000", "", "0",
+                     GOOD_IBAN, "الأهلي"])
+    writer.writerow(["9823", "مستورد بآيبان خاطئ", "", "", "", "", "", "", "5000", "", "0",
+                     "SA0380000000608010167518", "الأهلي"])
+
+    res = client.post("/api/employees/import", headers=auth,
+                      files={"file": ("emps.csv", buffer.getvalue().encode("utf-8"), "text/csv")},
+                      data={"update_existing": "true"})
+    assert res.status_code == 200, res.text
+    report = res.json()
+    assert report["created"] >= 2, report
+    assert any("آيبان" in e for e in report["errors"]), report["errors"]
+
+    rows = client.get("/api/employees?q=9822", headers=auth).json()
+    good = next(r for r in rows if r["code"] == "9822")
+    assert good["iban"] == GOOD_IBAN and good["bank_name"] == "الأهلي"
+    rows = client.get("/api/employees?q=9823", headers=auth).json()
+    flagged = next(r for r in rows if r["code"] == "9823")
+    assert flagged["iban"] is None, "الآيبان الخاطئ لا يُحفظ"
+    assert flagged["bank_name"] == "الأهلي", "وبقية بيانات الصف تُستورد"
+
+
+def test_employee_excel_export_is_hr_only(client, auth):
+    """بيانات البنك لا تُصدَّر إلا للموارد البشرية."""
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9824", "full_name": "موظف بلا تصدير", "phone": "0559990824",
+        "basic_salary": 5000}).json()
+    token = client.post("/api/auth/login", data={
+        "username": "0559990824", "password": "0559990824"}).json()["access_token"]
+    fresh = client.post("/api/auth/change-password", headers={"Authorization": f"Bearer {token}"},
+                        json={"current_password": "0559990824", "new_password": "Bank@2026x"})
+    h = {"Authorization": f"Bearer {fresh.json()['access_token']}"}
+    assert client.get("/api/employees-export.xlsx", headers=h).status_code == 403
+    assert emp["id"]
+
+
 # ------------------------ التوقيع والتقارير الموقّعة ------------------------
 def _signature_png(bg=(250, 248, 245), ink=(20, 24, 80)) -> bytes:
     """صورة توقيع على ورقة بيضاء — كما تأتي من كاميرا الجوال."""

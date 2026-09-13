@@ -2836,6 +2836,7 @@ views.employees = async () => {
       <div class="field"><label>الإدارة</label><select id="eDep"><option value="">الكل</option>${options(departments)}</select></div>
       <button class="btn" id="eLoad">${icon('search')} بحث</button>
       ${isHR() ? `<button class="btn ok" id="eNew">${icon('plus')} إضافة موظف</button>` : ''}
+      ${isHR() ? `<button class="btn ghost" id="eExcel">${icon('sheet')} تصدير Excel</button>` : ''}
       ${isHR() ? `<button class="btn ghost" id="eExport">${icon('download')} تصدير CSV</button>` : ''}
       ${isHR() ? `<button class="btn gray" id="eImport">${icon('upload')} استيراد من Excel</button>` : ''}
     </div></div>
@@ -2909,6 +2910,12 @@ views.employees = async () => {
   el('eQ').onkeydown = (ev) => { if (ev.key === 'Enter') load().catch((e) => toast(e.message, 'err')); };
   el('eLoad').onclick = () => load().catch((e) => toast(e.message, 'err'));
   if (el('eExport')) el('eExport').onclick = () => downloadCsv('/api/employees-export.csv', 'employees.csv');
+  if (el('eExcel')) el('eExcel').onclick = () => {
+    const q = new URLSearchParams();
+    if (el('eDep').value) q.set('department_id', el('eDep').value);
+    downloadCsv('/api/employees-export.xlsx?' + q,
+      `employees_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  };
   if (el('eNew')) el('eNew').onclick = () => employeeModal(null, departments, shifts, load);
   if (el('eImport')) el('eImport').onclick = () => importModal(load);
   window.editEmployee = async (id) => {
@@ -2989,6 +2996,12 @@ function employeeModal(emp, departments, shifts, after) {
         <div class="help">بمجرد حفظ الرقم يُنشأ حساب دخول للموظف: اسم المستخدم وكلمة المرور
           المؤقتة هما الرقم نفسه، ويُطالَب بتغييرها عند أول دخول.</div></div>
       <div class="field"><label>البريد</label><input id="fEmail" value="${esc(v('email'))}" /></div>
+      <div class="field"><label>رقم الآيبان</label>
+        <input id="fIban" value="${esc(v('iban_pretty') || v('iban'))}" placeholder="SA03 8000 0000 6080 1016 7519"
+          dir="ltr" style="text-align:left" />
+        <div class="help">يُقبل بمسافات أو بدونها، ويتحقق النظام من صحته قبل الحفظ.</div></div>
+      <div class="field"><label>البنك</label><input id="fBank" value="${esc(v('bank_name'))}"
+        placeholder="مثال: الراجحي" /></div>
       <div class="field"><label>المسمى الوظيفي</label><input id="fTitle" value="${esc(v('job_title'))}" /></div>
       <div class="field"><label>الإدارة</label><select id="fDep"><option value="">—</option>${options(departments, v('department_id'))}</select></div>
       <div class="field"><label>الوردية</label><select id="fShift"><option value="">—</option>${options(shifts, v('shift_id'))}</select></div>
@@ -3108,6 +3121,8 @@ function employeeModal(emp, departments, shifts, after) {
         const body = {
           code: el('fCode').value.trim(), full_name: el('fName').value.trim(),
           national_id: el('fNid').value || null, phone: el('fPhone').value || null,
+          iban: el('fIban').value.trim() || null,
+          bank_name: el('fBank').value.trim() || null,
           email: el('fEmail').value || null, job_title: el('fTitle').value || null,
           department_id: el('fDep').value ? Number(el('fDep').value) : null,
           shift_id: el('fShift').value ? Number(el('fShift').value) : null,
@@ -4225,6 +4240,9 @@ views.profile = async () => {
           ['الراتب الكامل', money(emp.total_salary || 0) + ' ريال'],
           ['أجر اليوم التقديري', money((emp.total_salary || 0) / 30) + ' ريال'],
           ['أجر الساعة التقديري', money((emp.total_salary || 0) / 30 / 8) + ' ريال'],
+          ['رقم الآيبان', emp.iban_pretty
+            ? `<span dir="ltr">${esc(emp.iban_pretty)}</span>` : '— لم يُسجَّل'],
+          ['البنك', esc(emp.bank_name || '—')],
         ])}
         <div class="help">الخصومات والإضافي تُحتسب في مسير الرواتب الشهري حسب القواعد المعتمدة.</div>
         ${isHR() ? '<button class="btn ghost" onclick="go(\'payroll\')">فتح مسير الرواتب</button>' : ''}

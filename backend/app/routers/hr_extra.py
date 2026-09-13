@@ -27,12 +27,14 @@ from ..schemas import AuditLogOut, DocumentIn, DocumentOut, ImportReport, Notifi
 from ..security import can_view_employee, get_current_user, require_admin, require_hr
 from ..security_extra import content_problem
 from ..services import accounts, audit, notifications, settings_store
+from ..services import iban as iban_service
 
 router = APIRouter(prefix="/api", tags=["hr-extra"])
 
 DOC_ATTACHMENTS = {".pdf", ".png", ".jpg", ".jpeg", ".webp"}
 IMPORT_COLUMNS = ["رقم الموظف", "الاسم", "الإدارة", "المسمى الوظيفي", "الجوال", "البريد",
-                  "الهوية", "تاريخ التعيين", "الراتب الأساسي", "الوردية", "البدلات"]
+                  "الهوية", "تاريخ التعيين", "الراتب الأساسي", "الوردية", "البدلات",
+                  "رقم الآيبان", "البنك"]
 
 
 # ------------------------------ الإشعارات ------------------------------
@@ -245,7 +247,8 @@ def import_template(_: User = Depends(require_hr)):
     writer = csv.writer(buffer)
     writer.writerow(IMPORT_COLUMNS)
     writer.writerow(["1001", "عبدالله محمد", "تقنية المعلومات", "مطور", "0500000000",
-                     "a@example.com", "1012345678", "2024-01-15", "9000", "الوردية الصباحية", "1500"])
+                     "a@example.com", "1012345678", "2024-01-15", "9000", "الوردية الصباحية",
+                     "1500", "SA0380000000608010167519", "الراجحي"])
     return Response(
         "﻿" + buffer.getvalue(),
         media_type="text/csv; charset=utf-8",
@@ -311,7 +314,7 @@ def import_employees(
     for index, row in enumerate(rows[1:], start=2):
         if not any((c or "").strip() for c in row):
             continue
-        cells = list(row) + [""] * (11 - len(row))
+        cells = list(row) + [""] * (len(IMPORT_COLUMNS) - len(row))
         code, name = (cells[0] or "").strip(), (cells[1] or "").strip()
         if not code or not name:
             report.errors.append(f"السطر {index}: رقم الموظف أو الاسم مفقود")
@@ -332,6 +335,16 @@ def import_employees(
 
         salary = _parse_number(cells[8])
         allowances = _parse_number(cells[10])
+
+        # الآيبان: يُقبل بمسافات ويُخزَّن موحَّداً، والخاطئ يُتخطّى بتنبيه لا برفض الصف
+        raw_iban = (cells[11] or "").strip()
+        iban_value = None
+        if raw_iban:
+            iban_problem = iban_service.problem(raw_iban)
+            if iban_problem:
+                report.errors.append(f"السطر {index}: {iban_problem} — استُورد بدون آيبان")
+            else:
+                iban_value = iban_service.normalize(raw_iban)
 
         phone = (cells[4] or "").strip() or None
         if phone:
@@ -357,6 +370,8 @@ def import_employees(
             basic_salary=salary,
             allowances=allowances,
             shift_id=shift.id if shift else None,
+            iban=iban_value,
+            bank_name=(cells[12] or "").strip() or None,
         )
 
         employee = existing.get(code)

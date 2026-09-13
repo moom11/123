@@ -104,6 +104,8 @@ class EmployeeIn(BaseModel):
     national_id: str | None = None
     email: str | None = None
     phone: str | None = None
+    iban: str | None = Field(default=None, max_length=42)
+    bank_name: str | None = Field(default=None, max_length=120)
     job_title: str | None = None
     department_id: int | None = None
     shift_id: int | None = None
@@ -124,6 +126,8 @@ class EmployeeUpdate(BaseModel):
     national_id: str | None = None
     email: str | None = None
     phone: str | None = None
+    iban: str | None = Field(default=None, max_length=42)
+    bank_name: str | None = Field(default=None, max_length=120)
     job_title: str | None = None
     department_id: int | None = None
     shift_id: int | None = None
@@ -145,6 +149,9 @@ class EmployeeOut(ORMModel):
     national_id: str | None = None
     email: str | None = None
     phone: str | None = None
+    iban: str | None = None
+    iban_pretty: str | None = None      # معروضاً على دفعات أربع لتسهيل التدقيق
+    bank_name: str | None = None
     job_title: str | None = None
     department_id: int | None = None
     department_name: str | None = None
