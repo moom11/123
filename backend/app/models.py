@@ -253,6 +253,7 @@ class Employee(Base):
     site_id: Mapped[int | None] = mapped_column(ForeignKey("work_sites.id", ondelete="SET NULL"))
     manager_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id", ondelete="SET NULL"))
     hire_date: Mapped[date | None] = mapped_column(Date)
+    end_date: Mapped[date | None] = mapped_column(Date)   # آخر يوم عمل (نهاية الخدمة)
     basic_salary: Mapped[float] = mapped_column(Float, default=0.0)
     allowances: Mapped[float] = mapped_column(Float, default=0.0)  # مجموع البدلات الشهرية
     # أيام الراحة الأسبوعية الخاصة بالموظف (0=الاثنين … 6=الأحد)، فارغة = حسب الوردية
@@ -262,6 +263,9 @@ class Employee(Base):
     no_break: Mapped[bool] = mapped_column(Boolean, default=False)
     # رصيد أيام الراحة الشهرية الخاص بهذا الموظف، فارغ = يتبع الرقم الافتراضي في الإعدادات
     monthly_rest_quota: Mapped[int | None] = mapped_column(Integer)
+    # ------------------------- التأمينات الاجتماعية -------------------------
+    gosi_subscribed: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_saudi: Mapped[bool] = mapped_column(Boolean, default=False)  # النسب تختلف بالجنسية
     # توقيع الموظف صورة PNG شفافة، يُستعمل في القسائم والتقارير الموقّعة
     signature_path: Mapped[str | None] = mapped_column(String(255))
     signed_at: Mapped[datetime | None] = mapped_column(DateTime)   # متى رُفع توقيعه
@@ -690,6 +694,11 @@ class Payslip(Base):
     unpaid_leave_days: Mapped[float] = mapped_column(Float, default=0)
     late_minutes: Mapped[int] = mapped_column(Integer, default=0)
     early_leave_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    payable_days: Mapped[float] = mapped_column(Float, default=0)   # أيام الاستحقاق من الشهر
+    # التأمينات: الوعاء وحصة الموظف (تُخصم) وحصة المنشأة (بيان لا خصم)
+    gosi_base: Mapped[float] = mapped_column(Float, default=0)
+    gosi_employee: Mapped[float] = mapped_column(Float, default=0)
+    gosi_employer: Mapped[float] = mapped_column(Float, default=0)
     overtime_minutes: Mapped[int] = mapped_column(Integer, default=0)       # المعتمد المدفوع
     unapproved_overtime_minutes: Mapped[int] = mapped_column(Integer, default=0)  # زائد بلا اعتماد
     absence_deduction: Mapped[float] = mapped_column(Float, default=0)

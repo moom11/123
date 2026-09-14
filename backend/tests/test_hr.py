@@ -1852,6 +1852,147 @@ def test_weekly_rest_days_control_attendance(client, auth):
     assert any(r["status"] == "absent" for r in others)
 
 
+# ------------------ الشهر الجزئي والتأمينات الاجتماعية ------------------
+def test_mid_month_hire_is_paid_for_served_days_only(client, auth):
+    """من باشر في منتصف الشهر يستحق بقدر أيام خدمته لا شهراً كاملاً."""
+    previous_end = date.today().replace(day=1) - timedelta(days=1)
+    year, month = previous_end.year, previous_end.month
+    _unlock_month(client, auth, year, month)
+    month_days = monthrange(year, month)[1]
+    hire = date(year, month, 15)
+
+    full = client.post("/api/employees", headers=auth, json={
+        "code": "9826", "full_name": "موظف شهر كامل", "basic_salary": 6000,
+        "allowances": 600, "hire_date": "2024-01-01"}).json()
+    partial = client.post("/api/employees", headers=auth, json={
+        "code": "9827", "full_name": "موظفة باشرت 15", "basic_salary": 6000,
+        "allowances": 600, "hire_date": str(hire)}).json()
+    assert partial["hire_date"] == str(hire)
+
+    run = _run_for(client, auth, year, month)
+    whole = _slip_of(client, auth, run["id"], "9826")
+    half = _slip_of(client, auth, run["id"], "9827")
+
+    assert whole["payable_days"] == 30, whole
+    assert whole["basic_salary"] == 6000 and whole["allowances"] == 600
+
+    served = month_days - 15 + 1                      # من 15 حتى آخر يوم
+    assert half["payable_days"] == served, half
+    assert half["basic_salary"] == round(6000 * served / 30, 2)
+    assert half["allowances"] == round(600 * served / 30, 2)
+    assert half["basic_salary"] < whole["basic_salary"], "الشهر الجزئي أقل من الكامل"
+
+    # والقسيمة المطبوعة تبيّن السبب
+    page = client.get(f"/api/payroll/payslips/{half['id']}/print", headers=auth)
+    assert page.status_code == 200
+    assert "شهر جزئي" in page.text and str(hire) in page.text
+
+
+def test_employee_leaving_mid_month_is_paid_until_last_day(client, auth):
+    """من ترك العمل في منتصف الشهر يستحق حتى آخر يوم عمل له."""
+    previous_end = date.today().replace(day=1) - timedelta(days=1)
+    year, month = previous_end.year, previous_end.month
+    _unlock_month(client, auth, year, month)
+    last_day = date(year, month, 10)
+
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9828", "full_name": "موظف انتهت خدمته", "basic_salary": 9000,
+        "hire_date": "2024-01-01", "end_date": str(last_day)}).json()
+    assert emp["end_date"] == str(last_day)
+
+    run = _run_for(client, auth, year, month)
+    slip = _slip_of(client, auth, run["id"], "9828")
+    assert slip["payable_days"] == 10
+    assert slip["basic_salary"] == round(9000 * 10 / 30, 2)
+
+
+def test_gosi_is_deducted_only_when_configured(client, auth):
+    """التأمينات لا تُخصم قبل ضبط النسب، وحصة المنشأة تُبيَّن ولا تُخصم."""
+    previous_end = date.today().replace(day=1) - timedelta(days=1)
+    year, month = previous_end.year, previous_end.month
+    _unlock_month(client, auth, year, month)
+
+    saudi = client.post("/api/employees", headers=auth, json={
+        "code": "9829", "full_name": "موظف سعودي مشترك", "basic_salary": 10000,
+        "allowances": 2000, "hire_date": "2024-01-01",
+        "gosi_subscribed": True, "is_saudi": True}).json()
+    expat = client.post("/api/employees", headers=auth, json={
+        "code": "9830", "full_name": "موظف غير سعودي", "basic_salary": 10000,
+        "hire_date": "2024-01-01", "gosi_subscribed": True, "is_saudi": False}).json()
+    assert saudi["gosi_subscribed"] is True and saudi["is_saudi"] is True
+
+    # ١) قبل الضبط: لا خصم مهما كان الاشتراك
+    run = _run_for(client, auth, year, month)
+    slip = _slip_of(client, auth, run["id"], "9829")
+    assert slip["gosi_employee"] == 0 and slip["gosi_employer"] == 0
+
+    # ٢) بعد الضبط
+    client.put("/api/settings", headers=auth, json={
+        "gosi_enabled": True, "gosi_base": "basic",
+        "gosi_employee_rate": 9.75, "gosi_employer_rate": 11.75,
+        "gosi_employee_rate_expat": 0, "gosi_employer_rate_expat": 2})
+    try:
+        run = _run_for(client, auth, year, month)
+        slip = _slip_of(client, auth, run["id"], "9829")
+        assert slip["gosi_base"] == 10000, "الوعاء الأساسي وحده"
+        assert slip["gosi_employee"] == 975.0
+        assert slip["gosi_employer"] == 1175.0
+
+        # حصة الموظف تُخصم من الصافي، وحصة المنشأة لا
+        expected_net = round(
+            slip["basic_salary"] + slip["allowances"] + slip["overtime_amount"]
+            + slip["carryover_earning"] - slip["absence_deduction"] - slip["late_deduction"]
+            - slip["early_leave_deduction"] - slip["unpaid_leave_deduction"]
+            - slip["violation_deduction"] - slip["loan_deduction"]
+            - slip["purchases_deduction"] - slip["open_break_deduction"]
+            - slip["carryover_deduction"] - slip["gosi_employee"], 2)
+        assert abs(slip["net_pay"] - max(expected_net, 0)) < 0.05, (slip["net_pay"], expected_net)
+
+        # غير السعودي: لا يُخصم منه، والمنشأة تتحمل
+        other = _slip_of(client, auth, run["id"], "9830")
+        assert other["gosi_employee"] == 0
+        assert other["gosi_employer"] == 200.0
+
+        # ويظهر سطراً في بيان الخصومات
+        lines = client.get(f"/api/payroll/payslips/{slip['id']}/deductions", headers=auth).json()
+        gosi_line = next(x for x in lines if x["kind"] == "gosi")
+        assert gosi_line["amount"] == 975.0
+        assert gosi_line["kind_label"] == "التأمينات الاجتماعية"
+
+        # وفي القسيمة المطبوعة
+        page = client.get(f"/api/payroll/payslips/{slip['id']}/print", headers=auth)
+        assert "التأمينات الاجتماعية" in page.text
+        assert "حصة المنشأة" in page.text
+    finally:
+        client.put("/api/settings", headers=auth, json={"gosi_enabled": False})
+
+
+def test_gosi_follows_the_partial_month(client, auth):
+    """وعاء التأمينات في الشهر الجزئي بقدر أيام الخدمة."""
+    previous_end = date.today().replace(day=1) - timedelta(days=1)
+    year, month = previous_end.year, previous_end.month
+    _unlock_month(client, auth, year, month)
+    month_days = monthrange(year, month)[1]
+    hire = date(year, month, 15)
+    served = month_days - 15 + 1
+
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9831", "full_name": "مشترك باشر منتصف الشهر", "basic_salary": 6000,
+        "hire_date": str(hire), "gosi_subscribed": True, "is_saudi": True}).json()
+    client.put("/api/settings", headers=auth, json={
+        "gosi_enabled": True, "gosi_base": "basic", "gosi_employee_rate": 10,
+        "gosi_employer_rate": 12, "gosi_prorate": True})
+    try:
+        run = _run_for(client, auth, year, month)
+        slip = _slip_of(client, auth, run["id"], "9831")
+        expected_base = round(6000 * served / 30, 2)
+        assert abs(slip["gosi_base"] - expected_base) < 0.05, (slip["gosi_base"], expected_base)
+        assert abs(slip["gosi_employee"] - round(expected_base * 0.10, 2)) < 0.05
+        assert emp["id"]
+    finally:
+        client.put("/api/settings", headers=auth, json={"gosi_enabled": False, "gosi_prorate": True})
+
+
 def test_days_before_hire_date_are_not_counted_as_absence(client, auth):
     """الموظف الذي باشر في منتصف الشهر لا يُحاسَب على ما قبل تعيينه.
 

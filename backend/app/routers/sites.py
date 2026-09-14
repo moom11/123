@@ -122,6 +122,14 @@ def _settings_out(values: dict) -> SettingsOut:
         payroll_workday_hours=int(float(values["payroll_workday_hours"])),
         payroll_overtime_multiplier=float(values["payroll_overtime_multiplier"]),
         overtime_requires_approval=values.get("overtime_requires_approval") != "false",
+        gosi_enabled=values.get("gosi_enabled") == "true",
+        gosi_base=values.get("gosi_base") or "basic",
+        gosi_employee_rate=float(values.get("gosi_employee_rate") or 0),
+        gosi_employer_rate=float(values.get("gosi_employer_rate") or 0),
+        gosi_employee_rate_expat=float(values.get("gosi_employee_rate_expat") or 0),
+        gosi_employer_rate_expat=float(values.get("gosi_employer_rate_expat") or 0),
+        gosi_max_base=float(values.get("gosi_max_base") or 0),
+        gosi_prorate=values.get("gosi_prorate") != "false",
         payroll_late_deduction_mode=values["payroll_late_deduction_mode"],
         payroll_early_leave_deduction_mode=(
             values.get("payroll_early_leave_deduction_mode") or "proportional"

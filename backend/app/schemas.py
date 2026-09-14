@@ -112,11 +112,14 @@ class EmployeeIn(BaseModel):
     site_id: int | None = None
     manager_id: int | None = None
     hire_date: date | None = None
+    end_date: date | None = None
     basic_salary: float = 0
     allowances: float = 0
     weekly_rest_days: str | None = None
     no_break: bool = False
     monthly_rest_quota: int | None = Field(default=None, ge=0, le=31)
+    gosi_subscribed: bool = False
+    is_saudi: bool = False
     status: EmployeeStatus = EmployeeStatus.active
 
 
@@ -134,11 +137,14 @@ class EmployeeUpdate(BaseModel):
     site_id: int | None = None
     manager_id: int | None = None
     hire_date: date | None = None
+    end_date: date | None = None
     basic_salary: float | None = None
     allowances: float | None = None
     weekly_rest_days: str | None = None
     no_break: bool | None = None
     monthly_rest_quota: int | None = Field(default=None, ge=0, le=31)
+    gosi_subscribed: bool | None = None
+    is_saudi: bool | None = None
     status: EmployeeStatus | None = None
 
 
@@ -161,9 +167,12 @@ class EmployeeOut(ORMModel):
     site_name: str | None = None
     manager_id: int | None = None
     hire_date: date | None = None
+    end_date: date | None = None
     basic_salary: float = 0
     allowances: float = 0
     total_salary: float = 0
+    gosi_subscribed: bool = False
+    is_saudi: bool = False
     weekly_rest_days: str | None = None
     no_break: bool = False
     monthly_rest_quota: int | None = None      # الرصيد الخاص بالموظف (فارغ = الافتراضي)
@@ -362,6 +371,14 @@ class SettingsOut(BaseModel):
     payroll_workday_hours: int = 8
     payroll_overtime_multiplier: float = 1.5
     overtime_requires_approval: bool = True
+    gosi_enabled: bool = False
+    gosi_base: str = "basic"
+    gosi_employee_rate: float = 0
+    gosi_employer_rate: float = 0
+    gosi_employee_rate_expat: float = 0
+    gosi_employer_rate_expat: float = 0
+    gosi_max_base: float = 45000
+    gosi_prorate: bool = True
     payroll_late_deduction_mode: str = "proportional"
     payroll_early_leave_deduction_mode: str = "proportional"
     payroll_absence_multiplier: float = 1
@@ -400,6 +417,14 @@ class SettingsIn(BaseModel):
     payroll_workday_hours: int | None = Field(default=None, ge=1, le=16)
     payroll_overtime_multiplier: float | None = Field(default=None, ge=1, le=3)
     overtime_requires_approval: bool | None = None
+    gosi_enabled: bool | None = None
+    gosi_base: str | None = Field(default=None, pattern="^(basic|total)$")
+    gosi_employee_rate: float | None = Field(default=None, ge=0, le=50)
+    gosi_employer_rate: float | None = Field(default=None, ge=0, le=50)
+    gosi_employee_rate_expat: float | None = Field(default=None, ge=0, le=50)
+    gosi_employer_rate_expat: float | None = Field(default=None, ge=0, le=50)
+    gosi_max_base: float | None = Field(default=None, ge=0)
+    gosi_prorate: bool | None = None
     payroll_late_deduction_mode: str | None = None
     payroll_early_leave_deduction_mode: str | None = None
     payroll_absence_multiplier: float | None = Field(default=None, ge=0, le=3)
@@ -800,6 +825,10 @@ class PayslipOut(ORMModel):
     department_name: str | None = None
     basic_salary: float
     allowances: float = 0
+    payable_days: float = 0          # أيام الاستحقاق من الشهر
+    gosi_base: float = 0
+    gosi_employee: float = 0         # حصة الموظف (خصم)
+    gosi_employer: float = 0         # حصة المنشأة (بيان)
     loan_deduction: float = 0
     present_days: int
     absent_days: int

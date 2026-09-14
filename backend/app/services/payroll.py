@@ -23,6 +23,7 @@ from . import attendance as attendance_service
 from . import loans as loans_service
 from . import carryovers as carryovers_service
 from . import purchases as purchases_service
+from . import gosi as gosi_service
 from . import overtime as overtime_service
 from . import settings_store, violations
 
@@ -45,8 +46,29 @@ DEDUCTION_LABELS = {
     "loan": "قسط سلفة",
     "purchase": "مشتريات",
     "carryover": "خصم مرحّل",
+    "gosi": "التأمينات الاجتماعية",
     "other": "خصم آخر",
 }
+
+
+def service_days(db: Session, employee: Employee, year: int, month: int) -> tuple[float, float]:
+    """(أيام الاستحقاق، معامل الاستحقاق) لموظف في شهر.
+
+    من باشر أو ترك العمل في منتصف الشهر يستحق بقدر أيام خدمته فيه، لا شهراً
+    كاملاً. ومن كان على رأس العمل الشهر كله يستحقه كاملاً مهما كان عدد أيامه.
+    """
+    month_days = settings_store.get_int(db, "payroll_days_per_month", 30) or 30
+    last_day = monthrange(year, month)[1]
+    first, last = date(year, month, 1), date(year, month, last_day)
+
+    start = max(first, employee.hire_date) if employee.hire_date else first
+    end = min(last, employee.end_date) if employee.end_date else last
+    if start > end:
+        return 0.0, 0.0                       # لم يكن على رأس العمل في هذا الشهر
+    served = (end - start).days + 1
+    if served >= last_day:
+        return float(month_days), 1.0         # الشهر كامل
+    return float(served), round(served / month_days, 6)
 
 
 def compute_payslip(db: Session, employee: Employee, year: int, month: int) -> tuple[dict, list[dict]]:
@@ -134,19 +156,32 @@ def compute_payslip(db: Session, employee: Employee, year: int, month: int) -> t
         },
     )
 
-    basic = round(employee.basic_salary or 0, 2)
-    allowances = round(employee.allowances or 0, 2)
+    # أجر الشهر الجزئي بقدر أيام الخدمة فيه (مباشرة أو ترك عمل في منتصف الشهر)
+    payable_days, factor = service_days(db, employee, year, month)
+    basic = round((employee.basic_salary or 0) * factor, 2)
+    allowances = round((employee.allowances or 0) * factor, 2)
+
+    shares = gosi_service.compute(db, employee, factor)
+    if shares.employee:
+        lines.append(_line("gosi", None,
+                           f"التأمينات الاجتماعية — حصة الموظف على وعاء {shares.base:g} ريال",
+                           shares.employee))
+
     net = round(
         basic + allowances + overtime_amount + carryover_earning
         - absence_deduction - unpaid_leave_deduction - late_deduction - early_leave_deduction
         - violation_deduction - loan_deduction - purchases_deduction - open_break_deduction
-        - carryover_deduction,
+        - carryover_deduction - shares.employee,
         2,
     )
     return {
         "employee_id": employee.id,
         "basic_salary": basic,
         "allowances": allowances,
+        "payable_days": payable_days,
+        "gosi_base": shares.base,
+        "gosi_employee": shares.employee,
+        "gosi_employer": shares.employer,
         "present_days": present_days,
         "absent_days": absent_days,
         "paid_leave_days": paid_leave_days,
@@ -322,12 +357,15 @@ def totals(db: Session, run_id: int) -> dict:
                 + s.unpaid_leave_deduction
                 + s.violation_deduction + (s.loan_deduction or 0)
                 + (s.purchases_deduction or 0) + (s.open_break_deduction or 0)
+                + (s.gosi_employee or 0)
                 + (s.carryover_deduction or 0) + s.other_deductions
                 for s in slips
             ),
             2,
         ),
         "overtime_total": round(sum(s.overtime_amount for s in slips), 2),
+        "gosi_employee_total": round(sum(s.gosi_employee or 0 for s in slips), 2),
+        "gosi_employer_total": round(sum(s.gosi_employer or 0 for s in slips), 2),
         "net_total": round(sum(s.net_pay for s in slips), 2),
     }
 

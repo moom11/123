@@ -106,6 +106,29 @@ def _row(label: str, value: float, tone: str = "") -> str:
             f'<td class="num">{_money(value)}</td></tr>')
 
 
+def _partial_note(db: Session, slip: Payslip, run: PayrollRun) -> str:
+    """بيان الشهر الجزئي: مباشرة أو ترك عمل في منتصفه."""
+    from calendar import monthrange
+
+    from . import settings_store as _store
+
+    month_days = _store.get_int(db, "payroll_days_per_month", 30) or 30
+    payable = slip.payable_days or 0
+    if not payable or payable >= month_days:
+        return ""
+    employee = slip.employee
+    reason = ""
+    if employee and employee.hire_date and employee.hire_date.year == run.year \
+            and employee.hire_date.month == run.month:
+        reason = f" (باشر العمل في {employee.hire_date:%Y-%m-%d})"
+    elif employee and employee.end_date and employee.end_date.year == run.year \
+            and employee.end_date.month == run.month:
+        reason = f" (آخر يوم عمل {employee.end_date:%Y-%m-%d})"
+    _ = monthrange
+    return (f'<div class="note">شهر جزئي: احتُسب الأجر عن <b>{_money(payable)}</b> يوم '
+            f'من أصل {month_days}{reason}.</div>')
+
+
 def _sig_img(path: str | None) -> str:
     """التوقيع مضمّناً في القسيمة، أو سطر فارغ يُوقَّع عليه يدوياً."""
     from ..config import UPLOAD_DIR
@@ -179,6 +202,7 @@ def payslip_html(db: Session, slip: Payslip, run: PayrollRun) -> str:
         ("مشتريات", slip.purchases_deduction or 0),
         ("استراحة بلا عودة", slip.open_break_deduction or 0),
         ("خصومات مرحّلة", slip.carryover_deduction or 0),
+        ("التأمينات الاجتماعية (حصة الموظف)", slip.gosi_employee or 0),
         ("خصومات أخرى", slip.other_deductions),
     ]
     total_earnings = round(sum(value for _, value in earnings), 2)
@@ -209,6 +233,7 @@ def payslip_html(db: Session, slip: Payslip, run: PayrollRun) -> str:
     </div>
 
     <div class="stats">
+      <div><span>أيام الاستحقاق</span><b>{_money(slip.payable_days or 0)}</b></div>
       <div><span>أيام الحضور</span><b>{slip.present_days}</b></div>
       <div><span>أيام الغياب</span><b>{slip.absent_days}</b></div>
       <div><span>إجازات مدفوعة</span><b>{_money(slip.paid_leave_days)}</b></div>
@@ -240,6 +265,11 @@ def payslip_html(db: Session, slip: Payslip, run: PayrollRun) -> str:
       <div class="words">فقط {escape(amount_in_words(slip.net_pay))} لا غير</div>
     </div>
 
+    {_partial_note(db, slip, run)}
+    {f'<div class="note">التأمينات الاجتماعية: الوعاء {_money(slip.gosi_base)} ريال — '
+       f'حصة الموظف {_money(slip.gosi_employee)} ريال (مخصومة أعلاه)، '
+       f'وحصة المنشأة {_money(slip.gosi_employer)} ريال (التزام على المنشأة لا يُخصم من الموظف).'
+       f'</div>' if (slip.gosi_employee or slip.gosi_employer) else ''}
     {f'<div class="note">ملاحظة: {escape(slip.note)}</div>' if slip.note else ''}
 
     <div class="signs">

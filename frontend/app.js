@@ -3015,7 +3015,18 @@ function employeeModal(emp, departments, shifts, after) {
         <div class="help">اتركها فارغة ليتبع الموظف أيام عمل الوردية. تحديد يوم راحة يعني أنه يعمل بقية الأيام.</div>
       </div>
       <div class="field"><label>موقع العمل (للبصم من التطبيق)</label><select id="fSite"><option value="">كل المواقع المعتمدة</option>${options(state.cache.sites || [], v('site_id'))}</select></div>
-      <div class="field"><label>تاريخ التعيين</label><input type="date" id="fHire" value="${v('hire_date')}" /></div>
+      <div class="field"><label>تاريخ التعيين (المباشرة)</label>
+        <input type="date" id="fHire" value="${v('hire_date')}" />
+        <div class="help">من باشر في منتصف الشهر يُحتسب أجره بقدر أيام خدمته فيه.</div></div>
+      <div class="field"><label>آخر يوم عمل (نهاية الخدمة)</label>
+        <input type="date" id="fEnd" value="${v('end_date')}" />
+        <div class="help">اتركه فارغاً لمن هو على رأس العمل.</div></div>
+      <div class="field"><label>التأمينات الاجتماعية</label><select id="fGosi">
+        <option value="false" ${!v('gosi_subscribed') ? 'selected' : ''}>غير مشترك</option>
+        <option value="true" ${v('gosi_subscribed') ? 'selected' : ''}>مشترك</option></select></div>
+      <div class="field"><label>الجنسية (لنسبة التأمينات)</label><select id="fSaudi">
+        <option value="false" ${!v('is_saudi') ? 'selected' : ''}>غير سعودي</option>
+        <option value="true" ${v('is_saudi') ? 'selected' : ''}>سعودي</option></select></div>
       <div class="field"><label>الراتب الأساسي</label><input type="number" id="fSalary" value="${v('basic_salary', 0)}" /></div>
       <div class="field"><label>البدلات</label><input type="number" id="fAllow" value="${v('allowances', 0)}" />
         <div class="help">إجمالي الراتب = الأساسي + البدلات</div></div>
@@ -3127,7 +3138,10 @@ function employeeModal(emp, departments, shifts, after) {
           department_id: el('fDep').value ? Number(el('fDep').value) : null,
           shift_id: el('fShift').value ? Number(el('fShift').value) : null,
           site_id: el('fSite').value ? Number(el('fSite').value) : null,
-          hire_date: el('fHire').value || null, basic_salary: Number(el('fSalary').value || 0),
+          hire_date: el('fHire').value || null, end_date: el('fEnd').value || null,
+          gosi_subscribed: el('fGosi').value === 'true',
+          is_saudi: el('fSaudi').value === 'true',
+          basic_salary: Number(el('fSalary').value || 0),
           allowances: Number(el('fAllow').value || 0),
           weekly_rest_days: [...document.querySelectorAll('.fRest:checked')].map((c) => c.value).join(',') || null,
           no_break: el('fNoBreak').value === 'true',
@@ -4605,13 +4619,15 @@ views.payroll = async () => {
         ${icon('lock', 'sm')} <b>الشهر مُقفل:</b> بياناته لا تتغيّر بعد الاعتماد — لا بصمة يدوية،
         ولا تعديل أو حذف بصمة، ولا تسجيل حضور جماعي، ولا يوم راحة، ولا إعادة احتساب.
         لتصحيح شيء: ألغِ اعتماد المسير، صحّح، ثم أعد الاعتماد.</div></div>` : ''}
-      ${table(['رقم الموظف', 'الاسم', 'الأساسي', 'البدلات', 'حضور', 'غياب', 'تأخير (د)',
+      ${table(['رقم الموظف', 'الاسم', 'أيام الاستحقاق', 'الأساسي', 'البدلات', 'حضور', 'غياب', 'تأخير (د)',
                'خروج مبكر (د)', 'إضافي معتمد (د)', 'زائد غير معتمد (د)',
                'خصم غياب', 'خصم تأخير', 'خصم خروج مبكر', 'إجازة بلا راتب', 'خصم مخالفات',
                'قسط سلفة', 'مشتريات',
-               'مستحق مرحّل', 'خصم مرحّل', 'بدل إضافي', 'إضافات', 'خصومات', 'الصافي', ''],
+               'مستحق مرحّل', 'خصم مرحّل', 'تأمينات (موظف)', 'تأمينات (منشأة)',
+               'بدل إضافي', 'إضافات', 'خصومات', 'الصافي', ''],
         slips,
         (s) => `<tr><td>${esc(s.employee_code)}</td><td>${esc(s.employee_name)}</td>
+          <td>${s.payable_days || 0}</td>
           <td class="money">${money(s.basic_salary)}</td><td class="money">${money(s.allowances)}</td>
           <td>${s.present_days}</td><td>${s.absent_days}</td>
           <td>${s.late_minutes}</td><td>${s.early_leave_minutes || 0}</td><td>${s.overtime_minutes}</td>
@@ -4624,6 +4640,8 @@ views.payroll = async () => {
           <td class="money">${money(s.purchases_deduction || 0)}</td>
           <td class="money">${money(s.carryover_earning || 0)}</td>
           <td class="money">${money(s.carryover_deduction || 0)}</td>
+          <td class="money">${money(s.gosi_employee || 0)}</td>
+          <td class="money muted">${money(s.gosi_employer || 0)}</td>
           <td class="money">${money(s.overtime_amount)}</td><td class="money">${money(s.other_additions)}</td>
           <td class="money">${money(s.other_deductions)}</td><td class="money"><b>${money(s.net_pay)}</b></td>
           <td><button class="btn sm ghost" onclick="printPayslip(${s.id})">${icon('printer')} قسيمة</button>
@@ -5541,7 +5559,56 @@ settingsTabs.payrollRules = async () => {
         والمخالفة تُمحى من سجل التكرار بعد 180 يوماً.<br>
         الغياب <b>بدون إذن</b> يُخصم بالمعامل أعلاه، أما الغياب <b>بإذن</b> فيُسجَّل إجازة:
         «إجازة بدون راتب» تُخصم يوماً واحداً فقط، والإجازة المدفوعة بلا خصم.</div>
-    </div></div>`;
+    </div></div>
+    <div class="card"><div class="card-head"><h3>التأمينات الاجتماعية</h3></div>
+      <div class="card-body">
+        <div class="soft-alert" style="margin-bottom:14px">
+          ${icon('info')} النسب تختلف بالجنسية وبتاريخ الاشتراك وتتغيّر بتعديلات النظام،
+          <b>فأدخلها من حسابك في التأمينات</b>. ما دامت صفراً لا يُخصم من أحد شيء.
+        </div>
+        <div class="grid cols-3">
+          <div class="field"><label>احتساب التأمينات</label><select id="gsOn">
+            <option value="false" ${st.gosi_enabled ? '' : 'selected'}>معطّل</option>
+            <option value="true" ${st.gosi_enabled ? 'selected' : ''}>مفعّل</option></select></div>
+          <div class="field"><label>الوعاء الخاضع</label><select id="gsBase">
+            <option value="basic" ${st.gosi_base === 'basic' ? 'selected' : ''}>الراتب الأساسي</option>
+            <option value="total" ${st.gosi_base === 'total' ? 'selected' : ''}>الأساسي + البدلات</option></select></div>
+          <div class="field"><label>الحد الأقصى للوعاء (ريال)</label>
+            <input type="number" id="gsMax" value="${st.gosi_max_base}" /></div>
+          <div class="field"><label>السعودي — حصة الموظف %</label>
+            <input type="number" step="0.01" id="gsEmp" value="${st.gosi_employee_rate}" /></div>
+          <div class="field"><label>السعودي — حصة المنشأة %</label>
+            <input type="number" step="0.01" id="gsCo" value="${st.gosi_employer_rate}" /></div>
+          <div class="field"><label>غير السعودي — حصة الموظف %</label>
+            <input type="number" step="0.01" id="gsEmpX" value="${st.gosi_employee_rate_expat}" />
+            <div class="help">الأصل صفر: غير السعودي لا يُخصم منه.</div></div>
+          <div class="field"><label>غير السعودي — حصة المنشأة %</label>
+            <input type="number" step="0.01" id="gsCoX" value="${st.gosi_employer_rate_expat}" /></div>
+          <div class="field"><label>الشهر الجزئي</label><select id="gsPro">
+            <option value="true" ${st.gosi_prorate ? 'selected' : ''}>الوعاء بقدر أيام الخدمة</option>
+            <option value="false" ${st.gosi_prorate ? '' : 'selected'}>الوعاء كاملاً</option></select></div>
+        </div>
+        <button class="btn" id="gsSave">حفظ إعدادات التأمينات</button>
+        <div class="help" style="margin-top:10px">
+          <b>حصة الموظف تُخصم من راتبه</b> وتظهر سطراً في بيان الخصومات وفي قسيمته.
+          <b>وحصة المنشأة تُحتسب وتُبيَّن</b> في المسير والقسيمة ولا تُخصم من الموظف.
+          ويُحدَّد اشتراك كل موظف وجنسيته من ملفه.
+        </div>
+      </div></div>`;
+  el('gsSave').onclick = async () => {
+    try {
+      state.cache.settings = await api('/api/settings', { method: 'PUT', body: {
+        gosi_enabled: el('gsOn').value === 'true',
+        gosi_base: el('gsBase').value,
+        gosi_max_base: Number(el('gsMax').value || 0),
+        gosi_employee_rate: Number(el('gsEmp').value || 0),
+        gosi_employer_rate: Number(el('gsCo').value || 0),
+        gosi_employee_rate_expat: Number(el('gsEmpX').value || 0),
+        gosi_employer_rate_expat: Number(el('gsCoX').value || 0),
+        gosi_prorate: el('gsPro').value === 'true' } });
+      toast('حُفظت إعدادات التأمينات — أعد احتساب المسير ليظهر أثرها', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+  };
   el('pySave').onclick = async () => {
     try {
       state.cache.settings = await api('/api/settings', { method: 'PUT', body: {
