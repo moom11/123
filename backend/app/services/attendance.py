@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 
@@ -25,6 +26,8 @@ from ..models import (
 from . import month_lock, overtime as overtime_service
 from . import workstate
 from .policies import Policy, resolve_many
+
+logger = logging.getLogger("hr")
 
 DEFAULT_SHIFT_START = time(8, 0)
 DEFAULT_SHIFT_END = time(16, 0)
@@ -366,6 +369,7 @@ def recompute(
         _clear_derived(db, ids, span_start, span_end)
 
     count = 0
+    removed = 0          # أيام محسوبة قبل التعيين تُنظَّف
     today = date.today()
     overruns: list[tuple[Employee, date, int]] = []
     open_breaks: list[tuple[Employee, date, datetime]] = []
@@ -375,10 +379,17 @@ def recompute(
         emp_punches = by_employee.get(emp.id, [])
         day = start
         while day <= end:
-            if emp.hire_date and day < emp.hire_date:
+            if (day.year, day.month) in locked:
                 day += timedelta(days=1)
                 continue
-            if (day.year, day.month) in locked:
+            if emp.hire_date and day < emp.hire_date:
+                # ما قبل تاريخ التعيين ليس يوم عمل له. وإن كان محسوباً سابقاً
+                # (سُجّل الموظف بلا تاريخ تعيين ثم أُضيف) يُحذف السجل هنا،
+                # وإلا بقيت أيام غياب وهمية تُخصم من راتبه.
+                stale = existing.pop((emp.id, day), None)
+                if stale is not None:
+                    db.delete(stale)
+                    removed += 1
                 day += timedelta(days=1)
                 continue
             row = existing.get((emp.id, day))
@@ -413,6 +424,8 @@ def recompute(
             day += timedelta(days=1)
 
     _alert_break_issues(db, overruns, open_breaks)
+    if removed:
+        logger.info("حُذفت %d يوم محسوب قبل تاريخ التعيين", removed)
 
     if commit:
         db.commit()

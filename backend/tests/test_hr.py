@@ -1852,6 +1852,51 @@ def test_weekly_rest_days_control_attendance(client, auth):
     assert any(r["status"] == "absent" for r in others)
 
 
+def test_days_before_hire_date_are_not_counted_as_absence(client, auth):
+    """الموظف الذي باشر في منتصف الشهر لا يُحاسَب على ما قبل تعيينه.
+
+    وإن سُجّل بلا تاريخ تعيين ثم أُضيف لاحقاً، تُنظَّف أيام الغياب الوهمية
+    التي حُسبت قبله بدل أن تبقى وتُخصم من راتبه.
+    """
+    previous_end = date.today().replace(day=1) - timedelta(days=1)
+    year, month = previous_end.year, previous_end.month
+    _unlock_month(client, auth, year, month)
+    start = date(year, month, 1)
+    hire = date(year, month, 15)
+
+    # سُجّلت بلا تاريخ تعيين، فحُسب لها الشهر كله
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9825", "full_name": "موظفة باشرت منتصف الشهر", "basic_salary": 6000}).json()
+    client.post(f"/api/attendance/recompute?date_from={start}&date_to={previous_end}"
+                f"&employee_id={emp['id']}", headers=auth)
+    rows = client.get(f"/api/attendance/employee/{emp['id']}"
+                      f"?date_from={start}&date_to={previous_end}", headers=auth).json()
+    assert any(r["work_date"] < str(hire) for r in rows), "التهيئة: يجب أن توجد أيام قبل التعيين"
+
+    # ثم ضُبط تاريخ مباشرتها
+    client.patch(f"/api/employees/{emp['id']}", headers=auth, json={"hire_date": str(hire)})
+    client.post(f"/api/attendance/recompute?date_from={start}&date_to={previous_end}"
+                f"&employee_id={emp['id']}", headers=auth)
+
+    rows = client.get(f"/api/attendance/employee/{emp['id']}"
+                      f"?date_from={start}&date_to={previous_end}", headers=auth).json()
+    early = [r for r in rows if r["work_date"] < str(hire)]
+    assert early == [], f"بقيت {len(early)} يوماً محسوبة قبل تاريخ التعيين"
+    assert rows, "وأيام ما بعد المباشرة تبقى محسوبة"
+    assert all(r["work_date"] >= str(hire) for r in rows)
+
+    # ولا تظهر في فحص ما قبل الإقفال ولا في خصم المسير
+    row = _scan_row(client, auth, year, month, "9825")
+    absent = next((i for i in (row or {}).get("issues", []) if i["key"] == "absent_days"), None)
+    if absent:
+        assert all(it["date"] >= str(hire) for it in absent["items"])
+
+    run = _run_for(client, auth, year, month)
+    slip = _slip_of(client, auth, run["id"], "9825")
+    counted = sum(1 for r in rows if r["status"] == "absent")
+    assert slip["absent_days"] == counted, (slip["absent_days"], counted)
+
+
 # ------------------------ الآيبان وتصدير Excel ------------------------
 GOOD_IBAN = "SA0380000000608010167519"
 
