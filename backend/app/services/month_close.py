@@ -26,6 +26,7 @@ from ..models import (
     Violation,
     ViolationStatus,
 )
+from . import attendance as attendance_service
 
 # مفتاح الحالة -> (العنوان، درجة الخطورة)
 ISSUE_LABELS = {
@@ -67,6 +68,10 @@ def scan(db: Session, year: int, month: int, employee_ids: list[int] | None = No
         return {"year": year, "month": month, "rows": [], "totals": {}, "clean": True}
 
     ids = [e.id for e in employees]
+    # يُحسب الشهر أولاً ثم يُقرأ: اليوم الذي لم يبصم فيه أحد ولم تفتحه شاشة
+    # لا سجل له، فكان غيابه يمرّ بلا ملاحظة. والحساب هنا هو نفسه المستعمل
+    # في كشف اليوم وفي المسير، فلا أرقام موازية.
+    attendance_service.recompute(db, start, min(end, date.today()), ids)
     days = db.scalars(
         select(AttendanceDay).where(
             AttendanceDay.employee_id.in_(ids),

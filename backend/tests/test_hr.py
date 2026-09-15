@@ -1852,6 +1852,45 @@ def test_weekly_rest_days_control_attendance(client, auth):
     assert any(r["status"] == "absent" for r in others)
 
 
+def test_pre_close_scan_computes_the_month_before_reading_it(client, auth):
+    """اليوم الذي لم يُحسب بعد يجب أن يظهر غياباً في الفحص لا أن يمرّ صامتاً.
+
+    كان الفحص يقرأ الأيام المحفوظة فقط، فاليوم الذي لم يبصم فيه أحد ولم
+    تفتحه شاشة لا سجل له — فيمرّ غيابه بلا ملاحظة.
+    """
+    from app.database import SessionLocal
+    from app.models import AttendanceDay, Employee as EmployeeModel
+
+    previous_end = date.today().replace(day=1) - timedelta(days=1)
+    year, month = previous_end.year, previous_end.month
+    _unlock_month(client, auth, year, month)
+
+    shift = client.post("/api/shifts", headers=auth, json={
+        "name": "وردية الفحص الكامل", "start_time": "08:00:00", "end_time": "16:00:00",
+        "grace_in_minutes": 10, "grace_out_minutes": 10, "work_days": "0,1,2,3,4,5,6",
+    }).json()
+    emp = client.post("/api/employees", headers=auth, json={
+        "code": "9832", "full_name": "موظف الغياب الصامت", "basic_salary": 6000,
+        "shift_id": shift["id"], "hire_date": "2024-01-01"}).json()
+
+    # امسح أيامه المحفوظة كأنها لم تُحسب قط
+    with SessionLocal() as db:
+        db.query(AttendanceDay).filter(AttendanceDay.employee_id == emp["id"]).delete(
+            synchronize_session=False)
+        db.commit()
+        assert db.query(AttendanceDay).filter(
+            AttendanceDay.employee_id == emp["id"]).count() == 0
+        assert db.get(EmployeeModel, emp["id"]) is not None
+
+    # الفحص وحده يجب أن يكتشف غيابه
+    row = _scan_row(client, auth, year, month, "9832")
+    assert row is not None, "الموظف الغائب لم يظهر في فحص ما قبل الإقفال"
+    absent = next(i for i in row["issues"] if i["key"] == "absent_days")
+    assert absent["count"] > 0
+    assert absent["items"], "يجب أن تُذكر تواريخ الغياب"
+    assert all(it["date"][:7] == f"{year}-{month:02d}" for it in absent["items"])
+
+
 # ------------------ الشهر الجزئي والتأمينات الاجتماعية ------------------
 def test_mid_month_hire_is_paid_for_served_days_only(client, auth):
     """من باشر في منتصف الشهر يستحق بقدر أيام خدمته لا شهراً كاملاً."""
