@@ -950,3 +950,157 @@ class SheetsOutbox(Base):
     last_error: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     sent_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+# ------------------------------ شاشات العرض والإعلانات ------------------------------
+
+
+class ScreenMode(str, enum.Enum):
+    """كيف تتصرّف الشاشة خارج وقت الفاصل الإعلاني."""
+
+    always = "always"       # شاشة إعلانات مخصّصة: تعرض طوال الوقت
+    break_only = "break_only"  # شاشة مباراة: سوداء إلا في الفاصل، وتطلب الصورة بـ HDMI-CEC
+
+
+class SlideKind(str, enum.Enum):
+    product = "product"   # بطاقة منتج: صورة واسم وسعر
+    promo = "promo"       # عرض أو إعلان مصمّم مسبقاً (صورة كاملة)
+    notice = "notice"     # لوحة نصية (ترحيب، تنويه، أوقات العمل)
+
+
+class BreakTrigger(str, enum.Enum):
+    manual = "manual"     # ضغطة من جوال الكاشير
+    fixture = "fixture"   # نافذة استراحة محسوبة من موعد المباراة
+    schedule = "schedule"  # فاصل دوري بلا مباراة
+
+
+class Screen(Base):
+    """شاشة عرض في الفرع. لكل شاشة مفتاح خاص يستخدمه جهاز التشغيل بدل حساب مستخدم."""
+
+    __tablename__ = "screens"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(80))
+    zone: Mapped[str | None] = mapped_column(String(60), index=True)  # مجموعة الشاشات (صالة، عائلي...)
+    mode: Mapped[ScreenMode] = mapped_column(Enum(ScreenMode), default=ScreenMode.break_only)
+    play_token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    playlist_id: Mapped[int | None] = mapped_column(ForeignKey("playlists.id", ondelete="SET NULL"))
+    break_playlist_id: Mapped[int | None] = mapped_column(
+        ForeignKey("playlists.id", ondelete="SET NULL")
+    )
+    cec_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    rotation: Mapped[int] = mapped_column(Integer, default=0)   # 0 أفقي، 90/270 رأسي
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_agent: Mapped[str | None] = mapped_column(String(160))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    playlist: Mapped["Playlist | None"] = relationship(foreign_keys=[playlist_id])
+    break_playlist: Mapped["Playlist | None"] = relationship(foreign_keys=[break_playlist_id])
+
+
+class Playlist(Base):
+    """قائمة تشغيل: ترتيب شرائح تُعرض بالتتابع."""
+
+    __tablename__ = "playlists"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), unique=True)
+    description: Mapped[str | None] = mapped_column(String(255))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    items: Mapped[list["PlaylistItem"]] = relationship(
+        back_populates="playlist", cascade="all, delete-orphan", order_by="PlaylistItem.sort_order"
+    )
+
+
+class Slide(Base):
+    """شريحة: منتج أو إعلان أو لوحة نصية، مع نافذة صلاحية اختيارية."""
+
+    __tablename__ = "slides"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[SlideKind] = mapped_column(Enum(SlideKind), default=SlideKind.product)
+    title: Mapped[str] = mapped_column(String(120))
+    subtitle: Mapped[str | None] = mapped_column(String(200))
+    price: Mapped[float | None] = mapped_column(Float)
+    old_price: Mapped[float | None] = mapped_column(Float)
+    badge: Mapped[str | None] = mapped_column(String(40))       # «جديد»، «خصم ٢٠٪»
+    image_path: Mapped[str | None] = mapped_column(String(160))
+    duration_seconds: Mapped[int] = mapped_column(Integer, default=8)
+    starts_on: Mapped[date | None] = mapped_column(Date)
+    ends_on: Mapped[date | None] = mapped_column(Date)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, onupdate=func.now())
+
+
+class PlaylistItem(Base):
+    __tablename__ = "playlist_items"
+    __table_args__ = (UniqueConstraint("playlist_id", "slide_id", name="uq_playlist_slide"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    playlist_id: Mapped[int] = mapped_column(ForeignKey("playlists.id", ondelete="CASCADE"), index=True)
+    slide_id: Mapped[int] = mapped_column(ForeignKey("slides.id", ondelete="CASCADE"), index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+    playlist: Mapped[Playlist] = relationship(back_populates="items")
+    slide: Mapped[Slide] = relationship()
+
+
+class MatchFixture(Base):
+    """مباراة معلومة الموعد: يُشتقّ منها فاصل الاستراحة تلقائياً."""
+
+    __tablename__ = "match_fixtures"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(140))
+    competition: Mapped[str | None] = mapped_column(String(80))
+    kickoff_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    halftime_after_minutes: Mapped[int] = mapped_column(Integer, default=47)  # ٤٥ + بدل ضائع
+    break_minutes: Mapped[int] = mapped_column(Integer, default=12)
+    zone: Mapped[str | None] = mapped_column(String(60))   # الشاشات المعنية، أو الكل
+    auto_break: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class BreakSession(Base):
+    """فاصل إعلاني جارٍ أو منتهٍ: نافذة تُعرض فيها الإعلانات على شاشات المباريات."""
+
+    __tablename__ = "break_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    zone: Mapped[str | None] = mapped_column(String(60))   # None = كل الشاشات
+    started_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    ends_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime)
+    trigger: Mapped[BreakTrigger] = mapped_column(Enum(BreakTrigger), default=BreakTrigger.manual)
+    fixture_id: Mapped[int | None] = mapped_column(
+        ForeignKey("match_fixtures.id", ondelete="SET NULL")
+    )
+    playlist_id: Mapped[int | None] = mapped_column(ForeignKey("playlists.id", ondelete="SET NULL"))
+    started_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    note: Mapped[str | None] = mapped_column(String(160))
+
+    fixture: Mapped[MatchFixture | None] = relationship()
+    playlist: Mapped[Playlist | None] = relationship()
+    started_by: Mapped[User | None] = relationship()
+
+
+class SlideImpression(Base):
+    """سجل عرض: أي شريحة ظهرت على أي شاشة ومتى — أساس تقرير الإعلانات."""
+
+    __tablename__ = "slide_impressions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    screen_id: Mapped[int] = mapped_column(ForeignKey("screens.id", ondelete="CASCADE"), index=True)
+    slide_id: Mapped[int] = mapped_column(ForeignKey("slides.id", ondelete="CASCADE"), index=True)
+    break_session_id: Mapped[int | None] = mapped_column(
+        ForeignKey("break_sessions.id", ondelete="SET NULL")
+    )
+    shown_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    seconds: Mapped[int] = mapped_column(Integer, default=0)
+
+    screen: Mapped[Screen] = relationship()
+    slide: Mapped[Slide] = relationship()

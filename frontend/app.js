@@ -33,6 +33,7 @@ const PAGES = [
   { id: 'employees',  title: 'الموظفون',       icon: 'employees', group: 'شؤون الموظفين', roles: ['admin','hr','manager'] },
   { id: 'documents',  title: 'الوثائق',        icon: 'documents', group: 'شؤون الموظفين', roles: ['admin','hr','manager','employee'] },
   { id: 'devices',    title: 'أجهزة البصمة',   icon: 'device', group: 'الإدارة',  roles: ['admin','hr'] },
+  { id: 'signage',    title: 'شاشات العرض',    icon: 'globe', group: 'الإدارة',  roles: ['admin','hr','manager'] },
   { id: 'reports',    title: 'التقارير',       icon: 'reports', group: 'الإدارة',  roles: ['admin','hr','manager'] },
   { id: 'settings',   title: 'الإعدادات',      icon: 'settings', group: 'الإدارة',  roles: ['admin','hr'] },
   { id: 'myProfile',  title: 'بياناتي',        icon: 'idcard', group: 'شؤون الموظفين', roles: ['employee','manager','hr','admin'] },
@@ -6509,3 +6510,664 @@ fetch('/api/health')
     startApp();
   } catch { logout(); }
 })();
+
+/* ------------------------------ شاشات العرض والإعلانات ------------------------------ */
+/* منتجات مارا وإعلاناتها على شاشات الفرع بين المباريات. لا نمسّ بث القناة:
+   جهاز خلف كل شاشة يعرض القائمة في الفاصل، ثم يعيد الشاشة إلى الرسيفر. */
+
+const SCREEN_MODES = { break_only: 'شاشة مباراة (تعرض في الفاصل فقط)', always: 'شاشة إعلانات (تعرض دائماً)' };
+const SLIDE_KINDS = { product: 'منتج', promo: 'إعلان مصمّم', notice: 'لوحة نصية' };
+const PLAYING = {
+  idle: { text: 'على المباراة', tone: 'out' },
+  break: { text: 'يعرض الإعلانات', tone: 'break' },
+  always: { text: 'يعرض القائمة', tone: 'in' },
+};
+
+const signageTabs = {};
+
+views.signage = async () => {
+  const manage = isHR();
+  render(`
+    <div class="sub-tabs" id="sgTabs">
+      <button data-tab="live" class="active">التحكم المباشر</button>
+      <button data-tab="fixtures">المباريات</button>
+      ${manage ? '<button data-tab="slides">المنتجات والإعلانات</button>' : ''}
+      ${manage ? '<button data-tab="playlists">قوائم العرض</button>' : ''}
+      ${manage ? '<button data-tab="screens">الشاشات</button>' : ''}
+      <button data-tab="report">تقرير العرض</button>
+    </div><div id="sgBody"></div>`);
+  el('sgTabs').querySelectorAll('button').forEach((b) => b.onclick = () => {
+    el('sgTabs').querySelectorAll('button').forEach((x) => x.classList.remove('active'));
+    b.classList.add('active');
+    if (state.sgTimer) clearInterval(state.sgTimer);
+    signageTabs[b.dataset.tab]().catch((e) => toast(e.message, 'err'));
+  });
+  await signageTabs.live();
+};
+
+/* ------------------------------ التحكم المباشر ------------------------------ */
+
+signageTabs.live = async () => {
+  const [zones, playlists] = await Promise.all([
+    api('/api/signage/zones'), api('/api/signage/playlists'),
+  ]);
+  el('sgBody').innerHTML = `
+    <div class="card"><div class="card-body">
+      <div class="inline" style="align-items:flex-end;gap:12px;flex-wrap:wrap">
+        <div class="field"><label>الشاشات</label><select id="sgZone">
+          <option value="">كل الشاشات</option>
+          ${zones.map((z) => `<option value="${esc(z)}">${esc(z)}</option>`).join('')}
+        </select></div>
+        <div class="field"><label>مدة الفاصل (دقيقة)</label>
+          <input type="number" id="sgMinutes" value="12" min="1" max="60" /></div>
+        <div class="field"><label>قائمة العرض</label><select id="sgPlaylist">
+          <option value="">قائمة كل شاشة</option>
+          ${options(playlists.filter((p) => p.is_active), '', 'id', 'name')}
+        </select></div>
+        <button class="btn ok" id="sgStart" style="min-height:46px">${icon('play')} ابدأ الفاصل الآن</button>
+        <button class="btn danger" id="sgStop" style="min-height:46px">${icon('close')} ارجع للمباراة</button>
+      </div>
+      <div class="help" style="margin-top:10px">اضغط «ابدأ الفاصل» عند نهاية الشوط،
+        و«ارجع للمباراة» عند عودة اللعب. الشاشات تعود وحدها بانتهاء المدة.</div>
+    </div></div>
+    <div id="sgBreaks"></div>
+    <div class="card"><div class="card-head"><h3>الشاشات الآن</h3>
+      <span class="muted" id="sgScreenCount"></span></div>
+      <div class="card-body"><div class="live-grid" id="sgScreens"></div></div></div>`;
+
+  const paint = async () => {
+    const [screens, breaks] = await Promise.all([
+      api('/api/signage/screens'), api('/api/signage/break'),
+    ]);
+    const online = screens.filter((s) => s.online).length;
+    el('sgScreenCount').textContent = `${online} من ${screens.length} متصلة`;
+    el('sgScreens').innerHTML = screens.length ? screens.map((s) => {
+      const p = PLAYING[s.playing] || PLAYING.idle;
+      // النقطة تتبع حالة العرض، وإطار التنبيه يتبع الاتصال: الشاشة المنقطعة لا تعرض شيئاً
+      return `<div class="live-card ${p.tone}${s.online ? '' : ' alarm'}">
+        <span class="dot"></span>
+        <div class="lt">
+          <b>${esc(s.name)}</b>
+          <span>${esc(s.zone || 'بلا مجموعة')}</span>
+          <span>${esc(SCREEN_MODES[s.mode] || '')}</span>
+        </div>
+        <div class="lv">${esc(s.online ? p.text : 'منقطعة')}
+          <small>${esc(s.online ? 'متصلة' : (s.last_seen_at ? dateTime(s.last_seen_at) : 'لم تتصل بعد'))}</small>
+        </div>
+      </div>`;
+    }).join('') : '<div class="empty">لم تُضف شاشات بعد — أضفها من تبويب «الشاشات»</div>';
+
+    el('sgBreaks').innerHTML = breaks.length ? breaks.map((b) => `
+      <div class="card"><div class="card-body inline" style="justify-content:space-between">
+        <div><b>فاصل جارٍ${b.zone ? ` — ${esc(b.zone)}` : ' على كل الشاشات'}</b>
+          <div class="muted" style="font-size:12px">${esc(b.note || '')}
+            بدأه ${esc(b.started_by || '—')}</div></div>
+        <div class="money"><b data-left="${b.seconds_left}">${fmtLeft(b.seconds_left)}</b>
+          <div class="muted" style="font-size:11.5px">المتبقي</div></div>
+      </div></div>`).join('') : '';
+  };
+
+  const fail = (e) => toast(e.message, 'err');
+  el('sgStart').onclick = async () => {
+    try {
+      const zone = el('sgZone').value;
+      await api('/api/signage/break/start', { method: 'POST', body: {
+        minutes: Number(el('sgMinutes').value) || 12,
+        zone: zone || null,
+        playlist_id: Number(el('sgPlaylist').value) || null,
+      } });
+      toast('بدأ الفاصل الإعلاني', 'ok');
+      await paint();
+    } catch (e) { fail(e); }
+  };
+  el('sgStop').onclick = async () => {
+    try {
+      const zone = el('sgZone').value;
+      const res = await api('/api/signage/break/stop' + (zone ? `?zone=${encodeURIComponent(zone)}` : ''),
+        { method: 'POST' });
+      toast(res.stopped ? 'عادت الشاشات إلى المباراة' : 'لا يوجد فاصل جارٍ', res.stopped ? 'ok' : '');
+      await paint();
+    } catch (e) { fail(e); }
+  };
+
+  await paint();
+  // تحديث دوري: العدّاد كل ثانية، وحالة الشاشات كل عشر ثوانٍ
+  let ticks = 0;
+  state.sgTimer = setInterval(() => {
+    if (state.page !== 'signage') return clearInterval(state.sgTimer);
+    el('sgBreaks').querySelectorAll('[data-left]').forEach((node) => {
+      const left = Math.max(0, Number(node.dataset.left) - 1);
+      node.dataset.left = left;
+      node.textContent = fmtLeft(left);
+    });
+    if (++ticks % 10 === 0) paint().catch(() => {});
+  }, 1000);
+};
+
+const fmtLeft = (seconds) => {
+  const s = Math.max(0, Number(seconds) || 0);
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+};
+
+const timeOnly = (value) => (value
+  ? new Date(value).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })
+  : '—');
+
+const dateTime = (value) => (value
+  ? `${new Date(value).toLocaleDateString('ar-SA')} ${timeOnly(value)}`
+  : '—');
+
+/* ------------------------------ المباريات ------------------------------ */
+
+signageTabs.fixtures = async () => {
+  const zones = await api('/api/signage/zones');
+  el('sgBody').innerHTML = `
+    <div class="card"><div class="card-body inline">
+      <button class="btn ok" id="sgFxNew">${icon('plus')} إضافة مباراة</button>
+      <span class="help">بتسجيل موعد الانطلاق يبدأ فاصل الاستراحة وينتهي وحده —
+        وتبقى ضغطة «ابدأ الفاصل» متاحة لتصحيح الوقت الفعلي.</span>
+    </div></div>
+    <div class="card"><div class="card-head"><h3>المباريات القادمة</h3></div>
+      <div id="sgFxTable"></div></div>`;
+
+  const load = async () => {
+    const rows = await api('/api/signage/fixtures');
+    el('sgFxTable').innerHTML = table(
+      ['المباراة', 'البطولة', 'الانطلاق', 'الفاصل', 'الشاشات', 'تلقائي', ''],
+      rows,
+      (r) => `<tr>
+        <td><b>${esc(r.title)}</b></td>
+        <td>${esc(r.competition || '—')}</td>
+        <td>${esc(dateTime(r.kickoff_at))}</td>
+        <td>${esc(timeOnly(r.break_starts_at))} — ${esc(timeOnly(r.break_ends_at))}
+          <div class="muted" style="font-size:11.5px">${r.break_minutes} دقيقة</div></td>
+        <td>${esc(r.zone || 'الكل')}</td>
+        <td><span class="tag ${r.auto_break ? 'on' : 'cancelled'}">${r.auto_break ? 'نعم' : 'لا'}</span></td>
+        <td><button class="btn sm ghost" onclick="editFixture(${r.id})">تعديل</button>
+            <button class="btn sm danger" onclick="removeFixture(${r.id})">حذف</button></td></tr>`,
+      'لا مباريات مسجّلة');
+  };
+
+  const form = (row) => modal({
+    title: row ? 'تعديل مباراة' : 'إضافة مباراة',
+    body: `<div class="field"><label>المباراة</label>
+        <input id="fxTitle" value="${esc(row ? row.title : '')}" placeholder="الهلال × النصر" /></div>
+      <div class="field"><label>البطولة (اختياري)</label>
+        <input id="fxComp" value="${esc(row ? row.competition || '' : '')}" /></div>
+      <div class="inline">
+        <div class="field" style="flex:1"><label>تاريخ الانطلاق</label>
+          <input type="date" id="fxDate" value="${row ? row.kickoff_at.slice(0, 10) : today()}" /></div>
+        <div class="field" style="flex:1"><label>الساعة</label>
+          <input type="time" id="fxTime" value="${row ? row.kickoff_at.slice(11, 16) : '21:00'}" /></div>
+      </div>
+      <div class="inline">
+        <div class="field" style="flex:1"><label>الفاصل بعد (دقيقة)</label>
+          <input type="number" id="fxAfter" min="1" max="180"
+            value="${row ? row.halftime_after_minutes : 47}" /></div>
+        <div class="field" style="flex:1"><label>مدة الفاصل (دقيقة)</label>
+          <input type="number" id="fxLen" min="1" max="60" value="${row ? row.break_minutes : 12}" /></div>
+      </div>
+      <div class="field"><label>الشاشات</label><select id="fxZone">
+        <option value="">كل الشاشات</option>
+        ${zones.map((z) => `<option value="${esc(z)}" ${row && row.zone === z ? 'selected' : ''}>${esc(z)}</option>`).join('')}
+      </select></div>
+      <div class="field"><label><input type="checkbox" id="fxAuto"
+        ${!row || row.auto_break ? 'checked' : ''} /> ابدأ الفاصل تلقائياً</label></div>
+      <div class="help">٤٧ دقيقة تقريب معتاد لنهاية الشوط الأول مع الوقت بدل الضائع.</div>`,
+    footer: '<button class="btn" id="fxSave">حفظ</button><button class="btn gray" data-close>إلغاء</button>',
+    onOpen: (root) => {
+      $('#fxSave', root).onclick = async () => {
+        const title = $('#fxTitle', root).value.trim();
+        if (title.length < 2) return toast('اكتب اسم المباراة', 'err');
+        const body = {
+          title,
+          competition: $('#fxComp', root).value.trim() || null,
+          kickoff_at: `${$('#fxDate', root).value}T${$('#fxTime', root).value}:00`,
+          halftime_after_minutes: Number($('#fxAfter', root).value) || 47,
+          break_minutes: Number($('#fxLen', root).value) || 12,
+          zone: $('#fxZone', root).value || null,
+          auto_break: $('#fxAuto', root).checked,
+        };
+        try {
+          await api(row ? `/api/signage/fixtures/${row.id}` : '/api/signage/fixtures',
+            { method: row ? 'PATCH' : 'POST', body });
+          closeModal();
+          toast('حُفظت المباراة', 'ok');
+          load();
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    },
+  });
+
+  el('sgFxNew').onclick = () => form(null);
+  window.editFixture = async (id) => {
+    const rows = await api('/api/signage/fixtures?upcoming_only=false');
+    const row = rows.find((r) => r.id === id);
+    if (row) form(row);
+  };
+  window.removeFixture = async (id) => {
+    if (!confirm('حذف هذه المباراة؟')) return;
+    try {
+      await api(`/api/signage/fixtures/${id}`, { method: 'DELETE' });
+      toast('حُذفت المباراة', 'ok');
+      load();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  await load();
+};
+
+/* ------------------------------ المنتجات والإعلانات ------------------------------ */
+
+signageTabs.slides = async () => {
+  el('sgBody').innerHTML = `
+    <div class="card"><div class="card-body inline">
+      <button class="btn ok" id="sgSlNew">${icon('plus')} إضافة منتج أو إعلان</button>
+      <span class="help">الصورة الأوضح على شاشة بعيدة: خلفية بسيطة والمنتج في الوسط.</span>
+    </div></div>
+    <div class="card"><div class="card-head"><h3>المحتوى</h3>
+      <span class="muted" id="sgSlCount"></span></div><div id="sgSlTable"></div></div>`;
+
+  const load = async () => {
+    const rows = await api('/api/signage/slides');
+    el('sgSlCount').textContent = `${rows.filter((r) => r.is_live).length} شريحة تُعرض حالياً`;
+    el('sgSlTable').innerHTML = table(
+      ['الصورة', 'العنوان', 'النوع', 'السعر', 'المدة', 'القوائم', 'الحالة', ''],
+      rows,
+      (r) => `<tr>
+        <td>${r.image_url
+          ? `<img src="${esc(r.image_url)}" alt="" style="width:56px;height:42px;object-fit:cover;border-radius:6px" />`
+          : '<span class="muted">—</span>'}</td>
+        <td><b>${esc(r.title)}</b>
+          <div class="muted" style="font-size:11.5px">${esc(r.subtitle || '')}</div></td>
+        <td>${esc(SLIDE_KINDS[r.kind] || r.kind)}</td>
+        <td class="money">${r.price != null ? money(r.price) : '—'}</td>
+        <td>${r.duration_seconds} ث</td>
+        <td>${r.playlists.length ? esc(r.playlists.join('، ')) : '<span class="muted">غير مُدرجة</span>'}</td>
+        <td><span class="tag ${r.is_live ? 'on' : 'cancelled'}">${r.is_live ? 'تُعرض' : 'موقوفة'}</span></td>
+        <td><button class="btn sm ghost" onclick="editSlide(${r.id})">تعديل</button>
+            <button class="btn sm danger" onclick="removeSlide(${r.id})">حذف</button></td></tr>`,
+      'لا محتوى بعد');
+  };
+
+  const form = (row) => modal({
+    title: row ? 'تعديل الشريحة' : 'إضافة منتج أو إعلان',
+    width: 640,
+    body: `<div class="field"><label>النوع</label><select id="slKind">
+        ${Object.entries(SLIDE_KINDS).map(([k, v]) =>
+          `<option value="${k}" ${row && row.kind === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}
+      </select></div>
+      <div class="field"><label>العنوان</label>
+        <input id="slTitle" value="${esc(row ? row.title : '')}" placeholder="برجر مارا الخاص" /></div>
+      <div class="field"><label>وصف مختصر (اختياري)</label>
+        <input id="slSub" value="${esc(row ? row.subtitle || '' : '')}" /></div>
+      <div class="inline">
+        <div class="field" style="flex:1"><label>السعر</label>
+          <input type="number" step="0.01" id="slPrice" value="${row && row.price != null ? row.price : ''}" /></div>
+        <div class="field" style="flex:1"><label>السعر قبل الخصم</label>
+          <input type="number" step="0.01" id="slOld" value="${row && row.old_price != null ? row.old_price : ''}" /></div>
+      </div>
+      <div class="inline">
+        <div class="field" style="flex:1"><label>شارة (اختياري)</label>
+          <input id="slBadge" value="${esc(row ? row.badge || '' : '')}" placeholder="جديد" /></div>
+        <div class="field" style="flex:1"><label>مدة العرض (ثانية)</label>
+          <input type="number" id="slDur" min="2" max="120" value="${row ? row.duration_seconds : 8}" /></div>
+      </div>
+      <div class="inline">
+        <div class="field" style="flex:1"><label>تُعرض من (اختياري)</label>
+          <input type="date" id="slFrom" value="${row && row.starts_on ? row.starts_on : ''}" /></div>
+        <div class="field" style="flex:1"><label>إلى (اختياري)</label>
+          <input type="date" id="slTo" value="${row && row.ends_on ? row.ends_on : ''}" /></div>
+      </div>
+      <div class="field"><label><input type="checkbox" id="slActive"
+        ${!row || row.is_active ? 'checked' : ''} /> مفعّلة</label></div>
+      <div class="field"><label>الصورة</label><input type="file" id="slImage" accept="image/*" />
+        ${row && row.image_url
+          ? `<img src="${esc(row.image_url)}" alt="" style="margin-top:8px;max-height:120px;border-radius:8px" />` : ''}
+      </div>`,
+    footer: '<button class="btn" id="slSave">حفظ</button><button class="btn gray" data-close>إلغاء</button>',
+    onOpen: (root) => {
+      $('#slSave', root).onclick = async () => {
+        const title = $('#slTitle', root).value.trim();
+        if (!title) return toast('اكتب العنوان', 'err');
+        const num = (sel) => {
+          const v = $(sel, root).value.trim();
+          return v === '' ? null : Number(v);
+        };
+        const body = {
+          kind: $('#slKind', root).value,
+          title,
+          subtitle: $('#slSub', root).value.trim() || null,
+          price: num('#slPrice'),
+          old_price: num('#slOld'),
+          badge: $('#slBadge', root).value.trim() || null,
+          duration_seconds: Number($('#slDur', root).value) || 8,
+          starts_on: $('#slFrom', root).value || null,
+          ends_on: $('#slTo', root).value || null,
+          is_active: $('#slActive', root).checked,
+        };
+        try {
+          const saved = await api(row ? `/api/signage/slides/${row.id}` : '/api/signage/slides',
+            { method: row ? 'PATCH' : 'POST', body });
+          const input = $('#slImage', root);
+          if (input.files && input.files[0]) {
+            const fd = new FormData();
+            fd.append('file', input.files[0]);
+            await api(`/api/signage/slides/${saved.id}/image`, { method: 'POST', body: fd });
+          }
+          closeModal();
+          toast('حُفظت الشريحة', 'ok');
+          load();
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    },
+  });
+
+  el('sgSlNew').onclick = () => form(null);
+  window.editSlide = async (id) => {
+    const rows = await api('/api/signage/slides');
+    const row = rows.find((r) => r.id === id);
+    if (row) form(row);
+  };
+  window.removeSlide = async (id) => {
+    if (!confirm('حذف هذه الشريحة من كل القوائم؟')) return;
+    try {
+      await api(`/api/signage/slides/${id}`, { method: 'DELETE' });
+      toast('حُذفت الشريحة', 'ok');
+      load();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  await load();
+};
+
+/* ------------------------------ قوائم العرض ------------------------------ */
+
+signageTabs.playlists = async () => {
+  el('sgBody').innerHTML = `
+    <div class="card"><div class="card-body inline">
+      <button class="btn ok" id="sgPlNew">${icon('plus')} قائمة جديدة</button>
+      <span class="help">القائمة ترتيب شرائح تُعرض بالتتابع، وتُسنَد لشاشة أو تُختار عند بدء الفاصل.</span>
+    </div></div>
+    <div class="card"><div class="card-head"><h3>القوائم</h3></div><div id="sgPlTable"></div></div>`;
+
+  const load = async () => {
+    const rows = await api('/api/signage/playlists');
+    el('sgPlTable').innerHTML = table(
+      ['القائمة', 'الوصف', 'الشرائح', 'تُعرض الآن', 'الحالة', ''],
+      rows,
+      (r) => `<tr>
+        <td><b>${esc(r.name)}</b></td>
+        <td>${esc(r.description || '—')}</td>
+        <td>${r.slide_ids.length}</td>
+        <td>${r.live_count}</td>
+        <td><span class="tag ${r.is_active ? 'on' : 'cancelled'}">${r.is_active ? 'مفعّلة' : 'موقوفة'}</span></td>
+        <td><button class="btn sm ghost" onclick="editPlaylistItems(${r.id})">المحتوى</button>
+            <button class="btn sm ghost" onclick="editPlaylist(${r.id})">تعديل</button>
+            <button class="btn sm danger" onclick="removePlaylist(${r.id})">حذف</button></td></tr>`,
+      'لا قوائم بعد');
+  };
+
+  const form = (row) => modal({
+    title: row ? 'تعديل القائمة' : 'قائمة عرض جديدة',
+    body: `<div class="field"><label>الاسم</label>
+        <input id="plName" value="${esc(row ? row.name : '')}" placeholder="عروض الفاصل" /></div>
+      <div class="field"><label>الوصف (اختياري)</label>
+        <input id="plDesc" value="${esc(row ? row.description || '' : '')}" /></div>
+      <div class="field"><label><input type="checkbox" id="plActive"
+        ${!row || row.is_active ? 'checked' : ''} /> مفعّلة</label></div>`,
+    footer: '<button class="btn" id="plSave">حفظ</button><button class="btn gray" data-close>إلغاء</button>',
+    onOpen: (root) => {
+      $('#plSave', root).onclick = async () => {
+        const name = $('#plName', root).value.trim();
+        if (name.length < 2) return toast('اكتب اسم القائمة', 'err');
+        try {
+          await api(row ? `/api/signage/playlists/${row.id}` : '/api/signage/playlists',
+            { method: row ? 'PATCH' : 'POST', body: {
+              name,
+              description: $('#plDesc', root).value.trim() || null,
+              is_active: $('#plActive', root).checked,
+            } });
+          closeModal();
+          toast('حُفظت القائمة', 'ok');
+          load();
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    },
+  });
+
+  el('sgPlNew').onclick = () => form(null);
+  window.editPlaylist = async (id) => {
+    const row = (await api('/api/signage/playlists')).find((r) => r.id === id);
+    if (row) form(row);
+  };
+  window.removePlaylist = async (id) => {
+    if (!confirm('حذف قائمة العرض؟')) return;
+    try {
+      await api(`/api/signage/playlists/${id}`, { method: 'DELETE' });
+      toast('حُذفت القائمة', 'ok');
+      load();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+
+  window.editPlaylistItems = async (id) => {
+    const [lists, slides] = await Promise.all([
+      api('/api/signage/playlists'), api('/api/signage/slides'),
+    ]);
+    const row = lists.find((r) => r.id === id);
+    if (!row) return;
+    // الترتيب مهم: المُدرجة أولاً بترتيبها، ثم البقية غير مؤشّرة
+    const ordered = row.slide_ids
+      .map((sid) => slides.find((s) => s.id === sid)).filter(Boolean)
+      .concat(slides.filter((s) => !row.slide_ids.includes(s.id)));
+    modal({
+      title: `محتوى: ${row.name}`,
+      width: 620,
+      body: `<div class="help" style="margin-bottom:12px">أشّر على ما يُعرض، والترتيب من أعلى
+          لأسفل هو ترتيب العرض. استعمل الأسهم لتحريك الشريحة.</div>
+        <div id="plItems">${ordered.map((s) => `
+          <div class="row-item" data-id="${s.id}">
+            <label class="inline" style="gap:8px;flex:1">
+              <input type="checkbox" ${row.slide_ids.includes(s.id) ? 'checked' : ''} />
+              <span>${esc(s.title)}</span>
+              <span class="muted" style="font-size:11.5px">${esc(SLIDE_KINDS[s.kind] || '')} · ${s.duration_seconds} ث</span>
+            </label>
+            <button class="btn sm ghost" data-move="up">▲</button>
+            <button class="btn sm ghost" data-move="down">▼</button>
+          </div>`).join('')}</div>`,
+      footer: '<button class="btn" id="plItemsSave">حفظ</button><button class="btn gray" data-close>إلغاء</button>',
+      onOpen: (root) => {
+        const box = $('#plItems', root);
+        box.querySelectorAll('[data-move]').forEach((btn) => btn.onclick = () => {
+          const item = btn.closest('.row-item');
+          const sibling = btn.dataset.move === 'up'
+            ? item.previousElementSibling : item.nextElementSibling;
+          if (!sibling) return;
+          if (btn.dataset.move === 'up') box.insertBefore(item, sibling);
+          else box.insertBefore(sibling, item);
+        });
+        $('#plItemsSave', root).onclick = async () => {
+          const slide_ids = [...box.querySelectorAll('.row-item')]
+            .filter((node) => $('input', node).checked)
+            .map((node) => Number(node.dataset.id));
+          try {
+            await api(`/api/signage/playlists/${id}/items`, { method: 'PUT', body: { slide_ids } });
+            closeModal();
+            toast(`حُفظت ${slide_ids.length} شريحة`, 'ok');
+            load();
+          } catch (e) { toast(e.message, 'err'); }
+        };
+      },
+    });
+  };
+
+  await load();
+};
+
+/* ------------------------------ الشاشات ------------------------------ */
+
+signageTabs.screens = async () => {
+  const playlists = await api('/api/signage/playlists');
+  el('sgBody').innerHTML = `
+    <div class="card"><div class="card-body inline">
+      <button class="btn ok" id="sgScNew">${icon('plus')} إضافة شاشة</button>
+      <span class="help">بعد الإضافة افتح «رابط التشغيل» على الجهاز الموصول بالشاشة مرة واحدة —
+        يحفظ مفتاحه ويعمل بعدها وحده.</span>
+    </div></div>
+    <div class="card"><div class="card-head"><h3>الشاشات</h3></div><div id="sgScTable"></div></div>`;
+
+  const load = async () => {
+    const rows = await api('/api/signage/screens');
+    el('sgScTable').innerHTML = table(
+      ['الشاشة', 'المجموعة', 'النوع', 'قائمتها', 'قائمة الفاصل', 'الحالة', ''],
+      rows,
+      (r) => `<tr>
+        <td><b>${esc(r.name)}</b></td>
+        <td>${esc(r.zone || '—')}</td>
+        <td>${esc(SCREEN_MODES[r.mode] || r.mode)}</td>
+        <td>${esc(r.playlist_name || '—')}</td>
+        <td>${esc(r.break_playlist_name || '—')}</td>
+        <td><span class="tag ${r.online ? 'on' : 'cancelled'}">${r.online ? 'متصلة' : 'منقطعة'}</span></td>
+        <td><button class="btn sm ghost" onclick="showScreenLink(${r.id})">رابط التشغيل</button>
+            <button class="btn sm ghost" onclick="editScreen(${r.id})">تعديل</button>
+            <button class="btn sm danger" onclick="removeScreen(${r.id})">حذف</button></td></tr>`,
+      'لا شاشات بعد');
+  };
+
+  const pick = (selected) => `<option value="">—</option>${
+    playlists.map((p) => `<option value="${p.id}" ${selected === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}`;
+
+  const form = (row) => modal({
+    title: row ? 'تعديل الشاشة' : 'إضافة شاشة',
+    body: `<div class="field"><label>الاسم</label>
+        <input id="scName" value="${esc(row ? row.name : '')}" placeholder="شاشة الصالة ١" /></div>
+      <div class="field"><label>المجموعة (اختياري)</label>
+        <input id="scZone" value="${esc(row ? row.zone || '' : '')}" placeholder="الصالة الرئيسية" /></div>
+      <div class="field"><label>النوع</label><select id="scMode">
+        ${Object.entries(SCREEN_MODES).map(([k, v]) =>
+          `<option value="${k}" ${row && row.mode === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}
+      </select></div>
+      <div class="field"><label>قائمتها الافتراضية</label>
+        <select id="scList">${pick(row ? row.playlist_id : null)}</select></div>
+      <div class="field"><label>قائمة الفاصل (إن اختلفت)</label>
+        <select id="scBreakList">${pick(row ? row.break_playlist_id : null)}</select></div>
+      <div class="field"><label>دوران الشاشة</label><select id="scRot">
+        ${[0, 90, 270].map((deg) => `<option value="${deg}" ${row && row.rotation === deg ? 'selected' : ''}>${
+          deg === 0 ? 'أفقية' : `رأسية ${deg}°`}</option>`).join('')}
+      </select></div>
+      <div class="field"><label><input type="checkbox" id="scCec"
+        ${!row || row.cec_enabled ? 'checked' : ''} />
+        تحويل مصدر التلفاز تلقائياً (HDMI-CEC)</label></div>
+      <div class="field"><label><input type="checkbox" id="scActive"
+        ${!row || row.is_active ? 'checked' : ''} /> مفعّلة</label></div>`,
+    footer: '<button class="btn" id="scSave">حفظ</button><button class="btn gray" data-close>إلغاء</button>',
+    onOpen: (root) => {
+      $('#scSave', root).onclick = async () => {
+        const name = $('#scName', root).value.trim();
+        if (name.length < 2) return toast('اكتب اسم الشاشة', 'err');
+        const body = {
+          name,
+          zone: $('#scZone', root).value.trim() || null,
+          mode: $('#scMode', root).value,
+          playlist_id: Number($('#scList', root).value) || null,
+          break_playlist_id: Number($('#scBreakList', root).value) || null,
+          rotation: Number($('#scRot', root).value) || 0,
+          cec_enabled: $('#scCec', root).checked,
+          is_active: $('#scActive', root).checked,
+        };
+        try {
+          const saved = await api(row ? `/api/signage/screens/${row.id}` : '/api/signage/screens',
+            { method: row ? 'PATCH' : 'POST', body });
+          closeModal();
+          toast('حُفظت الشاشة', 'ok');
+          await load();
+          if (!row) showScreenLink(saved.id);
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    },
+  });
+
+  el('sgScNew').onclick = () => form(null);
+  window.editScreen = async (id) => {
+    const row = (await api('/api/signage/screens')).find((r) => r.id === id);
+    if (row) form(row);
+  };
+  window.removeScreen = async (id) => {
+    if (!confirm('حذف الشاشة؟ سيتوقف جهازها عن العرض.')) return;
+    try {
+      await api(`/api/signage/screens/${id}`, { method: 'DELETE' });
+      toast('حُذفت الشاشة', 'ok');
+      load();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  window.showScreenLink = async (id) => {
+    const row = (await api('/api/signage/screens')).find((r) => r.id === id);
+    if (!row) return;
+    const url = location.origin + row.play_url;
+    modal({
+      title: `رابط تشغيل: ${row.name}`,
+      width: 620,
+      body: `<div class="help" style="margin-bottom:12px">افتح هذا الرابط مرة واحدة في متصفح
+          الجهاز الموصول بالشاشة. الرابط يحمل مفتاح الشاشة — لا تنشره.</div>
+        <div class="field"><label>الرابط</label>
+          <input id="scLink" readonly value="${esc(url)}" onclick="this.select()" /></div>
+        <button class="btn ghost" id="scCopy">${icon('check')} نسخ الرابط</button>
+        <button class="btn danger" id="scRotate" style="margin-inline-start:8px">تجديد المفتاح</button>`,
+      footer: '<button class="btn gray" data-close>إغلاق</button>',
+      onOpen: (root) => {
+        $('#scCopy', root).onclick = async () => {
+          try {
+            await navigator.clipboard.writeText(url);
+            toast('نُسخ الرابط', 'ok');
+          } catch (e) {
+            $('#scLink', root).select();
+            toast('حدّد الرابط وانسخه يدوياً', '');
+          }
+        };
+        $('#scRotate', root).onclick = async () => {
+          if (!confirm('تجديد المفتاح يوقف الجهاز الحالي حتى تفتح الرابط الجديد عليه. متابعة؟')) return;
+          try {
+            await api(`/api/signage/screens/${id}/token`, { method: 'POST' });
+            closeModal();
+            toast('جُدّد المفتاح', 'ok');
+            await load();
+            showScreenLink(id);
+          } catch (e) { toast(e.message, 'err'); }
+        };
+      },
+    });
+  };
+  await load();
+};
+
+/* ------------------------------ تقرير العرض ------------------------------ */
+
+signageTabs.report = async () => {
+  const from = new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10);
+  el('sgBody').innerHTML = `
+    <div class="card"><div class="card-body inline">
+      <div class="field"><label>من</label><input type="date" id="sgRepFrom" value="${from}" /></div>
+      <div class="field"><label>إلى</label><input type="date" id="sgRepTo" value="${today()}" /></div>
+      <button class="btn ghost" id="sgRepLoad">عرض</button>
+      <span class="help">يُحتسب ما عرضته الأجهزة فعلاً، لا ما في القوائم.</span>
+    </div></div>
+    <div class="card"><div class="card-head"><h3>مرات العرض</h3></div><div id="sgRepTable"></div></div>`;
+
+  const load = async () => {
+    const q = new URLSearchParams({
+      date_from: el('sgRepFrom').value, date_to: el('sgRepTo').value,
+    });
+    const rows = await api('/api/signage/report?' + q);
+    const top = rows.length ? rows[0].impressions : 1;
+    el('sgRepTable').innerHTML = table(
+      ['المحتوى', 'مرات العرض', 'إجمالي الثواني', ''],
+      rows,
+      (r) => `<tr>
+        <td><b>${esc(r.title)}</b></td>
+        <td>${r.impressions}</td>
+        <td>${r.seconds}</td>
+        <td style="min-width:120px"><div class="progress"><i style="width:${
+          Math.round((r.impressions / top) * 100)}%"></i></div></td></tr>`,
+      'لا عمليات عرض مسجّلة في هذه الفترة');
+  };
+  el('sgRepLoad').onclick = () => load().catch((e) => toast(e.message, 'err'));
+  await load();
+};

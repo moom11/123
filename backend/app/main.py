@@ -35,6 +35,7 @@ from .routers import (
     push,
     rest_days,
     reports,
+    signage,
     requests as requests_router,
     sheets,
     sites,
@@ -156,6 +157,7 @@ for router in (
     hr_extra.router,
     sheets.router,
     reports.router,
+    signage.router,
     requests_router.router,
     iclock.router,
     webapp.router,
@@ -189,6 +191,12 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 if FRONTEND_DIR.exists():
     app.mount("/app", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+    # صفحة جهاز العرض خلف الشاشة: رابط مستقل بمفتاح الشاشة، بلا تسجيل دخول
+    app.mount(
+        "/player",
+        StaticFiles(directory=FRONTEND_DIR / "player", html=True),
+        name="player",
+    )
 
     @app.get("/", include_in_schema=False)
     def index():

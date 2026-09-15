@@ -206,7 +206,7 @@ RATE_MAX = int(os.getenv("HR_RATE_LIMIT", "1200"))   # طلب/دقيقة لكل 
 _RATE: dict[str, list[float]] = {}
 
 # مسارات معفاة: بروتوكول أجهزة البصمة وملفات الواجهة
-RATE_EXEMPT_PREFIXES = ("/iclock/", "/app/", "/uploads/")
+RATE_EXEMPT_PREFIXES = ("/iclock/", "/app/", "/uploads/", "/player/")
 
 
 def rate_exceeded(ip: str, path: str) -> bool:

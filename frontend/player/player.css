@@ -1,0 +1,213 @@
+/* شاشة العرض خلف التلفاز: تُقرأ من بعد أمتار، وخلفيتها سوداء
+   حتى لا يُضيء التلفاز شيئاً وقت المباراة. */
+:root {
+  --ink: #f6f7fb;
+  --muted: #9aa3b5;
+  --gold: #d8a63c;
+  --accent: #16a34a;
+  --danger: #e1564c;
+  --pad: 4vmin;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #000;
+  color: var(--ink);
+  overflow: hidden;
+  font-family: "Segoe UI", Tahoma, "Noto Naskh Arabic", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  cursor: none;                 /* جهاز بلا فأرة: لا يظهر مؤشر عالق على الشاشة */
+  user-select: none;
+}
+
+.hidden { display: none !important; }
+
+/* ------------------------------ الوضع الساكن ------------------------------ */
+.idle {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: #000;
+}
+
+/* خافت جداً: علامة أن الجهاز حيّ دون أن يزعج مشاهد المباراة لو ظهر سهواً */
+.idle-box { text-align: center; opacity: .1; }
+.idle-name { font-size: 2.4vmin; letter-spacing: .04em; }
+.idle-clock { font-size: 5vmin; font-variant-numeric: tabular-nums; margin-top: .4vmin; }
+
+/* ------------------------------ المسرح ------------------------------ */
+.stage {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(120% 120% at 70% 0%, #14181f 0%, #05070a 60%, #000 100%);
+}
+
+.slide {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity .6s ease;
+  display: grid;
+  place-items: center;
+  padding: var(--pad);
+}
+
+.slide.on { opacity: 1; }
+
+/* بطاقة منتج: صورة كبيرة يمينها، والاسم والسعر يسارها */
+.product {
+  display: grid;
+  grid-template-columns: 1.05fr .95fr;
+  align-items: center;
+  gap: 5vmin;
+  width: 100%;
+  height: 100%;
+}
+
+.product .shot {
+  height: 100%;
+  border-radius: 3vmin;
+  background: #0d1117 center/cover no-repeat;
+  box-shadow: 0 2vmin 6vmin rgba(0, 0, 0, .65);
+}
+
+.product .info { display: flex; flex-direction: column; gap: 2vmin; }
+
+.badge {
+  align-self: flex-start;
+  background: var(--gold);
+  color: #14181f;
+  font-weight: 800;
+  font-size: 2.6vmin;
+  padding: .8vmin 2.2vmin;
+  border-radius: 99px;
+  letter-spacing: .02em;
+}
+
+.title { font-size: 7vmin; font-weight: 800; line-height: 1.12; margin: 0; }
+.subtitle { font-size: 3.4vmin; color: var(--muted); line-height: 1.45; margin: 0; }
+
+.price-row { display: flex; align-items: baseline; gap: 2.5vmin; margin-top: 1vmin; }
+.price { font-size: 9vmin; font-weight: 900; color: var(--accent); line-height: 1; }
+.price .cur { font-size: 4vmin; font-weight: 700; margin-inline-start: 1vmin; color: var(--ink); }
+.old-price {
+  font-size: 4vmin;
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-thickness: .35vmin;
+}
+
+/* إعلان مصمّم مسبقاً: الصورة تملأ الشاشة كاملة */
+.promo { position: absolute; inset: 0; background: #000 center/contain no-repeat; }
+
+/* لوحة نصية */
+.notice { text-align: center; max-width: 80%; display: grid; gap: 3vmin; justify-items: center; }
+.notice .title { font-size: 9vmin; }
+.notice .subtitle { font-size: 4vmin; }
+.notice .price-row { justify-content: center; }
+
+/* ------------------------------ الشريط والعدّاد ------------------------------ */
+.bar {
+  position: fixed;
+  inset-inline: 0;
+  bottom: 0;
+  height: .7vmin;
+  background: rgba(255, 255, 255, .08);
+}
+
+.bar-fill { height: 100%; width: 0; background: var(--gold); transition: width .3s linear; }
+
+.ticker {
+  position: fixed;
+  inset-inline-end: var(--pad);
+  bottom: 2.4vmin;
+  display: flex;
+  align-items: center;
+  gap: 1.4vmin;
+  font-size: 2.2vmin;
+  color: var(--muted);
+  background: rgba(0, 0, 0, .45);
+  padding: .8vmin 2vmin;
+  border-radius: 99px;
+}
+
+.ticker .dot { width: .8vmin; height: .8vmin; border-radius: 50%; background: var(--gold); }
+#tickerLeft { font-variant-numeric: tabular-nums; }
+
+/* ------------------------------ الربط والتنبيه ------------------------------ */
+.setup { position: fixed; inset: 0; display: grid; place-items: center; background: #05070a; }
+
+.setup-card {
+  width: min(70vw, 620px);
+  background: #10151c;
+  border: 1px solid #1e2632;
+  border-radius: 2vmin;
+  padding: 5vmin;
+  text-align: center;
+}
+
+.setup-card h1 { font-size: 4vmin; margin: 0 0 2vmin; }
+.setup-card p { color: var(--muted); font-size: 2.4vmin; margin: 0 0 3vmin; }
+
+.setup-card input,
+.setup-card button {
+  width: 100%;
+  font: inherit;
+  font-size: 2.6vmin;
+  padding: 1.6vmin 2vmin;
+  border-radius: 1.2vmin;
+  border: 1px solid #263140;
+  background: #070a0e;
+  color: var(--ink);
+  text-align: center;
+}
+
+.setup-card button {
+  margin-top: 2vmin;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.setup-err { color: var(--danger); font-size: 2.2vmin; min-height: 3vmin; margin-top: 1.5vmin; }
+
+/* تنبيه انقطاع الشبكة: صغير وفي الزاوية، والعرض مستمر من الذاكرة */
+.banner {
+  position: fixed;
+  inset-inline-start: 2vmin;
+  bottom: 2.4vmin;
+  background: rgba(225, 86, 76, .9);
+  color: #fff;
+  font-size: 2vmin;
+  padding: .8vmin 2vmin;
+  border-radius: 99px;
+}
+
+/* شاشة رأسية: يدور المحتوى كله ويصير المنتج عمودين فوق بعض */
+body.rot-90, body.rot-270 { }
+
+body.rot-90 .stage, body.rot-90 .idle { transform: rotate(90deg); }
+body.rot-270 .stage, body.rot-270 .idle { transform: rotate(-90deg); }
+
+body.rot-90 .stage, body.rot-90 .idle,
+body.rot-270 .stage, body.rot-270 .idle {
+  width: 100vh;
+  height: 100vw;
+  inset: auto;
+  top: 50%;
+  left: 50%;
+  transform-origin: center;
+  margin: -50vw 0 0 -50vh;
+}
+
+body.rot-90 .stage { transform: rotate(90deg); }
+body.rot-270 .stage { transform: rotate(-90deg); }
+
+body.rot-90 .product, body.rot-270 .product { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
+body.rot-90 .product .shot, body.rot-270 .product .shot { width: 100%; }

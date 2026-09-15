@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>شاشة العرض</title>
+  <link rel="icon" href="/app/icons/icon-192.png" />
+  <link rel="stylesheet" href="player.css" />
+</head>
+<body>
+  <!-- شاشة سوداء: لا شيء يُعرض الآن (الشاشة على المباراة) -->
+  <div id="idle" class="idle">
+    <div class="idle-box">
+      <div class="idle-name" id="idleName"></div>
+      <div class="idle-clock" id="idleClock"></div>
+    </div>
+  </div>
+
+  <!-- العرض: شريحتان متراكبتان يتبادلان الظهور فلا يومض الانتقال -->
+  <div id="stage" class="stage hidden">
+    <div class="slide" id="slideA"></div>
+    <div class="slide" id="slideB"></div>
+    <div class="bar"><div class="bar-fill" id="barFill"></div></div>
+    <div class="ticker">
+      <span id="tickerLabel"></span>
+      <span class="dot"></span>
+      <span id="tickerLeft"></span>
+    </div>
+  </div>
+
+  <!-- إعداد أول مرة: يُطلب المفتاح إن فُتحت الصفحة بلا رابط كامل -->
+  <div id="setup" class="setup hidden">
+    <div class="setup-card">
+      <h1>ربط الشاشة</h1>
+      <p>الصق مفتاح التشغيل الظاهر في صفحة «شاشات العرض» داخل النظام.</p>
+      <input id="keyInput" placeholder="مفتاح الشاشة" autocomplete="off" spellcheck="false" />
+      <button id="keySave">ربط</button>
+      <div class="setup-err" id="setupErr"></div>
+    </div>
+  </div>
+
+  <div id="banner" class="banner hidden"></div>
+  <script src="player.js"></script>
+</body>
+</html>
