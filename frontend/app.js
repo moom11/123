@@ -5589,27 +5589,16 @@ settingsTabs.payrollRules = async () => {
             <option value="false" ${st.gosi_prorate ? '' : 'selected'}>الوعاء كاملاً</option></select></div>
         </div>
         <button class="btn" id="gsSave">حفظ إعدادات التأمينات</button>
+        <span class="help" style="display:inline-block;margin-inline-start:10px">
+          أي من زرَّي الحفظ في هذه الصفحة يحفظ القواعد والتأمينات معاً.</span>
         <div class="help" style="margin-top:10px">
           <b>حصة الموظف تُخصم من راتبه</b> وتظهر سطراً في بيان الخصومات وفي قسيمته.
           <b>وحصة المنشأة تُحتسب وتُبيَّن</b> في المسير والقسيمة ولا تُخصم من الموظف.
           ويُحدَّد اشتراك كل موظف وجنسيته من ملفه.
         </div>
       </div></div>`;
-  el('gsSave').onclick = async () => {
-    try {
-      state.cache.settings = await api('/api/settings', { method: 'PUT', body: {
-        gosi_enabled: el('gsOn').value === 'true',
-        gosi_base: el('gsBase').value,
-        gosi_max_base: Number(el('gsMax').value || 0),
-        gosi_employee_rate: Number(el('gsEmp').value || 0),
-        gosi_employer_rate: Number(el('gsCo').value || 0),
-        gosi_employee_rate_expat: Number(el('gsEmpX').value || 0),
-        gosi_employer_rate_expat: Number(el('gsCoX').value || 0),
-        gosi_prorate: el('gsPro').value === 'true' } });
-      toast('حُفظت إعدادات التأمينات — أعد احتساب المسير ليظهر أثرها', 'ok');
-    } catch (e) { toast(e.message, 'err'); }
-  };
-  el('pySave').onclick = async () => {
+  // زرّ واحد أو الآخر — كلاهما يحفظ كل ما في الصفحة، فلا تضيع نسبة أدخلها المستخدم
+  const savePayrollRules = async (note) => {
     try {
       state.cache.settings = await api('/api/settings', { method: 'PUT', body: {
         payroll_days_per_month: Number(el('pyDays').value),
@@ -5620,10 +5609,21 @@ settingsTabs.payrollRules = async () => {
         payroll_absence_multiplier: Number(el('pyAbs').value),
         payroll_deduction_base: el('pyBase').value,
         violation_reset_days: Number(el('pyReset').value),
-        document_alert_days: Number(el('pyDoc').value) } });
-      toast('تم حفظ القواعد', 'ok');
+        document_alert_days: Number(el('pyDoc').value),
+        gosi_enabled: el('gsOn').value === 'true',
+        gosi_base: el('gsBase').value,
+        gosi_max_base: Number(el('gsMax').value || 0),
+        gosi_employee_rate: Number(el('gsEmp').value || 0),
+        gosi_employer_rate: Number(el('gsCo').value || 0),
+        gosi_employee_rate_expat: Number(el('gsEmpX').value || 0),
+        gosi_employer_rate_expat: Number(el('gsCoX').value || 0),
+        gosi_prorate: el('gsPro').value === 'true' } });
+      toast(note, 'ok');
     } catch (e) { toast(e.message, 'err'); }
   };
+  el('gsSave').onclick = () =>
+    savePayrollRules('حُفظت إعدادات التأمينات — أعد احتساب المسير ليظهر أثرها');
+  el('pySave').onclick = () => savePayrollRules('حُفظت قواعد الرواتب والتأمينات');
 };
 
 const POLICY_SCOPES = { default: 'افتراضية (كل الموظفين)', site: 'فرع', department: 'إدارة', shift: 'وردية' };
